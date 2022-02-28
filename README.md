@@ -25,4 +25,6 @@ proxy_pass upstream 配置多主机回源
 支持动态域名解析  
 
 # wiki
-[nginx 源站 支持 http https](https://github.com/yefy/any-proxy/wiki/nginx-%E6%BA%90%E7%AB%99-%E6%94%AF%E6%8C%81-http-https)
+[nginx 源站 支持 http https](https://github.com/yefy/any-proxy/wiki/nginx-%E6%BA%90%E7%AB%99-%E6%94%AF%E6%8C%81-http-https)  
+[port与domain模式配置](https://github.com/yefy/any-proxy/wiki/port%E4%B8%8Edomain%E6%A8%A1%E5%BC%8F%E9%85%8D%E7%BD%AE)  
+
