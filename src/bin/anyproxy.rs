@@ -1,3 +1,5 @@
+use any_proxy::anyproxy::anyproxy::Anyproxy;
+use any_proxy::anyproxy::anyproxy::ArgsConfig;
 use any_proxy::util::default_config;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -43,6 +45,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "anyproxy-openssl")]
     log::info!("anyproxy-openssl");
 
+    let arg_config = ArgsConfig::load_from_args();
+    log::info!("arg_config:{:?}", arg_config);
+    if Anyproxy::parse_args(&arg_config)? {
+        return Ok(());
+    }
+
     if let Some(cpu_core_ids) = core_affinity::get_core_ids() {
         for cpu_core_id in cpu_core_ids.iter() {
             log::info!("cpu_core_id:{:?}", cpu_core_id);
@@ -62,7 +70,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main(executor: async_executors::TokioCt) -> anyhow::Result<()> {
-    return Ok(());
+    let mut anyproxy = Anyproxy::new(executor)?;
+    anyproxy.start().await
 }
 
 /// 捕获异常信号

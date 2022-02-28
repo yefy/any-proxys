@@ -118,3 +118,5 @@ optional = true
 
 [dev-dependencies]
 directories-next = "2.0.0"
+rcgen = "0.9.1"
+pem = "1.0"
