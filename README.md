@@ -23,3 +23,6 @@ http2 域名获取
 proxy_pass upstream 配置多主机回源  
 支持心跳检查  
 支持动态域名解析  
+
+# wiki
+[nginx 源站 支持 http https](https://github.com/yefy/any-proxy/wiki/nginx-%E6%BA%90%E7%AB%99-%E6%94%AF%E6%8C%81-http-https)
