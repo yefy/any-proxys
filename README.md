@@ -1,4 +1,16 @@
-# any-proxy
+# anyproxy
+rust编写高性能四层代理服务器，支持tcp、quic、any-tunnel、any-tunnel2  
+
+# 特点
+底层tokio框架  
+高性能  
+内存安全  
+tcp、quic、any-tunnel、any-tunnel2协议互转  
+热加载配置  
+支持any-tunnel、any-tunnel2在高延迟网络加速  
+支持access_log  
+
+# 已经支持
 纯端口代理模式  
 域名代理模式  
 tcp代理  
@@ -23,6 +35,7 @@ http2 域名获取
 proxy_pass upstream 配置多主机回源  
 支持心跳检查  
 支持动态域名解析  
+支持多跳回源  
 
 # wiki
 [anyproxy编译运行](https://github.com/yefy/any-proxy/wiki/anyproxy%E7%BC%96%E8%AF%91%E8%BF%90%E8%A1%8C)  
