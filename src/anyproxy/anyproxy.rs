@@ -1,13 +1,18 @@
 use super::anyproxy_group;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
 use crate::config::config;
+#[cfg(feature = "anyproxy-ebpf")]
+use crate::ebpf::ebpf_sockhash;
 use crate::util::default_config;
 use crate::util::signal;
+use crate::Tunnels;
 use any_tunnel::client;
 use any_tunnel::server;
 use any_tunnel2::client as client2;
 use any_tunnel2::server as server2;
 use any_tunnel2::tunnel as tunnel2;
+use anyhow::anyhow;
+use anyhow::Result;
 use awaitgroup::WaitGroup;
 use futures_util::task::LocalSpawnExt;
 use std::sync::atomic::AtomicUsize;
@@ -68,7 +73,7 @@ pub struct Anyproxy {
 }
 
 impl Anyproxy {
-    pub fn new(executor: async_executors::TokioCt) -> anyhow::Result<Anyproxy> {
+    pub fn new(executor: async_executors::TokioCt) -> Result<Anyproxy> {
         Ok(Anyproxy {
             executor,
             group_version: 0,
@@ -76,7 +81,7 @@ impl Anyproxy {
         })
     }
 
-    pub fn parse_args(arg_config: &ArgsConfig) -> anyhow::Result<bool> {
+    pub fn parse_args(arg_config: &ArgsConfig) -> Result<bool> {
         if arg_config.signal.is_some() {
             if Anyproxy::write_signal(arg_config.signal.as_ref().unwrap())? {
                 return Ok(true);
@@ -87,10 +92,10 @@ impl Anyproxy {
             let executor = async_executors::TokioCtBuilder::new().build().unwrap();
             let ret = executor
                 .clone()
-                .block_on(async { AnyproxyGroup::check(0).await });
+                .block_on(async { AnyproxyGroup::check(0, executor.clone()).await });
             if let Err(e) = ret {
                 log::error!("err:async_main => e:{}", e);
-                return Err(anyhow::anyhow!("err:async_main => e:{}", e));
+                return Err(anyhow!("err:async_main => e:{}", e));
             }
             return Ok(true);
         }
@@ -103,7 +108,7 @@ impl Anyproxy {
         self.group_version
     }
 
-    pub async fn start(&mut self) -> anyhow::Result<()> {
+    pub async fn start(&mut self) -> Result<()> {
         scopeguard::defer! {
             Anyproxy::remove_pid_file();
             Anyproxy::remove_signal_file();
@@ -111,23 +116,35 @@ impl Anyproxy {
         };
 
         log::info!("anyproxy start");
-        Anyproxy::create_pid_file()?;
+        Anyproxy::create_pid_file()
+            .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
         Anyproxy::remove_signal_file();
 
-        let config =
-            config::Config::new().map_err(|e| anyhow::anyhow!("err:Config::new() => e:{}", e))?;
+        let config = config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e))?;
 
         let peer_stream_max_len = Arc::new(AtomicUsize::new(config.tunnel2.tunnel2_max_connect));
-        let tunnel2_client =
-            tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
-        let tunnel2_clients = client2::Client::new(tunnel2_client, peer_stream_max_len.clone());
+        let client2 = tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
+        let client2 = client2::Client::new(client2, peer_stream_max_len.clone());
 
-        let tunnel2_server =
-            tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
-        let tunnel2_servers = server2::Server::new(tunnel2_server);
+        let server2 = tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
+        let server2 = server2::Server::new(server2);
 
-        let tunnel_clients = client::Client::new();
-        let tunnel_servers = server::Server::new();
+        let client = client::Client::new();
+        let server = server::Server::new();
+
+        #[cfg(feature = "anyproxy-ebpf")]
+        let mut ebpf_group = ebpf_sockhash::EbpfGroup::new(0)?;
+        #[cfg(feature = "anyproxy-ebpf")]
+        let ebpf_add_sock_hash = ebpf_group.start()?;
+        #[cfg(feature = "anyproxy-ebpf")]
+        let ebpf_add_sock_hash = Arc::new(ebpf_add_sock_hash);
+
+        let tunnels = Tunnels {
+            client,
+            server,
+            client2,
+            server2,
+        };
 
         let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> = Some(
             anyproxy_group::AnyproxyGroup::new(self.group_version_add())?,
@@ -136,14 +153,13 @@ impl Anyproxy {
             .as_mut()
             .unwrap()
             .start(
-                tunnel_clients.clone(),
-                tunnel_servers.clone(),
                 peer_stream_max_len.clone(),
-                tunnel2_clients.clone(),
-                tunnel2_servers.clone(),
+                tunnels.clone(),
+                #[cfg(feature = "anyproxy-ebpf")]
+                ebpf_add_sock_hash.clone(),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("err:anyproxy start => e:{}", e))?;
+            .map_err(|e| anyhow!("err:anyproxy start => e:{}", e))?;
 
         loop {
             let anyproxy_state = Anyproxy::read_signal().await;
@@ -173,7 +189,11 @@ impl Anyproxy {
                     continue;
                 }
                 AnyproxyState::Check => {
-                    let _ = anyproxy_group::AnyproxyGroup::check(self.group_version).await;
+                    let _ = anyproxy_group::AnyproxyGroup::check(
+                        self.group_version,
+                        self.executor.clone(),
+                    )
+                    .await;
                     continue;
                 }
                 AnyproxyState::Reinit => {
@@ -184,18 +204,19 @@ impl Anyproxy {
                     }
                     #[cfg(unix)]
                     {
-                        let mut new_anyproxy_group =
-                            anyproxy_group::AnyproxyGroup::new(self.group_version_add())?;
+                        let mut new_anyproxy_group = anyproxy_group::AnyproxyGroup::new(
+                            self.group_version_add(),
+                        )
+                        .map_err(|e| anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e))?;
                         if let Err(e) = new_anyproxy_group
                             .start(
-                                tunnel_clients.clone(),
-                                tunnel_servers.clone(),
                                 peer_stream_max_len.clone(),
-                                tunnel2_clients.clone(),
-                                tunnel2_servers.clone(),
+                                tunnels.clone(),
+                                #[cfg(feature = "anyproxy-ebpf")]
+                                ebpf_add_sock_hash.clone(),
                             )
                             .await
-                            .map_err(|e| anyhow::anyhow!("err:anyproxy start => e:{}", e))
+                            .map_err(|e| anyhow!("err:anyproxy start => e:{}", e))
                         {
                             log::error!(
                                 "err:reload => group_version:{}, e:{}",
@@ -241,21 +262,23 @@ impl Anyproxy {
         self.wait_group.wait().await;
     }
 
-    pub fn create_pid_file() -> anyhow::Result<()> {
+    pub fn create_pid_file() -> Result<()> {
         let anyproxy_pid = unsafe { libc::getpid() };
         log::info!("anyproxy pid:{}", anyproxy_pid);
         std::fs::write(
             default_config::ANYPROXY_PID_FULL_PATH.as_str(),
             format!("{}", anyproxy_pid),
-        )?;
+        )
+        .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
         Ok(())
     }
     pub fn remove_pid_file() {
         let _ = std::fs::remove_file(default_config::ANYPROXY_PID_FULL_PATH.as_str());
     }
 
-    pub fn read_pid_file() -> anyhow::Result<String> {
-        let pid = std::fs::read_to_string(default_config::ANYPROXY_PID_FULL_PATH.as_str())?;
+    pub fn read_pid_file() -> Result<String> {
+        let pid = std::fs::read_to_string(default_config::ANYPROXY_PID_FULL_PATH.as_str())
+            .map_err(|e| anyhow!("err:std::fs::read_to_string => e:{}", e))?;
         Ok(pid)
     }
 
@@ -292,7 +315,7 @@ impl Anyproxy {
         }
     }
 
-    pub fn write_signal(sig: &str) -> anyhow::Result<bool> {
+    pub fn write_signal(sig: &str) -> Result<bool> {
         let pid = Anyproxy::read_pid_file();
         if pid.is_err() {
             log::error!("err:anyproxy not run");
@@ -305,7 +328,7 @@ impl Anyproxy {
                 #[cfg(windows)]
                 {
                     log::error!("err:window not support signal:{}", sig);
-                    return Err(anyhow::anyhow!("err:window not support signal:{}", sig));
+                    return Err(anyhow!("err:window not support signal:{}", sig));
                 }
                 #[cfg(unix)]
                 true
@@ -313,11 +336,12 @@ impl Anyproxy {
             "" => false,
             _ => {
                 log::error!("err:not support signal:{}", sig);
-                return Err(anyhow::anyhow!("err:not support signal:{}", sig));
+                return Err(anyhow!("err:not support signal:{}", sig));
             }
         };
         if is_sig {
-            std::fs::write(default_config::ANYPROXY_SIGNAL_FULL_PATH.as_str(), sig)?;
+            std::fs::write(default_config::ANYPROXY_SIGNAL_FULL_PATH.as_str(), sig)
+                .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
             Ok(true)
         } else {
             Ok(false)
@@ -325,51 +349,49 @@ impl Anyproxy {
     }
 
     pub async fn read_signal() -> AnyproxyState {
-        loop {
-            tokio::select! {
-                biased;
-                _ = tokio::signal::ctrl_c() =>  {
+        tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() =>  {
+                return AnyproxyState::Quit;
+            },
+            sig = signal::quit() =>  {
+                if sig {
                     return AnyproxyState::Quit;
-                },
-                sig = signal::quit() =>  {
-                    if sig {
-                        return AnyproxyState::Quit;
-                    } else {
-                        return AnyproxyState::Skip;
-                    }
-                },
-                sig = signal::hup() =>  {
-                    if sig {
-                        return AnyproxyState::Reload;
-                    } else {
-                        return AnyproxyState::Skip;
-                    }
-                },
-                sig = signal::user1() =>  {
-                    if sig {
-                        return AnyproxyState::Reinit;
-                    } else {
-                        return AnyproxyState::Skip;
-                    }
-                },
-                sig = signal::user2() =>  {
-                    if sig {
-                        return AnyproxyState::Check;
-                    } else {
-                        return AnyproxyState::Skip;
-                    }
-                },
-                 _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
-                   return Anyproxy::load_signal_file();
-                },
-                //signal test
-                // _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-                //         return AnyproxyState::User1;
-                // }
-                else => {
+                } else {
                     return AnyproxyState::Skip;
-                },
-            }
+                }
+            },
+            sig = signal::hup() =>  {
+                if sig {
+                    return AnyproxyState::Reload;
+                } else {
+                    return AnyproxyState::Skip;
+                }
+            },
+            sig = signal::user1() =>  {
+                if sig {
+                    return AnyproxyState::Reinit;
+                } else {
+                    return AnyproxyState::Skip;
+                }
+            },
+            sig = signal::user2() =>  {
+                if sig {
+                    return AnyproxyState::Check;
+                } else {
+                    return AnyproxyState::Skip;
+                }
+            },
+             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+               return Anyproxy::load_signal_file();
+            },
+            //signal test
+            // _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
+            //         return AnyproxyState::User1;
+            // }
+            else => {
+                return AnyproxyState::Skip;
+            },
         }
     }
 }

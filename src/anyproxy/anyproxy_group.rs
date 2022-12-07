@@ -1,17 +1,24 @@
 use super::anyproxy_work;
 use crate::config::config;
 use crate::config::config_toml;
+#[cfg(feature = "anyproxy-ebpf")]
+use crate::ebpf::ebpf_sockhash;
 use crate::proxy::domain_config;
 use crate::proxy::port_config;
 use crate::proxy::proxy;
+use crate::upstream::upstream;
+use crate::Executors;
+use crate::TunnelClients;
+use crate::Tunnels;
 use any_tunnel::client;
-use any_tunnel::server;
 use any_tunnel2::client as client2;
-use any_tunnel2::server as server2;
 use any_tunnel2::tunnel as tunnel2;
+use anyhow::anyhow;
+use anyhow::Result;
 use awaitgroup::WaitGroup;
 #[cfg(unix)]
 use rlimit::{setrlimit, Resource};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -26,7 +33,7 @@ pub struct AnyproxyGroup {
 }
 
 impl AnyproxyGroup {
-    pub fn new(group_version: i32) -> anyhow::Result<AnyproxyGroup> {
+    pub fn new(group_version: i32) -> Result<AnyproxyGroup> {
         Ok(AnyproxyGroup {
             group_version,
             shutdown_thread_tx: None,
@@ -42,14 +49,11 @@ impl AnyproxyGroup {
 
     pub async fn start(
         &mut self,
-        tunnel_clients: client::Client,
-        tunnel_servers: server::Server,
         peer_stream_max_len: Arc<AtomicUsize>,
-        tunnel2_clients: client2::Client,
-        tunnel2_servers: server2::Server,
-    ) -> anyhow::Result<()> {
-        let config =
-            config::Config::new().map_err(|e| anyhow::anyhow!("err:Config::new() => e:{}", e))?;
+        tunnels: Tunnels,
+        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<ebpf_sockhash::AddSockHash>,
+    ) -> Result<()> {
+        let config = config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e))?;
         // log::info!(
         //     "start group_version:{} config:{:?}",
         //     self.group_version,
@@ -60,11 +64,11 @@ impl AnyproxyGroup {
         {
             let soft = config.common.max_open_file_limit;
             let hard = soft;
-            setrlimit(Resource::NOFILE, soft, hard).map_err(|e| {
-                anyhow::anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e)
-            })?;
+            setrlimit(Resource::NOFILE, soft, hard)
+                .map_err(|e| anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e))?;
         }
 
+        //reload 的时候不能改变peer_stream_max_len 使用swap获取最新的值
         peer_stream_max_len.swap(config.tunnel2.tunnel2_max_connect, Ordering::Relaxed);
 
         let mut worker_thread_core_ids = Vec::with_capacity(50);
@@ -90,7 +94,9 @@ impl AnyproxyGroup {
         let (config_tx, _) = broadcast::channel(100);
         let thread_wait_group = WaitGroup::new();
         let run_thread_wait_group = WaitGroup::new();
-
+        log::info!("tunnel2_max_connect:{}", config.tunnel2.tunnel2_max_connect);
+        log::info!("worker_threads:{}", config.common.worker_threads);
+        log::info!("group_version:{}", group_version);
         // 创建线程
         let thread_handles = (0..config.common.worker_threads)
             .map(|index| {
@@ -98,19 +104,19 @@ impl AnyproxyGroup {
                 let shutdown_thread_tx = shutdown_thread_tx.clone();
                 let config_tx = config_tx.clone();
                 let worker_thread_core_ids = worker_thread_core_ids.clone();
-                let tunnel_servers = tunnel_servers.clone();
-                let tunnel_clients = tunnel_clients.clone();
-                let tunnel2_servers = tunnel2_servers.clone();
-                let tunnel2_clients = tunnel2_clients.clone();
+                let tunnels = tunnels.clone();
+                #[cfg(feature = "anyproxy-ebpf")]
+                let ebpf_add_sock_hash = ebpf_add_sock_hash.clone();
 
                 let worker_thread = thread_wait_group.worker().add();
                 let run_thread_wait_group_worker = run_thread_wait_group.worker();
                 thread::spawn(move || {
+                    let thread_id = thread::current().id();
                     scopeguard::defer! {
-                        log::info!("stop thread group_version:{} index:{}, worker_threads_id:{:?}", group_version, index, thread::current().id());
+                        log::info!("stop thread group_version:{} index:{}, worker_threads_id:{:?}", group_version, index, thread_id);
                         worker_thread.done();
                     }
-                    log::info!("start thread group_version:{} index:{}, worker_threads_id:{:?}", group_version, index, thread::current().id());
+                    log::info!("start thread group_version:{} index:{}, worker_threads_id:{:?}", group_version, index, thread_id);
 
 
                     if cpu_affinity && index < worker_thread_core_ids.len() {
@@ -118,26 +124,31 @@ impl AnyproxyGroup {
                             "cpu_affinity thread group_version:{}, index:{} worker_threads_id:{:?} affinity {:?}",
                             group_version,
                             index,
-                            thread::current().id(),
+                            thread_id,
                             worker_thread_core_ids[index]
                         );
                         core_affinity::set_for_current(worker_thread_core_ids[index]);
                     }
 
+
+
                     let executor = async_executors::TokioCtBuilder::new().build().unwrap();
-                    executor.clone().block_on(async {
-                        let ret: anyhow::Result<()> = async {
+                    let executors = Executors{
+                        executor,
+                        shutdown_thread_tx,
+                        group_version,
+                        thread_id,
+                    };
+                    executors.executor.clone().block_on(async {
+                        let ret: Result<()> = async {
                             let mut anyproxy_work = anyproxy_work::AnyproxyWork::new(
-                                executor,
-                                shutdown_thread_tx,
+                                executors,
+                                tunnels,
                                 config_tx,
-                                group_version,
-                                tunnel_clients,
-                                tunnel_servers,
-                                tunnel2_clients,
-                                tunnel2_servers,
-                            )?;
-                            anyproxy_work.start(config, run_thread_wait_group_worker).await?;
+                            ).map_err(|e| anyhow!("err:anyproxy_work::AnyproxyWork::new => e:{}", e))?;
+                            anyproxy_work.start(config, run_thread_wait_group_worker,
+                                                #[cfg(feature = "anyproxy-ebpf")]
+                                                ebpf_add_sock_hash).await.map_err(|e| anyhow!("err:anyproxy_work.start => e:{}", e))?;
                             Ok(())
                         }.await;
                         ret.unwrap_or_else(|e| log::error!("err:AnyproxyWork => e:{}", e));
@@ -155,14 +166,15 @@ impl AnyproxyGroup {
             .wait_or_error(config.common.worker_threads)
             .await
         {
-            return Err(anyhow::anyhow!("err:AnyproxyGroup.start"));
+            return Err(anyhow!("err:AnyproxyGroup.start"));
         }
 
         Ok(())
     }
 
     pub async fn reload(&self, peer_stream_max_len: Arc<AtomicUsize>) {
-        let config = AnyproxyGroup::check(self.group_version).await;
+        let executor = async_executors::TokioCtBuilder::new().build().unwrap();
+        let config = AnyproxyGroup::check(self.group_version, executor).await;
         let config = match config {
             Err(e) => {
                 log::error!(
@@ -186,18 +198,20 @@ impl AnyproxyGroup {
         {
             let soft = config.common.max_open_file_limit;
             let hard = soft;
-            if let Err(e) = setrlimit(Resource::NOFILE, soft, hard).map_err(|e| {
-                anyhow::anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e)
-            }) {
+            if let Err(e) = setrlimit(Resource::NOFILE, soft, hard)
+                .map_err(|e| anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e))
+            {
                 log::error!(":{}", e);
             }
         }
         let _ = self.config_tx.as_ref().unwrap().send(config);
     }
 
-    pub async fn check(group_version: i32) -> anyhow::Result<config_toml::ConfigToml> {
-        let config =
-            config::Config::new().map_err(|e| anyhow::anyhow!("err:Config::new() => e:{}", e));
+    pub async fn check(
+        group_version: i32,
+        executor: async_executors::TokioCt,
+    ) -> Result<config_toml::ConfigToml> {
+        let config = config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e));
         let config = match config {
             Err(e) => {
                 log::error!(
@@ -210,18 +224,34 @@ impl AnyproxyGroup {
             Ok(config) => config,
         };
 
-        let tunnel2_client = tunnel2::Tunnel::start_thread(1).await;
-        let tunnel2_clients = client2::Client::new(tunnel2_client, Arc::new(AtomicUsize::new(1)));
-        let tunnel_clients = client::Client::new();
+        let client2 = tunnel2::Tunnel::start_thread(1).await;
+        let client2 = client2::Client::new(client2, Arc::new(AtomicUsize::new(1)));
+        let client = client::Client::new();
 
         let proxy_configs: Vec<Box<dyn proxy::Config>> = vec![
             Box::new(port_config::PortConfig::new()?),
             Box::new(domain_config::DomainConfig::new()?),
         ];
+        let (shutdown_thread_tx, _) = broadcast::channel(100);
+        let executors = Executors {
+            executor,
+            shutdown_thread_tx,
+            group_version: 0,
+            thread_id: thread::current().id(),
+        };
+        let tunnel_clients = TunnelClients { client, client2 };
+
+        let mut ups = upstream::Upstream::new(executors, tunnel_clients.clone())
+            .map_err(|e| anyhow!("err:Upstream::new => e:{}", e))?;
+        ups.parse_config(&config)
+            .await
+            .map_err(|e| anyhow!("err:Upstream::new => e:{}", e))?;
+
+        let ups = Rc::new(ups);
 
         for proxy_config in proxy_configs.iter() {
             if let Err(e) = proxy_config
-                .parse(&config, tunnel_clients.clone(), tunnel2_clients.clone())
+                .parse(&config, ups.clone(), tunnel_clients.clone())
                 .await
             {
                 log::error!(

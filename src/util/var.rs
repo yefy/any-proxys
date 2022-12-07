@@ -1,6 +1,7 @@
 /*
 配置变量解析
  */
+use anyhow::anyhow;
 use anyhow::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,7 +39,7 @@ pub struct Var {
 impl Var {
     pub fn new(vars_str: &str, default_str: Option<&str>) -> Result<Var> {
         if vars_str.len() <= 0 {
-            return Err(anyhow::anyhow!("err:var nil"))?;
+            return Err(anyhow!("err:var nil"))?;
         }
 
         //let mut items = Vec::with_capacity(50);
@@ -80,7 +81,7 @@ impl Var {
 
             let var_end_index = vars.find(var_end);
             let var_end_index =
-                var_end_index.ok_or(anyhow::anyhow!("err:var invalid => var:{}", vars_str))?;
+                var_end_index.ok_or(anyhow!("err:var invalid => var:{}", vars_str))?;
             let data = &vars[..var_end_index + 1];
             let item = Rc::new(VarItem {
                 is_var: true,
@@ -155,7 +156,7 @@ impl Var {
                         .default_str
                         .as_ref()
                         .as_ref()
-                        .ok_or(anyhow::anyhow!(
+                        .ok_or(anyhow!(
                             "err:var invalid => var:{}, vars:{}",
                             v.item.data,
                             self.context.vars

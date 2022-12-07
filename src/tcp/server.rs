@@ -4,8 +4,12 @@ use crate::stream::server;
 use crate::stream::stream_flow;
 use crate::util;
 use crate::Protocol7;
+use anyhow::anyhow;
+use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
@@ -16,7 +20,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr, reuseport: bool, config: Config) -> anyhow::Result<Server> {
+    pub fn new(addr: SocketAddr, reuseport: bool, config: Config) -> Result<Server> {
         Ok(Server {
             addr,
             reuseport,
@@ -27,12 +31,24 @@ impl Server {
 
 #[async_trait(?Send)]
 impl server::Server for Server {
-    async fn listen(&self) -> anyhow::Result<Box<dyn server::Listener>> {
-        let std_listener = tcp_util::bind(&self.addr, self.reuseport)?;
-        let listener = TcpListener::from_std(std_listener)?;
-        Ok(Box::new(Listener::new(listener, self.config.clone())?))
+    fn stream_send_timeout(&self) -> usize {
+        return self.config.tcp_send_timeout;
     }
-    fn listen_addr(&self) -> anyhow::Result<SocketAddr> {
+    fn stream_recv_timeout(&self) -> usize {
+        return self.config.tcp_recv_timeout;
+    }
+
+    async fn listen(&self) -> Result<Box<dyn server::Listener>> {
+        let std_listener = tcp_util::bind(&self.addr, self.reuseport)
+            .map_err(|e| anyhow!("err:tcp_util::bind => e:{}", e))?;
+        let listener = TcpListener::from_std(std_listener)
+            .map_err(|e| anyhow!("err:TcpListener::from_std => e:{}", e))?;
+        Ok(Box::new(
+            Listener::new(listener, self.config.clone())
+                .map_err(|e| anyhow!("err:Listener::new => e:{}", e))?,
+        ))
+    }
+    fn listen_addr(&self) -> Result<SocketAddr> {
         Ok(self.addr.clone())
     }
     fn sni(&self) -> Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>> {
@@ -50,19 +66,19 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, config: Config) -> anyhow::Result<Listener> {
+    pub fn new(listener: TcpListener, config: Config) -> Result<Listener> {
         Ok(Listener { listener, config })
     }
 }
 
 #[async_trait(?Send)]
 impl server::Listener for Listener {
-    async fn accept(&mut self) -> anyhow::Result<(Box<dyn server::Connection>, bool)> {
-        let ret: anyhow::Result<(TcpStream, SocketAddr)> = async {
+    async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
+        let ret: Result<(TcpStream, SocketAddr)> = async {
             match self.listener.accept().await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
+                    return Err(anyhow!(
                         "err:Listener.accept => kind:{:?}, e:{}",
                         e.kind(),
                         e
@@ -73,20 +89,28 @@ impl server::Listener for Listener {
         .await;
         let (stream, remote_addr) = ret?;
         tcp_util::set_stream(&stream, &self.config);
-        Ok((Box::new(Connection::new(stream, remote_addr)?), false))
+        Ok((
+            Box::new(
+                Connection::new(stream, remote_addr, self.config.clone())
+                    .map_err(|e| anyhow!("err:Connection::new => e:{}", e))?,
+            ),
+            false,
+        ))
     }
 }
 
 pub struct Connection {
     stream: Option<TcpStream>,
     remote_addr: Option<SocketAddr>,
+    config: Config,
 }
 
 impl Connection {
-    pub fn new(stream: TcpStream, remote_addr: SocketAddr) -> anyhow::Result<Connection> {
+    pub fn new(stream: TcpStream, remote_addr: SocketAddr, config: Config) -> Result<Connection> {
         Ok(Connection {
             stream: Some(stream),
             remote_addr: Some(remote_addr),
+            config,
         })
     }
 }
@@ -95,11 +119,12 @@ impl Connection {
 impl server::Connection for Connection {
     async fn stream(
         &mut self,
-    ) -> anyhow::Result<
+    ) -> Result<
         Option<(
             Protocol7,
             stream_flow::StreamFlow,
             SocketAddr,
+            Option<SocketAddr>,
             Option<String>,
         )>,
     > {
@@ -108,7 +133,22 @@ impl server::Connection for Connection {
         }
         let tcp_stream = self.stream.take().unwrap();
         let remote_addr = self.remote_addr.take().unwrap();
-        let stream = stream_flow::StreamFlow::new(Box::new(tcp_stream));
-        Ok(Some((Protocol7::Tcp, stream, remote_addr, None)))
+        let local_addr = tcp_stream.local_addr().unwrap();
+        let mut fd = 0;
+        #[cfg(unix)]
+        {
+            fd = tcp_stream.as_raw_fd();
+        }
+        let mut stream = stream_flow::StreamFlow::new(fd, Box::new(tcp_stream));
+        let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
+        let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
+        stream.set_config(read_timeout, write_timeout, true, None);
+        Ok(Some((
+            Protocol7::Tcp,
+            stream,
+            remote_addr,
+            Some(local_addr),
+            None,
+        )))
     }
 }

@@ -1,6 +1,8 @@
 use any_proxy::anyproxy::anyproxy::Anyproxy;
 use any_proxy::anyproxy::anyproxy::ArgsConfig;
 use any_proxy::util::default_config;
+use anyhow::anyhow;
+use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
@@ -12,13 +14,13 @@ extern crate jemallocator;
 #[cfg(unix)]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-/// window内存管理器
-#[cfg(windows)]
-use mimalloc::MiMalloc;
-#[cfg(windows)]
-#[global_allocator]
-#[cfg(windows)]
-static GLOBAL: MiMalloc = MiMalloc;
+// /// window内存管理器
+// #[cfg(windows)]
+// use mimalloc::MiMalloc;
+// #[cfg(windows)]
+// #[global_allocator]
+// #[cfg(windows)]
+// static GLOBAL: MiMalloc = MiMalloc;
 
 lazy_static! {
     static ref THREAD_PANIC_MUTEX: Mutex<()> = Mutex::new(());
@@ -36,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Default::default(),
     ) {
         eprintln!("err:log4rs::init_file => e:{}", e);
-        return Err(anyhow::anyhow!("err:log4rs::init_fil"))?;
+        return Err(anyhow!("err:log4rs::init_fil"))?;
     }
 
     #[cfg(feature = "anyproxy-rustls")]
@@ -52,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(cpu_core_ids) = core_affinity::get_core_ids() {
+        log::info!("cpu_core_id num:{:?}", cpu_core_ids.len());
         for cpu_core_id in cpu_core_ids.iter() {
             log::info!("cpu_core_id:{:?}", cpu_core_id);
         }
@@ -63,13 +66,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .block_on(async { async_main(executor).await });
     if let Err(e) = ret {
         log::error!("err:async_main => e:{}", e);
-        return Err(anyhow::anyhow!("err:block_on"))?;
+        return Err(anyhow!("err:block_on"))?;
     }
 
     Ok(())
 }
 
-async fn async_main(executor: async_executors::TokioCt) -> anyhow::Result<()> {
+async fn async_main(executor: async_executors::TokioCt) -> Result<()> {
     let mut anyproxy = Anyproxy::new(executor)?;
     anyproxy.start().await
 }

@@ -1,14 +1,20 @@
 use crate::config::config_toml;
+use crate::upstream::upstream;
 use crate::util::var;
-use any_tunnel::client as tunnel_client;
-use any_tunnel2::client as tunnel2_client;
+use crate::TunnelClients;
+use anyhow::Result;
 use async_trait::async_trait;
+use std::rc::Rc;
 
 #[async_trait(?Send)]
 pub trait Proxy {
-    async fn start(&mut self, config: &config_toml::ConfigToml) -> anyhow::Result<()>;
-    async fn stop(&self, _: bool) -> anyhow::Result<()>;
-    async fn wait(&self) -> anyhow::Result<()>;
+    async fn start(
+        &mut self,
+        config: &config_toml::ConfigToml,
+        ups: Rc<upstream::Upstream>,
+    ) -> Result<()>;
+    async fn stop(&self, _: bool) -> Result<()>;
+    async fn wait(&self) -> Result<()>;
 }
 
 #[async_trait(?Send)]
@@ -16,9 +22,9 @@ pub trait Config {
     async fn parse(
         &self,
         config: &config_toml::ConfigToml,
-        tunnel_client: tunnel_client::Client,
-        tunnel2_client: tunnel2_client::Client,
-    ) -> anyhow::Result<()>;
+        ups: Rc<upstream::Upstream>,
+        tunnel_clients: TunnelClients,
+    ) -> Result<()>;
 }
 
 pub struct AccessContext {

@@ -110,7 +110,7 @@ impl ErrStatus200 for ErrStatusUpstream {
     }
 }
 
-pub struct StreamConnect {
+pub struct StreamInfo {
     pub ssl_domain: Option<String>,
     pub local_domain: Option<String>,
     pub remote_domain: Option<String>,
@@ -128,18 +128,19 @@ pub struct StreamConnect {
     pub upstream_connect_info: Rc<RefCell<StreamFlowInfo>>,
     pub upstream_connect_time: Option<f32>,
     pub upstream_stream_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
-    pub stream_work_times: RefCell<Vec<(String, f32)>>,
+    pub stream_work_times: Vec<(String, f32)>,
     pub stream_work_time: Option<Instant>,
     pub is_discard_flow: bool,
+    pub is_ebpf: bool,
 }
 
-impl StreamConnect {
+impl StreamInfo {
     pub fn new(
         local_protocol_name: String,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-    ) -> StreamConnect {
-        StreamConnect {
+    ) -> StreamInfo {
+        StreamInfo {
             ssl_domain: None,
             local_domain: None,
             remote_domain: None,
@@ -169,9 +170,10 @@ impl StreamConnect {
                 read: 0,
                 err: StreamFlowErr::Init,
             })),
-            stream_work_times: RefCell::new(Vec::new()),
+            stream_work_times: Vec::new(),
             stream_work_time: Some(Instant::now()),
             is_discard_flow: false,
+            is_ebpf: false,
         }
     }
 }

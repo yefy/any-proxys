@@ -35,9 +35,14 @@ impl OpensslSni {
                 default_cert = ssl.cert.clone();
             }
 
-            let mut ssl_context = SslContextBuilder::new(SslMethod::tls())?;
-            ssl_context.set_private_key_file(&ssl.key, SslFiletype::PEM)?;
-            ssl_context.set_certificate_chain_file(&ssl.cert)?;
+            let mut ssl_context = SslContextBuilder::new(SslMethod::tls())
+                .map_err(|e| anyhow!("err:SslContextBuilder::new => e:{}", e))?;
+            ssl_context
+                .set_private_key_file(&ssl.key, SslFiletype::PEM)
+                .map_err(|e| anyhow!("err:ssl_context.set_private_key_file => e:{}", e))?;
+            ssl_context
+                .set_certificate_chain_file(&ssl.cert)
+                .map_err(|e| anyhow!("err:ssl_context.set_certificate_chain_file => e:{}", e))?;
 
             if prototol.len() > 0 {
                 let prototol = prototol.to_string();
@@ -66,9 +71,14 @@ impl OpensslSni {
         prototol: &str,
     ) -> Result<Rc<SslAcceptor>> {
         let sni_map = self.sni_map.clone();
-        let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-        acceptor.set_certificate_chain_file(&self.default_cert)?;
-        acceptor.set_private_key_file(&self.default_key, SslFiletype::PEM)?;
+        let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())
+            .map_err(|e| anyhow!("err:SslAcceptor::mozilla_modern => e:{}", e))?;
+        acceptor
+            .set_certificate_chain_file(&self.default_cert)
+            .map_err(|e| anyhow!("err:set_certificate_chain_file => e:{}", e))?;
+        acceptor
+            .set_private_key_file(&self.default_key, SslFiletype::PEM)
+            .map_err(|e| anyhow!("err:set_private_key_file => e:{}", e))?;
         if prototol.len() > 0 {
             let prototol = prototol.to_string();
             acceptor.set_alpn_select_callback(move |_, client| {

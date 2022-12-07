@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::str;
 
+fn default_quic_name() -> String {
+    "quic_config_1".to_string()
+}
 fn default_quic_default() -> bool {
     true
 }
-fn default_quic_upstream_keepalive() -> usize {
-    100
-}
+// fn default_quic_upstream_keepalive() -> usize {
+//     10
+// }
 fn default_quic_upstream_streams() -> u64 {
     100
 }
@@ -35,14 +38,30 @@ fn default_quic_recv_buffer_size() -> usize {
 fn default_quic_send_buffer_size() -> usize {
     10485760
 }
+fn default_quic_send_timeout() -> usize {
+    10
+}
+fn default_quic_recv_timeout() -> usize {
+    10
+}
+fn default_quic_connect_timeout() -> usize {
+    10
+}
+fn default_quic_upstream_ports() -> String {
+    "".to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuicConfig {
+    #[serde(default = "default_quic_name")]
+    pub quic_name: String,
     #[serde(default = "default_quic_default")]
     pub quic_default: bool,
-    #[serde(default = "default_quic_upstream_keepalive")]
-    pub quic_upstream_keepalive: usize,
+    #[serde(default = "default_quic_upstream_ports")]
+    pub quic_upstream_ports: String,
+    //#[serde(default = "default_quic_upstream_keepalive")]
+    //pub quic_upstream_keepalive: usize,
     #[serde(default = "default_quic_upstream_streams")]
     pub quic_upstream_streams: u64,
     #[serde(default = "default_quic_send_window")]
@@ -61,8 +80,17 @@ pub struct QuicConfig {
     pub quic_recv_buffer_size: usize,
     #[serde(default = "default_quic_send_buffer_size")]
     pub quic_send_buffer_size: usize,
+    #[serde(default = "default_quic_send_timeout")]
+    pub quic_send_timeout: usize,
+    #[serde(default = "default_quic_recv_timeout")]
+    pub quic_recv_timeout: usize,
+    #[serde(default = "default_quic_connect_timeout")]
+    pub quic_connect_timeout: usize,
 }
 
+fn default_tcp_name() -> String {
+    "tcp_config_1".to_string()
+}
 fn default_tcp_send_buffer() -> usize {
     0
 }
@@ -72,15 +100,32 @@ fn default_tcp_recv_buffer() -> usize {
 fn default_tcp_nodelay() -> bool {
     true
 }
+fn default_tcp_send_timeout() -> usize {
+    10
+}
+fn default_tcp_recv_timeout() -> usize {
+    10
+}
+fn default_tcp_connect_timeout() -> usize {
+    10
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpConfig {
+    #[serde(default = "default_tcp_name")]
+    pub tcp_name: String,
     #[serde(default = "default_tcp_send_buffer")]
     pub tcp_send_buffer: usize,
     #[serde(default = "default_tcp_recv_buffer")]
     pub tcp_recv_buffer: usize,
     #[serde(default = "default_tcp_nodelay")]
     pub tcp_nodelay: bool,
+    #[serde(default = "default_tcp_send_timeout")]
+    pub tcp_send_timeout: usize,
+    #[serde(default = "default_tcp_recv_timeout")]
+    pub tcp_recv_timeout: usize,
+    #[serde(default = "default_tcp_connect_timeout")]
+    pub tcp_connect_timeout: usize,
 }
 
 fn default_cpu_affinity() -> bool {
@@ -139,27 +184,107 @@ pub struct Tunnel2Config {
     pub tunnel2_max_connect: usize,
 }
 
+fn default_tcp() -> Vec<TcpConfig> {
+    vec![TcpConfig {
+        tcp_name: default_tcp_name(),
+        tcp_send_buffer: default_tcp_send_buffer(),
+        tcp_recv_buffer: default_tcp_recv_buffer(),
+        tcp_nodelay: default_tcp_nodelay(),
+        tcp_send_timeout: default_tcp_send_timeout(),
+        tcp_recv_timeout: default_tcp_recv_timeout(),
+        tcp_connect_timeout: default_tcp_connect_timeout(),
+    }]
+}
+
+fn default_quic() -> Vec<QuicConfig> {
+    vec![QuicConfig {
+        quic_name: default_quic_name(),
+        quic_default: default_quic_default(),
+        quic_upstream_ports: default_quic_upstream_ports(),
+        //quic_upstream_keepalive: default_quic_upstream_keepalive(),
+        quic_upstream_streams: default_quic_upstream_streams(),
+        quic_send_window: default_quic_send_window(),
+        quic_rtt: default_quic_rtt(),
+        quic_max_stream_bandwidth: default_quic_max_stream_bandwidth(),
+        quic_enable_keylog: default_quic_enable_keylog(),
+        quic_protocols: default_quic_protocols(),
+        quic_datagram_send_buffer_size: default_quic_datagram_send_buffer_size(),
+        quic_recv_buffer_size: default_quic_recv_buffer_size(),
+        quic_send_buffer_size: default_quic_send_buffer_size(),
+        quic_send_timeout: default_quic_send_timeout(),
+        quic_recv_timeout: default_quic_recv_timeout(),
+        quic_connect_timeout: default_quic_connect_timeout(),
+    }]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigToml {
     pub common: CommonConfig,
-    pub tcp: TcpConfig,
-    pub quic: QuicConfig,
+    #[serde(default = "default_tcp")]
+    pub tcp: Vec<TcpConfig>,
+    #[serde(default = "default_quic")]
+    pub quic: Vec<QuicConfig>,
     pub tunnel2: Tunnel2Config,
     pub stream: StreamConfig,
+    pub rate: RateLimit,
+    pub tmp_file: TmpFile,
+    pub fast: Fast,
     pub _port: Option<_PortConfig>,
     pub _domain: Option<_DomainConfig>,
+    pub upstream: Option<Vec<UpstreamConfig>>,
 }
 
-fn default_stream_send_timeout() -> u64 {
-    10
+fn default_is_ebpf() -> bool {
+    false
 }
-fn default_stream_recv_timeout() -> u64 {
-    10
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fast {
+    #[serde(default = "default_is_ebpf")]
+    pub is_ebpf: bool,
 }
-fn default_stream_connect_timeout() -> u64 {
-    10
+
+fn default_download_limit_rate_after() -> u64 {
+    0
 }
+fn default_download_limit_rate() -> u64 {
+    0
+}
+fn default_upload_limit_rate_after() -> u64 {
+    0
+}
+fn default_upload_limit_rate() -> u64 {
+    0
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimit {
+    #[serde(default = "default_download_limit_rate_after")]
+    pub download_limit_rate_after: u64,
+    #[serde(default = "default_download_limit_rate")]
+    pub download_limit_rate: u64,
+    #[serde(default = "default_upload_limit_rate_after")]
+    pub upload_limit_rate_after: u64,
+    #[serde(default = "default_upload_limit_rate")]
+    pub upload_limit_rate: u64,
+}
+
+fn default_download_tmp_file_size() -> u64 {
+    0
+}
+fn default_upload_tmp_file_size() -> u64 {
+    0
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TmpFile {
+    #[serde(default = "default_download_tmp_file_size")]
+    pub download_tmp_file_size: u64,
+    #[serde(default = "default_upload_tmp_file_size")]
+    pub upload_tmp_file_size: u64,
+}
+
 fn default_stream_cache_size() -> usize {
     8192
 }
@@ -169,12 +294,6 @@ fn default_stream_work_flow_times() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
-    #[serde(default = "default_stream_send_timeout")]
-    pub stream_send_timeout: u64,
-    #[serde(default = "default_stream_recv_timeout")]
-    pub stream_recv_timeout: u64,
-    #[serde(default = "default_stream_connect_timeout")]
-    pub stream_connect_timeout: u64,
     #[serde(default = "default_stream_cache_size")]
     pub stream_cache_size: usize,
     #[serde(default = "default_stream_work_flow_times")]
@@ -190,7 +309,7 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${upstream_addr} ${domain} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]".to_string()
+    "[${local_time}] ${is_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${upstream_addr} ${domain} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]".to_string()
 }
 
 fn default_access_log_stdout() -> bool {
@@ -308,6 +427,9 @@ pub enum DomainListen {
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcp2 {
     pub address: String, //ip:port, domain:port
+    pub tcp: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -315,6 +437,9 @@ pub struct ProxyPassTcp2 {
 pub struct ProxyPassQuic2 {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
+    pub quic: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,8 +450,8 @@ pub enum ProxyPassTunnel2 {
     Tcp(ProxyPassTcp2),
     #[serde(rename = "quic")]
     Quic(ProxyPassQuic2),
-    #[serde(rename = "upstream")]
-    Upstrem(String),
+    //#[serde(rename = "upstream")]
+    //Upstrem(String),
 }
 
 fn default_tunnel_max_connect() -> usize {
@@ -339,6 +464,9 @@ pub struct ProxyPassTcp {
     #[serde(default = "default_tunnel_max_connect")]
     pub tunnel_max_connect: usize,
     pub address: String, //ip:port, domain:port
+    pub tcp: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -348,6 +476,9 @@ pub struct ProxyPassQuic {
     pub tunnel_max_connect: usize,
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
+    pub quic: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,8 +489,8 @@ pub enum ProxyPassTunnel {
     Tcp(ProxyPassTcp),
     #[serde(rename = "quic")]
     Quic(ProxyPassQuic),
-    #[serde(rename = "upstream")]
-    Upstrem(String),
+    //#[serde(rename = "upstream")]
+    //Upstrem(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,7 +506,7 @@ pub enum ProxyPass {
     #[serde(rename = "tunnel2")]
     Tunnel2(ProxyPassTunnel2),
     #[serde(rename = "upstream")]
-    Upstrem(String),
+    Upstream(String),
 }
 
 fn default_access() -> Vec<AccessConfig> {
@@ -390,30 +521,52 @@ fn default_access() -> Vec<AccessConfig> {
 fn default_proxy_protocol() -> bool {
     false
 }
+fn default_heartbeat() -> bool {
+    false
+}
+
+fn default_proxy_pass_upstream() -> String {
+    "".to_string()
+}
+fn default_is_upstream() -> bool {
+    false
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PortServerConfig {
     pub common: Option<CommonConfig>,
-    pub tcp: Option<TcpConfig>,
-    pub quic: Option<QuicConfig>,
+    pub tcp: Option<String>,
+    pub quic: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
+    pub rate: Option<RateLimit>,
+    pub tmp_file: Option<TmpFile>,
+    pub fast: Option<Fast>,
     pub access: Option<Vec<AccessConfig>>,
     pub domain: Option<String>,
     pub listen: Vec<PortListen>,
     pub proxy_pass: ProxyPass,
+    #[serde(default = "default_proxy_pass_upstream")]
+    pub proxy_pass_upstream: String,
+    #[serde(default = "default_is_upstream")]
+    pub is_upstream: bool,
     #[serde(default = "default_proxy_protocol")]
     pub proxy_protocol: bool,
+    #[serde(default = "default_heartbeat")]
+    pub heartbeat: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct _PortConfig {
-    pub tcp: Option<TcpConfig>,
-    pub quic: Option<QuicConfig>,
+    pub tcp: Option<String>,
+    pub quic: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
+    pub rate: Option<RateLimit>,
+    pub tmp_file: Option<TmpFile>,
+    pub fast: Option<Fast>,
     #[serde(default = "default_access")]
     pub access: Vec<AccessConfig>,
     pub _server: Vec<PortServerConfig>,
@@ -423,27 +576,96 @@ pub struct _PortConfig {
 #[serde(deny_unknown_fields)]
 pub struct DomainServerConfig {
     pub common: Option<CommonConfig>,
-    pub tcp: Option<TcpConfig>,
-    pub quic: Option<QuicConfig>,
+    pub tcp: Option<String>,
+    pub quic: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
+    pub rate: Option<RateLimit>,
+    pub tmp_file: Option<TmpFile>,
+    pub fast: Option<Fast>,
     pub access: Option<Vec<AccessConfig>>,
     pub domain: String,
     pub listen: Option<Vec<DomainListen>>,
     pub proxy_pass: ProxyPass,
+    #[serde(default = "default_proxy_pass_upstream")]
+    pub proxy_pass_upstream: String,
+    #[serde(default = "default_is_upstream")]
+    pub is_upstream: bool,
     #[serde(default = "default_proxy_protocol")]
     pub proxy_protocol: bool,
+    #[serde(default = "default_heartbeat")]
+    pub heartbeat: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct _DomainConfig {
-    pub tcp: Option<TcpConfig>,
-    pub quic: Option<QuicConfig>,
+    pub tcp: Option<String>,
+    pub quic: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
+    pub rate: Option<RateLimit>,
+    pub tmp_file: Option<TmpFile>,
+    pub fast: Option<Fast>,
     #[serde(default = "default_access")]
     pub access: Vec<AccessConfig>,
     pub listen: Option<Vec<DomainListen>>,
     pub _server: Vec<DomainServerConfig>,
+}
+
+// #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// #[serde(deny_unknown_fields)]
+// #[serde(tag = "type")]
+// pub enum UpstreamServer {
+//     #[serde(rename = "tcp")]
+//     Tcp(ProxyPassTcp),
+//     #[serde(rename = "quic")]
+//     Quic(ProxyPassQuic),
+//     #[serde(rename = "tunnel")]
+//     Tunnel(ProxyPassTunnel),
+//     #[serde(rename = "tunnel2")]
+//     Tunnel2(ProxyPassTunnel2),
+// }
+
+pub fn default_heartbeat_interval() -> usize {
+    10
+}
+
+pub fn default_heartbeat_timeout() -> usize {
+    10
+}
+
+pub fn default_heartbeat_fail() -> usize {
+    3
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamHeartbeat {
+    #[serde(default = "default_heartbeat_interval")]
+    pub interval: usize,
+    #[serde(default = "default_heartbeat_timeout")]
+    pub timeout: usize,
+    #[serde(default = "default_heartbeat_fail")]
+    pub fail: usize,
+}
+
+pub fn default_dynamic_domain_interval() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamDynamicDomain {
+    #[serde(default = "default_dynamic_domain_interval")]
+    pub interval: usize,
+    #[serde(default = "default_heartbeat_timeout")]
+    pub timeout: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamConfig {
+    pub name: String,
+    pub server: Vec<ProxyPass>,
 }

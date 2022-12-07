@@ -12,12 +12,13 @@ path = "src/bin/anyproxy.rs"
 
 
 [features]
-default = ["anyproxy-openssl"]
-#default = ["anyproxy-rustls"]
+#default = ["anyproxy-openssl"]
+default = ["anyproxy-rustls"]
 #使用openssl加密
 anyproxy-openssl = ["openssl-sys", "openssl", "tokio-openssl"]
 #使用rustls加密
 anyproxy-rustls = []
+anyproxy-ebpf = ["libbpf-rs", "libbpf-cargo"]
 
 
 
@@ -86,6 +87,21 @@ tokio-rustls = "0.23.2"
 #webpki = "0.21.0"
 webpki = { version = "0.22", default-features = false, optional = true }
 rustls-pemfile = "0.2.1"
+tempfile = "3"
+syncpool = "0.1.6"
+
+#libbpf-rs = "0.14.0"
+
+[dependencies.libbpf-rs]
+version = "0.14.0"
+optional = true
+
+[build-dependencies.libbpf-cargo]
+version = "0.9.3"
+optional = true
+
+#[build-dependencies]
+#libbpf-cargo = "0.9.3"
 
 [dependencies.socket2]
 version = "0.4.2"
@@ -94,8 +110,8 @@ features = ["all"]
 [target."cfg(unix)".dependencies.jemallocator]
 version = "0.3.2"
 
-[target."cfg(windows)".dependencies.mimalloc]
-version = "0.1.27"
+#[target."cfg(windows)".dependencies.mimalloc]
+#version = "0.1.27"
 
 [dependencies.async_executors]
 version = "0.4.2"
@@ -120,3 +136,6 @@ optional = true
 directories-next = "2.0.0"
 rcgen = "0.9.1"
 pem = "1.0"
+
+
+

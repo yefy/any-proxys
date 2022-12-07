@@ -2,16 +2,21 @@ use super::port_config;
 use super::port_server;
 use super::proxy;
 use crate::config::config_toml;
-use any_tunnel::client;
-use any_tunnel::server;
-use any_tunnel2::client as client2;
-use any_tunnel2::server as server2;
+#[cfg(feature = "anyproxy-ebpf")]
+use crate::ebpf::ebpf_sockhash;
+use crate::upstream::upstream;
+use crate::Executors;
+use crate::TunnelClients;
+use crate::Tunnels;
+use anyhow::anyhow;
+use anyhow::Result;
 use async_trait::async_trait;
 use awaitgroup::WaitGroup;
 use futures_util::task::LocalSpawnExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
@@ -21,56 +26,62 @@ pub struct PortListen {
 }
 
 pub struct Port {
-    executor: async_executors::TokioCt,
-    group_version: i32,
+    executors: Executors,
+    tunnels: Tunnels,
     port_config_listen_map: Rc<RefCell<HashMap<String, PortListen>>>,
-    shutdown_thread_tx: broadcast::Sender<bool>,
     port_server_wait_group: WaitGroup,
-    tunnel_clients: client::Client,
-    tunnel_servers: server::Server,
-    tunnel2_clients: client2::Client,
-    tunnel2_servers: server2::Server,
+    tmp_file_id: Rc<RefCell<u64>>,
+    #[cfg(feature = "anyproxy-ebpf")]
+    ebpf_add_sock_hash: Arc<ebpf_sockhash::AddSockHash>,
 }
 
 impl Port {
     pub fn new(
-        executor: async_executors::TokioCt,
-        group_version: i32,
-        tunnel_clients: client::Client,
-        tunnel_servers: server::Server,
-        tunnel2_clients: client2::Client,
-        tunnel2_servers: server2::Server,
-    ) -> anyhow::Result<Port> {
+        executors: Executors,
+        tunnels: Tunnels,
+        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<ebpf_sockhash::AddSockHash>,
+    ) -> Result<Port> {
         let (shutdown_thread_tx, _) = broadcast::channel(100);
-        Ok(Port {
-            executor,
-            group_version,
-            port_config_listen_map: Rc::new(RefCell::new(HashMap::new())),
+        let tmp_file_id = Rc::new(RefCell::new(0 as u64));
+        let executors = Executors {
+            executor: executors.executor.clone(),
             shutdown_thread_tx,
+            group_version: executors.group_version,
+            thread_id: executors.thread_id,
+        };
+
+        Ok(Port {
+            executors,
+            tunnels,
+            port_config_listen_map: Rc::new(RefCell::new(HashMap::new())),
             port_server_wait_group: WaitGroup::new(),
-            tunnel_clients,
-            tunnel_servers,
-            tunnel2_clients,
-            tunnel2_servers,
+            tmp_file_id,
+            #[cfg(feature = "anyproxy-ebpf")]
+            ebpf_add_sock_hash,
         })
     }
 }
 
 #[async_trait(?Send)]
 impl proxy::Proxy for Port {
-    async fn start(&mut self, config: &config_toml::ConfigToml) -> anyhow::Result<()> {
-        let port_config = port_config::PortConfig::new()?;
+    async fn start(
+        &mut self,
+        config: &config_toml::ConfigToml,
+        ups: Rc<upstream::Upstream>,
+    ) -> Result<()> {
+        let port_config = port_config::PortConfig::new()
+            .map_err(|e| anyhow!("err:PortConfig::new => e:{}", e))?;
         if config._port.is_none() {
             return Ok(());
         }
-
+        let tunnel_clients = TunnelClients {
+            client: self.tunnels.client.clone(),
+            client2: self.tunnels.client2.clone(),
+        };
         let port_config_listen_map = port_config
-            .parse_config(
-                config,
-                self.tunnel_clients.clone(),
-                self.tunnel2_clients.clone(),
-            )
-            .await?;
+            .parse_config(config, ups, tunnel_clients)
+            .await
+            .map_err(|e| anyhow!("err:port_config.parse_config => e:{}", e))?;
         let keys = self
             .port_config_listen_map
             .borrow()
@@ -121,11 +132,13 @@ impl proxy::Proxy for Port {
         }
 
         for (key, port_config_listen) in key_port_config_listens {
-            let executor = self.executor.clone();
-            let group_version = self.group_version;
+            let executors = self.executors.clone();
             let (listen_shutdown_tx, _) = broadcast::channel(100);
-            let shutdown_thread_tx = self.shutdown_thread_tx.clone();
-            let common_config = port_config_listen.port_config_context.common.clone();
+            let common_config = port_config_listen
+                .port_config_context
+                .stream_config_context
+                .common
+                .clone();
             let listen_server = port_config_listen.listen_server.clone();
 
             let port_listen = PortListen {
@@ -137,29 +150,36 @@ impl proxy::Proxy for Port {
                 .insert(key.clone(), port_listen);
 
             let port_config_listen_map = self.port_config_listen_map.clone();
-            let tunnel_servers = self.tunnel_servers.clone();
-            let tunnel2_servers = self.tunnel2_servers.clone();
+            let tunnels = self.tunnels.clone();
+            let tmp_file_id = self.tmp_file_id.clone();
 
             let worker = self.port_server_wait_group.worker().add();
-            self.executor
+            #[cfg(feature = "anyproxy-ebpf")]
+            let ebpf_add_sock_hash = self.ebpf_add_sock_hash.clone();
+            self.executors
+                .executor
                 .spawn_local(async move {
                     scopeguard::defer! {
                         worker.done();
                     }
-                    let ret: anyhow::Result<()> = async {
+                    let ret: Result<()> = async {
                         let port_server = port_server::PortServer::new(
-                            executor,
-                            group_version,
+                            executors,
+                            tunnels,
                             listen_shutdown_tx,
-                            shutdown_thread_tx,
                             common_config,
                             listen_server,
                             key,
                             port_config_listen_map,
-                            tunnel_servers,
-                            tunnel2_servers,
-                        )?;
-                        port_server.start().await?;
+                            tmp_file_id,
+                            #[cfg(feature = "anyproxy-ebpf")]
+                            ebpf_add_sock_hash,
+                        )
+                        .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
+                        port_server
+                            .start()
+                            .await
+                            .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
                         Ok(())
                     }
                     .await;
@@ -170,11 +190,11 @@ impl proxy::Proxy for Port {
 
         Ok(())
     }
-    async fn stop(&self, is_fast_shutdown: bool) -> anyhow::Result<()> {
-        let _ = self.shutdown_thread_tx.send(is_fast_shutdown)?;
+    async fn stop(&self, is_fast_shutdown: bool) -> Result<()> {
+        let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown)?;
         Ok(())
     }
-    async fn wait(&self) -> anyhow::Result<()> {
+    async fn wait(&self) -> Result<()> {
         self.port_server_wait_group.wait().await;
         Ok(())
     }

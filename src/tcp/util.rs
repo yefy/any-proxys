@@ -1,4 +1,6 @@
 use crate::config::config_toml::TcpConfig as Config;
+use anyhow::anyhow;
+use anyhow::Result;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::SocketAddr;
@@ -6,7 +8,7 @@ use std::net::TcpListener as StdTcpListener;
 use std::net::ToSocketAddrs;
 use tokio::net::TcpStream;
 
-pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> anyhow::Result<StdTcpListener> {
+pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
     let addr = addr
         .to_socket_addrs()?
         .next()
@@ -17,15 +19,19 @@ pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> anyhow::Result<StdTcpLis
     } else {
         Domain::IPV4
     };
-    let sk = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    let sk = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
+        .map_err(|e| anyhow!("err:Socket::new => e:{}", e))?;
     let addr = socket2::SockAddr::from(addr);
     #[cfg(unix)]
     {
         sk.set_reuse_port(_tcp_reuseport)?;
     }
-    sk.set_nonblocking(true)?;
-    sk.bind(&addr)?;
-    sk.listen(1024)?;
+    sk.set_nonblocking(true)
+        .map_err(|e| anyhow!("err:sk.set_nonblocking => e:{}", e))?;
+    sk.bind(&addr)
+        .map_err(|e| anyhow!("err:sk.bind => e:{}", e))?;
+    sk.listen(1024)
+        .map_err(|e| anyhow!("err:sk.listen => e:{}", e))?;
     Ok(sk.into())
 }
 

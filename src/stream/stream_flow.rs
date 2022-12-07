@@ -1,3 +1,5 @@
+use anyhow::anyhow;
+use anyhow::Result;
 use chrono::prelude::*;
 use std::future::Future;
 use std::io;
@@ -46,45 +48,50 @@ impl StreamFlowInfo {
 pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
-    stream_info: Option<Arc<Mutex<StreamFlowInfo>>>,
+    info: Option<Arc<Mutex<StreamFlowInfo>>>,
     stream: Mutex<Box<dyn AsyncReadAsyncWrite>>,
     is_rw_timeout: AtomicBool,
     rw_time_mil: AtomicI64,
+    fd: i32,
 }
 
 impl StreamFlow {
-    pub fn new(stream: Box<dyn AsyncReadAsyncWrite>) -> StreamFlow {
+    pub fn new(fd: i32, stream: Box<dyn AsyncReadAsyncWrite>) -> StreamFlow {
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             write_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
-            stream_info: None,
+            info: None,
             stream: Mutex::new(stream),
             is_rw_timeout: AtomicBool::new(true),
             rw_time_mil: AtomicI64::new(Local::now().timestamp_millis()),
+            fd,
         }
+    }
+    pub fn fd(&self) -> i32 {
+        self.fd
     }
     pub fn set_config(
         &mut self,
         read_timeout: tokio::time::Duration,
         write_timeout: tokio::time::Duration,
         is_rw_timeout: bool,
-        stream_info: Option<Arc<Mutex<StreamFlowInfo>>>,
+        info: Option<Arc<Mutex<StreamFlowInfo>>>,
     ) {
         self.read_timeout = read_timeout;
         self.write_timeout = write_timeout;
         self.is_rw_timeout = AtomicBool::new(is_rw_timeout);
         self.rw_time_mil = AtomicI64::new(Local::now().timestamp_millis());
-        self.stream_info = stream_info;
+        self.info = info;
     }
 
-    pub fn set_stream_info(&mut self, stream_info: Option<Arc<Mutex<StreamFlowInfo>>>) {
-        self.stream_info = stream_info;
+    pub fn set_stream_info(&mut self, info: Option<Arc<Mutex<StreamFlowInfo>>>) {
+        self.info = info;
     }
 
     async fn read_flow(&self, buf: &mut tokio::io::ReadBuf<'_>) -> io::Result<()> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
-        let ret: anyhow::Result<usize> = async {
+        let ret: Result<usize> = async {
             loop {
                 match tokio::time::timeout(
                     self.read_timeout,
@@ -96,7 +103,7 @@ impl StreamFlow {
                         Ok(0) => {
                             stream_err = StreamFlowErr::ReadClose;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:read_flow close"));
+                            return Err(anyhow!("err:read_flow close"));
                         }
                         Ok(usize) => {
                             if self.is_rw_timeout.load(Ordering::Relaxed) {
@@ -108,26 +115,22 @@ impl StreamFlow {
                         Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
                             stream_err = StreamFlowErr::ReadTimeout;
                             kind = io::ErrorKind::TimedOut;
-                            return Err(anyhow::anyhow!("err:read_flow timeout"));
+                            return Err(anyhow!("err:read_flow timeout"));
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
                             stream_err = StreamFlowErr::ReadReset;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:read_flow reset"));
+                            return Err(anyhow!("err:read_flow reset"));
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
                             stream_err = StreamFlowErr::ReadClose;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:read_flow close"));
+                            return Err(anyhow!("err:read_flow close"));
                         }
                         Err(e) => {
                             stream_err = StreamFlowErr::ReadErr;
                             kind = e.kind();
-                            return Err(anyhow::anyhow!(
-                                "err:read_flow => kind:{:?}, e:{}",
-                                e.kind(),
-                                e
-                            ));
+                            return Err(anyhow!("err:read_flow => kind:{:?}, e:{}", e.kind(), e));
                         }
                     },
                     Err(_) => {
@@ -141,7 +144,7 @@ impl StreamFlow {
                         }
                         stream_err = StreamFlowErr::ReadTimeout;
                         kind = io::ErrorKind::TimedOut;
-                        return Err(anyhow::anyhow!("err:read_flow timeout"));
+                        return Err(anyhow!("err:read_flow timeout"));
                     }
                 }
             }
@@ -150,16 +153,16 @@ impl StreamFlow {
 
         match ret {
             Err(e) => {
-                if self.stream_info.is_some() {
-                    self.stream_info.as_ref().unwrap().lock().unwrap().err = stream_err;
+                if self.info.is_some() {
+                    self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
                 }
                 log::debug!("read_flow kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {
                 buf.advance(usize);
-                if self.stream_info.is_some() {
-                    self.stream_info.as_ref().unwrap().lock().unwrap().read += usize as i64;
+                if self.info.is_some() {
+                    self.info.as_ref().unwrap().lock().unwrap().read += usize as i64;
                 }
                 Ok(())
             }
@@ -169,7 +172,7 @@ impl StreamFlow {
     async fn write_flow(&self, buf: &[u8]) -> io::Result<usize> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
-        let ret: anyhow::Result<usize> = async {
+        let ret: Result<usize> = async {
             loop {
                 match tokio::time::timeout(
                     self.write_timeout,
@@ -179,9 +182,12 @@ impl StreamFlow {
                 {
                     Ok(ret) => match ret {
                         Ok(0) => {
+                            if buf.len() == 0 {
+                                return Ok(0);
+                            }
                             stream_err = StreamFlowErr::WriteClose;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:write_flow close"));
+                            return Err(anyhow!("err:write_flow close"));
                         }
                         Ok(usize) => {
                             if self.is_rw_timeout.load(Ordering::Relaxed) {
@@ -193,26 +199,22 @@ impl StreamFlow {
                         Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
                             stream_err = StreamFlowErr::WriteTimeout;
                             kind = io::ErrorKind::TimedOut;
-                            return Err(anyhow::anyhow!("err:write_flow timeout"));
+                            return Err(anyhow!("err:write_flow timeout"));
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
                             stream_err = StreamFlowErr::WriteReset;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:write_flow reset"));
+                            return Err(anyhow!("err:write_flow reset"));
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
                             stream_err = StreamFlowErr::WriteClose;
                             kind = io::ErrorKind::ConnectionReset;
-                            return Err(anyhow::anyhow!("err:write_flow close"));
+                            return Err(anyhow!("err:write_flow close"));
                         }
                         Err(e) => {
                             stream_err = StreamFlowErr::WriteErr;
                             kind = e.kind();
-                            return Err(anyhow::anyhow!(
-                                "err:write_flow => kind:{:?}, e:{}",
-                                e.kind(),
-                                e
-                            ));
+                            return Err(anyhow!("err:write_flow => kind:{:?}, e:{}", e.kind(), e));
                         }
                     },
                     Err(_) => {
@@ -226,7 +228,7 @@ impl StreamFlow {
                         }
                         stream_err = StreamFlowErr::WriteTimeout;
                         kind = io::ErrorKind::TimedOut;
-                        return Err(anyhow::anyhow!("err:write_flow timeout"));
+                        return Err(anyhow!("err:write_flow timeout"));
                     }
                 }
             }
@@ -235,15 +237,15 @@ impl StreamFlow {
 
         match ret {
             Err(e) => {
-                if self.stream_info.is_some() {
-                    self.stream_info.as_ref().unwrap().lock().unwrap().err = stream_err;
+                if self.info.is_some() {
+                    self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
                 }
                 log::debug!("write_flow kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {
-                if self.stream_info.is_some() {
-                    self.stream_info.as_ref().unwrap().lock().unwrap().write += usize as i64;
+                if self.info.is_some() {
+                    self.info.as_ref().unwrap().lock().unwrap().write += usize as i64;
                 }
                 Ok(usize)
             }

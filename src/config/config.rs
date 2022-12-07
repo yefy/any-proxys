@@ -1,6 +1,7 @@
 use super::config_parse;
 use super::config_toml;
 use crate::util::default_config;
+use anyhow::anyhow;
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -96,7 +97,13 @@ impl Config {
         let mut protocol = "".to_string();
         let mut server = "".to_string();
         for toml in tomls.iter() {
-            let _protocol = Config::find_protocol(toml, vars);
+            let line = Config::drop_remark(toml);
+            if line.is_none() {
+                datas.push(toml.to_string());
+                continue;
+            }
+            let line = line.unwrap();
+            let _protocol = Config::find_protocol(line, vars);
             if _protocol.len() > 0 {
                 protocol = _protocol + ".";
                 server = "".to_string();
@@ -109,7 +116,7 @@ impl Config {
                 continue;
             }
 
-            let _server = Config::find_server(toml, vars);
+            let _server = Config::find_server(line, vars);
             if _server.len() > 0 {
                 server = protocol.clone() + _server.as_str();
                 let toml = &toml.replace(_server.as_str(), server.as_str());
@@ -124,7 +131,7 @@ impl Config {
                 protocol.clone()
             };
 
-            let _list = Config::find_list(toml);
+            let _list = Config::find_list(line);
             if _list.len() > 0 {
                 let replace_data = replace_data + _list.as_str();
                 let toml = &toml.replace(_list.as_str(), replace_data.as_str());
@@ -132,7 +139,7 @@ impl Config {
                 continue;
             }
 
-            let _struct = Config::find_struct(toml);
+            let _struct = Config::find_struct(line);
             if _struct.len() > 0 {
                 let replace_data = replace_data + _struct.as_str();
                 let toml = &toml.replace(_struct.as_str(), replace_data.as_str());
@@ -148,12 +155,14 @@ impl Config {
 
     pub fn get_dir_file_info(config_dir: &str) -> Result<Vec<std::ffi::OsString>> {
         let mut file_infos = Vec::with_capacity(50);
-        for entry in std::fs::read_dir(config_dir)? {
-            let entry = entry?;
+        for entry in std::fs::read_dir(config_dir)
+            .map_err(|e| anyhow!("err:std::fs::read_dir => e:{}", e))?
+        {
+            let entry = entry.map_err(|e| anyhow!("err:entry => e:{}", e))?;
             let path = entry.path();
             let file_name = path
                 .file_name()
-                .ok_or(anyhow::anyhow!("err:reload file_name nil"))?
+                .ok_or(anyhow!("err:reload file_name nil"))?
                 .to_owned();
 
             file_infos.push(file_name);
@@ -201,7 +210,7 @@ impl Config {
             let path = Path::new(file_full_path);
             let file_name_regex = path.file_name();
             if file_name_regex.is_none() {
-                return Err(anyhow::anyhow!(
+                return Err(anyhow!(
                     "err:file_name_regex nil => file_full_path:{}",
                     file_full_path
                 ));
@@ -211,15 +220,13 @@ impl Config {
 
             let dir = path.parent();
             if dir.is_none() {
-                return Err(anyhow::anyhow!(
-                    "err:dir nil => file_full_path:{}",
-                    file_full_path
-                ));
+                return Err(anyhow!("err:dir nil => file_full_path:{}", file_full_path));
             }
             let dir = dir.unwrap().to_string_lossy().to_string();
             let dir = default_config::ANYPROXY_CONF_PATH.clone() + dir.as_str();
 
-            let file_names = Config::get_dir_file_info(&dir)?;
+            let file_names = Config::get_dir_file_info(&dir)
+                .map_err(|e| anyhow!("err:Config::get_dir_file_info => e:{}", e))?;
             for file_name in file_names.iter() {
                 let file_name = file_name.to_string_lossy().to_string();
                 let mut file_name_str = &file_name[..];
@@ -254,7 +261,8 @@ impl Config {
                 }
 
                 let find_path = dir.clone() + "/" + file_name.as_str();
-                let content = fs::read_to_string(&find_path)?;
+                let content = fs::read_to_string(&find_path)
+                    .map_err(|e| anyhow!("err:fs::read_to_string => e:{}", e))?;
                 let contents = content.split("\n").collect::<Vec<_>>();
                 for content in contents.iter() {
                     datas.push(stuff.clone() + content);
@@ -268,24 +276,32 @@ impl Config {
 
     pub fn new() -> Result<config_toml::ConfigToml> {
         let file_name = default_config::ANYPROXY_CONF_FULL_PATH.as_str();
-        let contents = fs::read_to_string(file_name)?;
+        let contents = fs::read_to_string(file_name)
+            .map_err(|e| anyhow!("err:fs::read_to_string => e:{}", e))?;
 
         // 支持配置include
-        let contents = Config::parse_include(&contents)?;
+        let contents = Config::parse_include(&contents)
+            .map_err(|e| anyhow!("err:Config::parse_include => e:{}", e))?;
         // 支持配置二级include
-        let contents = Config::parse_include(&contents)?;
+        let contents = Config::parse_include(&contents)
+            .map_err(|e| anyhow!("err:Config::parse_include => e:{}", e))?;
+
         // 配置解析成toml格式，提供给toml解析
-        let contents = Config::parse(&contents, &config_parse::CONFIG_VARS)?;
+        let contents = Config::parse(&contents, &config_parse::CONFIG_VARS)
+            .map_err(|e| anyhow!("err:Config::parse => e:{}", e))?;
+
         // 最终生成的配置文件，提供给错误排查
         fs::write(
             default_config::ANYPROXY_CONF_LOG_FULL_PATH.as_str(),
             contents.as_str(),
         )
-        .map_err(|e| anyhow::anyhow!("err:ANYPROXY_CONF_LOG_FULL_PATH => e:{}", e))?;
+        .map_err(|e| anyhow!("err:ANYPROXY_CONF_LOG_FULL_PATH => e:{}", e))?;
         let config: config_toml::ConfigToml = toml::from_str(contents.as_str())
-            .map_err(|e| anyhow::anyhow!("err:parse {} => e:{}", file_name, e))?;
-        let config = config_parse::check(config)?;
-        let config = config_parse::merger(config)?;
+            .map_err(|e| anyhow!("err:parse {} => e:{}", file_name, e))?;
+        let config = config_parse::check(config)
+            .map_err(|e| anyhow!("err:config_parse::check => e:{}", e))?;
+        let config = config_parse::merger(config)
+            .map_err(|e| anyhow!("err:config_parse::merger => e:{}", e))?;
         Ok(config)
     }
 }

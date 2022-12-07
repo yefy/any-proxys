@@ -1,5 +1,6 @@
 pub mod anyproxy;
 pub mod config;
+pub mod ebpf;
 pub mod io;
 pub mod protopack;
 pub mod proxy;
@@ -8,8 +9,38 @@ pub mod stream;
 pub mod tcp;
 pub mod tunnel;
 pub mod tunnel2;
+pub mod upstream;
 pub mod util;
+use any_tunnel::client;
+use any_tunnel::server;
+use any_tunnel2::client as client2;
+use any_tunnel2::server as server2;
 use any_tunnel2::Protocol4;
+use anyhow::anyhow;
+use anyhow::Result;
+use tokio::sync::broadcast;
+
+#[derive(Clone)]
+pub struct Executors {
+    executor: async_executors::TokioCt,
+    shutdown_thread_tx: broadcast::Sender<bool>,
+    group_version: i32,
+    thread_id: std::thread::ThreadId,
+}
+
+#[derive(Clone)]
+pub struct Tunnels {
+    client: client::Client,
+    server: server::Server,
+    client2: client2::Client,
+    server2: server2::Server,
+}
+
+#[derive(Clone)]
+pub struct TunnelClients {
+    client: client::Client,
+    client2: client2::Client,
+}
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum Protocol7 {
@@ -33,7 +64,7 @@ impl Protocol7 {
         }
     }
 
-    pub fn from_string(name: String) -> anyhow::Result<Protocol7> {
+    pub fn from_string(name: String) -> Result<Protocol7> {
         match name.as_str() {
             "tcp" => Ok(Protocol7::Tcp),
             "quic" => Ok(Protocol7::Quic),
@@ -42,27 +73,27 @@ impl Protocol7 {
             "tunnel2_tcp" => Ok(Protocol7::Tunnel2Tcp),
             "tunnel2_quic" => Ok(Protocol7::Tunnel2Quic),
             _ => {
-                return Err(anyhow::anyhow!("err:Protocol7 nil"));
+                return Err(anyhow!("err:Protocol7 nil"));
             }
         }
     }
 
-    pub fn to_tunnel_protocol7(&self) -> anyhow::Result<Protocol7> {
+    pub fn to_tunnel_protocol7(&self) -> Result<Protocol7> {
         match self {
             Protocol7::Tcp => Ok(Protocol7::TunnelTcp),
             Protocol7::Quic => Ok(Protocol7::TunnelQuic),
             _ => {
-                return Err(anyhow::anyhow!("err:to_tunnel_protocol7"));
+                return Err(anyhow!("err:to_tunnel_protocol7"));
             }
         }
     }
 
-    pub fn to_tunnel2_protocol7(&self) -> anyhow::Result<Protocol7> {
+    pub fn to_tunnel2_protocol7(&self) -> Result<Protocol7> {
         match self {
             Protocol7::Tcp => Ok(Protocol7::Tunnel2Tcp),
             Protocol7::Quic => Ok(Protocol7::Tunnel2Quic),
             _ => {
-                return Err(anyhow::anyhow!("err:to_tunnel2_protocol7"));
+                return Err(anyhow!("err:to_tunnel2_protocol7"));
             }
         }
     }

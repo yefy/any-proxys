@@ -2,6 +2,8 @@ use crate::stream::client;
 use crate::stream::stream_any;
 use crate::stream::stream_flow;
 use crate::Protocol7;
+use anyhow::anyhow;
+use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
@@ -18,7 +20,7 @@ impl Client {
         timeout: tokio::time::Duration,
         endpoint: quinn::Endpoint,
         ssl_domain: &String,
-    ) -> anyhow::Result<Client> {
+    ) -> Result<Client> {
         Ok(Client {
             addr,
             timeout,
@@ -32,19 +34,23 @@ impl Client {
 impl client::Client for Client {
     async fn connect(
         &self,
-        stream_info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> anyhow::Result<Box<dyn client::Connection>> {
-        let local_addr = self.endpoint.local_addr()?;
+        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
+    ) -> Result<Box<dyn client::Connection>> {
+        let local_addr = self
+            .endpoint
+            .local_addr()
+            .map_err(|e| anyhow!("err:endpoint.local_addr => e:{}", e))?;
         let mut stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
-        let ret: anyhow::Result<quinn::Connection> = async {
+        let ret: Result<quinn::Connection> = async {
             let connect = self
                 .endpoint
-                .connect(self.addr.clone(), self.ssl_domain.as_str())?;
+                .connect(self.addr.clone(), self.ssl_domain.as_str())
+                .map_err(|e| anyhow!("err:endpoint.connect => e:{}", e))?;
             match tokio::time::timeout(self.timeout, connect).await {
                 Ok(ret) => match ret {
                     Err(e) => {
                         stream_err = stream_flow::StreamFlowErr::WriteErr;
-                        Err(anyhow::anyhow!(
+                        Err(anyhow!(
                             "err:client.connect =>  addr:{}, ssl_domain:{}, e:{}",
                             self.addr,
                             self.ssl_domain,
@@ -58,7 +64,7 @@ impl client::Client for Client {
                 },
                 Err(_) => {
                     stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                    Err(anyhow::anyhow!("err:client.connect timeout"))
+                    Err(anyhow!("err:client.connect timeout"))
                 }
             }
         }
@@ -66,8 +72,8 @@ impl client::Client for Client {
 
         match ret {
             Err(e) => {
-                if stream_info.is_some() {
-                    stream_info.as_mut().unwrap().err = stream_err;
+                if info.is_some() {
+                    info.as_mut().unwrap().err = stream_err;
                 }
                 Err(e)
             }
@@ -97,7 +103,7 @@ impl Connection {
         timeout: tokio::time::Duration,
         ssl_domain: &String,
         connection: quinn::Connection,
-    ) -> anyhow::Result<Connection> {
+    ) -> Result<Connection> {
         Ok(Connection {
             local_addr,
             addr,
@@ -112,18 +118,18 @@ impl Connection {
 impl client::Connection for Connection {
     async fn stream(
         &self,
-        stream_info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> anyhow::Result<(Protocol7, stream_flow::StreamFlow, SocketAddr, SocketAddr)> {
+        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
+    ) -> Result<(Protocol7, stream_flow::StreamFlow, SocketAddr, SocketAddr)> {
         let local_addr = self.local_addr.clone();
         let remote_addr = self.connection.remote_address();
         let mut stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
-        let ret: anyhow::Result<(quinn::SendStream, quinn::RecvStream)> = async {
+        let ret: Result<(quinn::SendStream, quinn::RecvStream)> = async {
             match tokio::time::timeout(self.timeout, self.connection.open_bi()).await {
                 Ok(ret) => match ret {
                     Ok(stream) => Ok(stream),
                     Err(e) => {
                         stream_err = stream_flow::StreamFlowErr::WriteErr;
-                        Err(anyhow::anyhow!(
+                        Err(anyhow!(
                             "err:client.stream =>  addr:{}, ssl_domain:{}, e:{}",
                             self.addr,
                             self.ssl_domain,
@@ -133,7 +139,7 @@ impl client::Connection for Connection {
                 },
                 Err(_) => {
                     stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                    Err(anyhow::anyhow!("err:client.stream timeout"))
+                    Err(anyhow!("err:client.stream timeout"))
                 }
             }
         }
@@ -141,15 +147,16 @@ impl client::Connection for Connection {
 
         match ret {
             Err(e) => {
-                if stream_info.is_some() {
-                    stream_info.as_mut().unwrap().err = stream_err;
+                if info.is_some() {
+                    info.as_mut().unwrap().err = stream_err;
                 }
                 Err(e)
             }
             Ok(quic_stream) => {
-                let stream = stream_flow::StreamFlow::new(Box::new(stream_any::StreamAny::Quic(
-                    quic_stream,
-                )));
+                let stream = stream_flow::StreamFlow::new(
+                    0,
+                    Box::new(stream_any::StreamAny::Quic(quic_stream)),
+                );
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }
         }

@@ -1,5 +1,6 @@
 use super::domain_index::DomainIndex;
 use super::SniContext;
+use anyhow::anyhow;
 use anyhow::Result;
 use rustls::server::ClientHello;
 use rustls::server::ResolvesServerCert;
@@ -62,17 +63,24 @@ impl ResolvesServerCertUsingSNI {
             let ssl = ctx.ssl.as_ref().unwrap();
 
             let key = load_private_key(&ssl.key)
-                .map_err(|e| anyhow::anyhow!("err:load key => key:{}, e{}", ssl.key, e))
+                .map_err(|e| anyhow!("err:load key => key:{}, e{}", ssl.key, e))
                 .and_then(|key| {
-                    rustls::sign::any_supported_type(&key)
-                        .map_err(|_| anyhow::anyhow!("err:load key => key:{}, e:{}", ssl.key, rustls::Error::General("invalid private key".into())))
+                    rustls::sign::any_supported_type(&key).map_err(|_| {
+                        anyhow!(
+                            "err:load key => key:{}, e:{}",
+                            ssl.key,
+                            rustls::Error::General("invalid private key".into())
+                        )
+                    })
                 })?;
 
             let cert = load_certs(&ssl.cert)
-                .map_err(|e| anyhow::anyhow!("err:load cert => cert:{}, e{}", ssl.cert, e))?;
+                .map_err(|e| anyhow!("err:load cert => cert:{}, e{}", ssl.cert, e))?;
 
             let certified_key = rustls::sign::CertifiedKey::new(cert, key);
-            sni_rustls_map.add(ctx.index, certified_key)?;
+            sni_rustls_map
+                .add(ctx.index, certified_key)
+                .map_err(|e| anyhow!("err:sni_rustls_map.add => e:{}", e))?;
         }
 
         Ok(sni_rustls_map)
@@ -140,13 +148,13 @@ impl ResolvesServerCert for ResolvesServerCertUsingSNI {
 pub fn load_certs(filename: &str) -> Result<Vec<rustls::Certificate>> {
     use std::path::PathBuf;
     let cert_path = PathBuf::from(filename);
-    let cert_chain = fs::read(cert_path.clone())
-        .map_err(|_| anyhow::anyhow!("failed to read certificate chain"))?;
+    let cert_chain =
+        fs::read(cert_path.clone()).map_err(|_| anyhow!("failed to read certificate chain"))?;
     let cert_chain = if cert_path.extension().map_or(false, |x| x == "der") {
         vec![rustls::Certificate(cert_chain)]
     } else {
         rustls_pemfile::certs(&mut &*cert_chain)
-            .map_err(|_| anyhow::anyhow!("invalid PEM-encoded certificate"))?
+            .map_err(|_| anyhow!("invalid PEM-encoded certificate"))?
             .into_iter()
             .map(rustls::Certificate)
             .collect()
@@ -157,17 +165,17 @@ pub fn load_certs(filename: &str) -> Result<Vec<rustls::Certificate>> {
 pub fn load_private_key(filename: &str) -> Result<rustls::PrivateKey> {
     use std::path::PathBuf;
     let key_path = PathBuf::from(filename);
-    let key = fs::read(filename).map_err(|_| anyhow::anyhow!("failed to read private key"))?;
+    let key = fs::read(filename).map_err(|_| anyhow!("failed to read private key"))?;
     let key = if key_path.extension().map_or(false, |x| x == "der") {
         rustls::PrivateKey(key)
     } else {
         let pkcs8 = rustls_pemfile::pkcs8_private_keys(&mut &*key)
-            .map_err(|_| anyhow::anyhow!("malformed PKCS #8 private key"))?;
+            .map_err(|_| anyhow!("malformed PKCS #8 private key"))?;
         match pkcs8.into_iter().next() {
             Some(x) => rustls::PrivateKey(x),
             None => {
                 let rsa = rustls_pemfile::rsa_private_keys(&mut &*key)
-                    .map_err(|_| anyhow::anyhow!("malformed PKCS #1 private key"))?;
+                    .map_err(|_| anyhow!("malformed PKCS #1 private key"))?;
                 match rsa.into_iter().next() {
                     Some(x) => rustls::PrivateKey(x),
                     None => {

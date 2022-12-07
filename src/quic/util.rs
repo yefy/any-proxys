@@ -1,6 +1,8 @@
 use crate::config::config_toml;
 use crate::config::config_toml::QuicConfig as Config;
 use crate::util;
+use anyhow::anyhow;
+use anyhow::Result;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io;
@@ -13,7 +15,7 @@ pub fn bind(
     _reuseport: bool,
     recv_buffer_size: usize,
     send_buffer_size: usize,
-) -> anyhow::Result<std::net::UdpSocket> {
+) -> Result<std::net::UdpSocket> {
     let addr = addr
         .to_socket_addrs()?
         .next()
@@ -24,7 +26,8 @@ pub fn bind(
     } else {
         Domain::IPV4
     };
-    let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))
+        .map_err(|e| anyhow!("err:Socket::new => e:{}", e))?;
     let addr = socket2::SockAddr::from(addr);
     #[cfg(unix)]
     {
@@ -32,31 +35,27 @@ pub fn bind(
     }
     if recv_buffer_size > 0 {
         if let Err(e) = sk.set_recv_buffer_size(recv_buffer_size) {
-            log::error!(
-                "err:udp set_recv_buffer_size => e:{}",
-                anyhow::anyhow!("{}", e)
-            );
+            log::error!("err:udp set_recv_buffer_size => e:{}", anyhow!("{}", e));
         }
     }
 
     if send_buffer_size > 0 {
         if let Err(e) = sk.set_send_buffer_size(send_buffer_size) {
-            log::error!(
-                "err:udp set_send_buffer_size => e:{}",
-                anyhow::anyhow!("{}", e)
-            );
+            log::error!("err:udp set_send_buffer_size => e:{}", anyhow!("{}", e));
         }
     }
 
-    sk.set_nonblocking(true)?;
-    sk.bind(&addr)?;
+    sk.set_nonblocking(true)
+        .map_err(|e| anyhow!("err:sk.set_nonblocking => e:{}", e))?;
+    sk.bind(&addr)
+        .map_err(|e| anyhow!("err: sk.bind => e:{} addr:{:?}", e, addr))?;
     Ok(sk.into())
 }
 
 pub fn server_config(
     config: &Config,
     sni_rustls_map: Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>>,
-) -> anyhow::Result<quinn::ServerConfig> {
+) -> Result<quinn::ServerConfig> {
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.max_concurrent_uni_streams(0_u8.into());
     if config.quic_upstream_streams > 0 {
@@ -102,7 +101,7 @@ pub fn server_config(
     Ok(server_config)
 }
 
-pub fn client_config(config: &Config) -> anyhow::Result<quinn::ClientConfig> {
+pub fn client_config(config: &Config) -> Result<quinn::ClientConfig> {
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.max_concurrent_uni_streams(0_u8.into());
     if config.quic_upstream_streams > 0 {
@@ -146,31 +145,44 @@ pub fn client_config(config: &Config) -> anyhow::Result<quinn::ClientConfig> {
     Ok(client_config)
 }
 
-pub fn endpoint(config: &Config, reuseport: bool) -> anyhow::Result<quinn::Endpoint> {
+pub fn endpoint(
+    config: &Config,
+    reuseport: bool,
+    addr: Option<SocketAddr>,
+) -> Result<quinn::Endpoint> {
     //ipv6
     //let addr = &"[::]:0".parse()
-    //    .map_err(|e| anyhow::anyhow!("err:bind [::]:0 => e:{}", e))?;
+    //    .map_err(|e| anyhow!("err:bind [::]:0 => e:{}", e))?;
 
-    let addr = &"0.0.0.0:0"
-        .parse()
-        .map_err(|e| anyhow::anyhow!("err:bind 0.0.0.0:0 => e:{}", e))?;
-    let client_config = client_config(config)?;
+    let addr = if addr.is_some() {
+        addr.unwrap()
+    } else {
+        "0.0.0.0:0"
+            .parse()
+            .map_err(|e| anyhow!("err:bind 0.0.0.0:0 => e:{}", e))?
+    };
+    let client_config =
+        client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;
     let mut client_endpoint = if config.quic_default {
         //quinn::Endpoint::client(addr)?
         let udp_socket = bind(
-            addr,
+            &addr,
             reuseport,
             config.quic_recv_buffer_size,
             config.quic_send_buffer_size,
-        )?;
-        quinn::Endpoint::new(quinn::EndpointConfig::default(), None, udp_socket)?.0
+        )
+        .map_err(|e| anyhow!("err:bind => e:{}", e))?;
+        quinn::Endpoint::new(quinn::EndpointConfig::default(), None, udp_socket)
+            .map_err(|e| anyhow!("err:Endpoint::new => e:{}", e))?
+            .0
     } else {
         let udp_socket = bind(
-            addr,
+            &addr,
             reuseport,
             config.quic_recv_buffer_size,
             config.quic_send_buffer_size,
-        )?;
+        )
+        .map_err(|e| anyhow!("err:bind => e:{}", e))?;
         quinn::Endpoint::new(quinn::EndpointConfig::default(), None, udp_socket)?.0
     };
     client_endpoint.set_default_client_config(client_config);
@@ -182,28 +194,30 @@ pub async fn listen(
     reuseport: bool,
     addr: &SocketAddr,
     sni_rustls_map: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>,
-) -> anyhow::Result<(quinn::Endpoint, quinn::Incoming)> {
+) -> Result<(quinn::Endpoint, quinn::Incoming)> {
     let udp_socket = bind(
         addr,
         reuseport,
         config.quic_recv_buffer_size,
         config.quic_send_buffer_size,
-    )?;
+    )
+    .map_err(|e| anyhow!("err:bind => e:{}", e))?;
 
-    let client_config = client_config(config)?;
-    let server_config = server_config(config, Some(sni_rustls_map.clone()))?;
+    let client_config =
+        client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;
+    let server_config = server_config(config, Some(sni_rustls_map.clone()))
+        .map_err(|e| anyhow!("err:server_config => e:{}", e))?;
     let (mut endpoint, incoming) = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
         Some(server_config),
         udp_socket,
-    )?;
+    )
+    .map_err(|e| anyhow!("err:Endpoint::new => e:{}", e))?;
     endpoint.set_default_client_config(client_config);
     Ok((endpoint, incoming))
 }
 
-pub fn sni(
-    listens: &Vec<config_toml::Listen>,
-) -> anyhow::Result<util::rustls::ResolvesServerCertUsingSNI> {
+pub fn sni(listens: &Vec<config_toml::Listen>) -> Result<util::rustls::ResolvesServerCertUsingSNI> {
     let mut index = 0;
     let mut sni_contexts = Vec::with_capacity(50);
     let mut index_map = HashMap::new();
@@ -219,8 +233,10 @@ pub fn sni(
         sni_contexts.push(util::SniContext { index, ssl });
     }
 
-    let domain_index = util::domain_index::DomainIndex::new(&index_map)?;
-    let sni_rustls = util::rustls::ResolvesServerCertUsingSNI::new(&sni_contexts, domain_index)?;
+    let domain_index = util::domain_index::DomainIndex::new(&index_map)
+        .map_err(|e| anyhow!("err:domain_index::DomainIndex => e:{}", e))?;
+    let sni_rustls = util::rustls::ResolvesServerCertUsingSNI::new(&sni_contexts, domain_index)
+        .map_err(|e| anyhow!("err:ResolvesServerCertUsingSNI => e:{}", e))?;
 
     Ok(sni_rustls)
 }

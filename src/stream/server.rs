@@ -2,9 +2,12 @@ use crate::stream::stream_flow;
 use crate::tunnel::server as tunnel_server;
 use crate::tunnel2::server as tunnel2_server;
 use crate::util;
+use crate::Executors;
 use crate::Protocol7;
 use any_tunnel::server as any_tunnel_server;
 use any_tunnel2::server as any_tunnel2_server;
+use anyhow::anyhow;
+use anyhow::Result;
 use async_executors::Timer;
 use async_trait::async_trait;
 use awaitgroup::WaitGroup;
@@ -16,27 +19,30 @@ use tokio::sync::broadcast;
 
 #[async_trait(?Send)]
 pub trait Server {
-    async fn listen(&self) -> anyhow::Result<Box<dyn Listener>>;
-    fn listen_addr(&self) -> anyhow::Result<SocketAddr>;
+    async fn listen(&self) -> Result<Box<dyn Listener>>;
+    fn listen_addr(&self) -> Result<SocketAddr>;
     fn sni(&self) -> Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>>;
     fn set_sni(&self, _: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>);
     fn protocol7(&self) -> Protocol7;
+    fn stream_send_timeout(&self) -> usize;
+    fn stream_recv_timeout(&self) -> usize;
 }
 
 #[async_trait(?Send)]
 pub trait Listener {
-    async fn accept(&mut self) -> anyhow::Result<(Box<dyn Connection>, bool)>;
+    async fn accept(&mut self) -> Result<(Box<dyn Connection>, bool)>;
 }
 
 #[async_trait(?Send)]
 pub trait Connection {
     async fn stream(
         &mut self,
-    ) -> anyhow::Result<
+    ) -> Result<
         Option<(
             Protocol7,
             stream_flow::StreamFlow,
             SocketAddr,
+            Option<SocketAddr>,
             Option<String>,
         )>,
     >;
@@ -48,35 +54,33 @@ pub async fn accept<A: Listener + ?Sized>(
     listenner: &mut Box<A>,
     listenner2: &mut Box<A>,
     listenner3: &mut Box<A>,
-) -> anyhow::Result<(Option<(Box<dyn Connection>, bool)>, bool)> {
-    loop {
-        tokio::select! {
-            biased;
-            connection = listenner.accept() => {
-                let connection = connection?;
-                return Ok((Some(connection), false));
+) -> Result<(Option<(Box<dyn Connection>, bool)>, bool)> {
+    tokio::select! {
+        biased;
+        connection = listenner.accept() => {
+            let connection = connection?;
+            return Ok((Some(connection), false));
+        }
+        connection = listenner2.accept() => {
+            let connection = connection?;
+            return Ok((Some(connection), false));
+        }
+        connection = listenner3.accept() => {
+            let connection = connection?;
+            return Ok((Some(connection), false));
+        }
+        is_fast_shutdown = shutdown_rx.recv() => {
+            if is_fast_shutdown.is_err() {
+                return Ok((None, true))
+            } else {
+                return Ok((None, is_fast_shutdown.unwrap()))
             }
-            connection = listenner2.accept() => {
-                let connection = connection?;
-                return Ok((Some(connection), false));
-            }
-            connection = listenner3.accept() => {
-                let connection = connection?;
-                return Ok((Some(connection), false));
-            }
-            is_fast_shutdown = shutdown_rx.recv() => {
-                if is_fast_shutdown.is_err() {
-                    return Ok((None, true))
-                } else {
-                    return Ok((None, is_fast_shutdown.unwrap()))
-                }
-            }
-            _ = shutdown_rx2.recv() => {
-                return Ok((None, false));
-            }
-            else => {
-                return Err(anyhow::anyhow!("err:accept"));
-            }
+        }
+        _ = shutdown_rx2.recv() => {
+            return Ok((None, false));
+        }
+        else => {
+            return Err(anyhow!("err:accept"));
         }
     }
 }
@@ -85,44 +89,42 @@ pub async fn stream<C: Connection + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
     shutdown_rx2: &mut broadcast::Receiver<()>,
     connection: &mut Box<C>,
-) -> anyhow::Result<
+) -> Result<
     Option<(
         Protocol7,
         stream_flow::StreamFlow,
         SocketAddr,
+        Option<SocketAddr>,
         Option<String>,
     )>,
 > {
-    loop {
-        tokio::select! {
-            biased;
-            stream = connection.stream() => {
-                let stream = stream?;
-                return Ok(stream);
-            }
-            _ = shutdown_rx.recv() => {
-                return Ok(None);
-            }
-            _ = shutdown_rx2.recv() => {
-                return Ok(None);
-            }
-            else => {
-                return Err(anyhow::anyhow!("err:stream"));
-            }
+    tokio::select! {
+        biased;
+        stream = connection.stream() => {
+            let stream = stream?;
+            return Ok(stream);
+        }
+        _ = shutdown_rx.recv() => {
+            return Ok(None);
+        }
+        _ = shutdown_rx2.recv() => {
+            return Ok(None);
+        }
+        else => {
+            return Err(anyhow!("err:stream"));
         }
     }
 }
 
 pub async fn listen<S, F>(
+    executors: Executors,
     tunnel_listen: any_tunnel_server::Listener,
     tunnel2_listen: any_tunnel2_server::Listener,
     shutdown_timeout: u64,
     listen_server: Rc<Box<dyn Server>>,
-    executor: async_executors::TokioCt,
     listen_shutdown_tx: broadcast::Sender<()>,
-    shutdown_thread_tx: broadcast::Sender<bool>,
     service: S,
-) -> anyhow::Result<()>
+) -> Result<()>
 where
     S: FnMut(
             Protocol7,
@@ -134,26 +136,42 @@ where
         ) -> F
         + 'static
         + Clone,
-    F: Future<Output = anyhow::Result<()>> + 'static,
+    F: Future<Output = Result<()>> + 'static,
 {
     let (shutdown_tx, _) = broadcast::channel::<()>(100);
     let wait_conn_groups = WaitGroup::new();
 
-    let local_addr = listen_server.listen_addr()?;
+    let local_addr = listen_server
+        .listen_addr()
+        .map_err(|e| anyhow!("err:listen_server.listen_addr => e:{}", e))?;
+
+    log::info!(
+        "start listen thread_id:{:?}, Protocol7:{}, listen_addr:{}",
+        std::thread::current().id(),
+        listen_server.protocol7().to_string(),
+        local_addr
+    );
 
     let mut tunnel_listen: Box<dyn Listener> = Box::new(tunnel_server::Listener::new(
         listen_server.protocol7().to_tunnel_protocol7()?,
         tunnel_listen,
+        listen_server.stream_send_timeout(),
+        listen_server.stream_recv_timeout(),
     )?);
 
     let mut tunnel2_listen: Box<dyn Listener> = Box::new(tunnel2_server::Listener::new(
         listen_server.protocol7().to_tunnel2_protocol7()?,
         tunnel2_listen,
+        listen_server.stream_send_timeout(),
+        listen_server.stream_recv_timeout(),
     )?);
 
-    let mut accept_shutdown_thread_tx = shutdown_thread_tx.subscribe();
+    let mut accept_shutdown_thread_tx = executors.shutdown_thread_tx.subscribe();
     let mut accept_listen_shutdown_tx = listen_shutdown_tx.subscribe();
-    let mut listen = listen_server.listen().await?;
+    let mut listen = listen_server
+        .listen()
+        .await
+        .map_err(|e| anyhow!("err:listen_server.listen => e:{}", e))?;
     loop {
         let (accept, is_fast_shutdown) = accept(
             &mut accept_shutdown_thread_tx,
@@ -162,7 +180,8 @@ where
             &mut tunnel_listen,
             &mut tunnel2_listen,
         )
-        .await?;
+        .await
+        .map_err(|e| anyhow!("err:accept => e:{}", e))?;
         if accept.is_none() {
             if is_fast_shutdown {
                 let _ = shutdown_tx.send(());
@@ -171,22 +190,30 @@ where
         }
         let (mut connection, is_async) = accept.unwrap();
         if !is_async {
-            let local_addr = local_addr.clone();
+            let mut local_addr = local_addr.clone();
             let mut service = service.clone();
             let shutdown_tx = shutdown_tx.clone();
             let worker = wait_conn_groups.worker().add();
-            executor
+            executors
+                .executor
                 .spawn_local(async move {
                     scopeguard::defer! {
                         worker.done();
                     }
 
-                    let _: anyhow::Result<()> = async {
-                        let stream = connection.stream().await?;
+                    let _: Result<()> = async {
+                        let stream = connection
+                            .stream()
+                            .await
+                            .map_err(|e| anyhow!("err:connection.stream => e:{}", e))?;
                         if stream.is_none() {
                             return Ok(());
                         }
-                        let (protocol_name, stream, remote_addr, domain) = stream.unwrap();
+                        let (protocol_name, stream, remote_addr, _local_addr, domain) =
+                            stream.unwrap();
+                        if _local_addr.is_some() {
+                            local_addr = _local_addr.unwrap();
+                        }
                         if let Err(e) = service(
                             protocol_name,
                             stream,
@@ -208,17 +235,18 @@ where
             let local_addr = local_addr.clone();
             let service = service.clone();
             let shutdown_tx = shutdown_tx.clone();
-            let connection_shutdown_thread_tx = shutdown_thread_tx.clone();
+            let connection_shutdown_thread_tx = executors.shutdown_thread_tx.clone();
             let connection_listen_shutdown_tx = listen_shutdown_tx.clone();
-            let sub_executor = executor.clone();
+            let sub_executors = executors.clone();
             let worker = wait_conn_groups.worker().add();
             let sub_worker = wait_conn_groups.worker();
-            executor
+            executors
+                .executor
                 .spawn_local(async move {
                     scopeguard::defer! {
                         worker.done();
                     }
-                    let _: anyhow::Result<()> = async {
+                    let _: Result<()> = async {
                         let mut stream_shutdown_thread_tx =
                             connection_shutdown_thread_tx.subscribe();
                         let mut stream_listen_shutdown_tx =
@@ -229,23 +257,33 @@ where
                                 &mut stream_listen_shutdown_tx,
                                 &mut connection,
                             )
-                            .await?;
+                            .await
+                            .map_err(|e| anyhow!("err:stream => e:{}", e))?;
                             if stream.is_none() {
                                 return Ok(());
                             }
 
-                            let local_addr = local_addr.clone();
+                            let mut local_addr = local_addr.clone();
                             let mut service = service.clone();
                             let shutdown_tx = shutdown_tx.clone();
                             let worker = sub_worker.worker().add();
-                            sub_executor
+                            sub_executors
+                                .executor
                                 .spawn_local(async move {
                                     scopeguard::defer! {
                                         worker.done();
                                     }
-                                    let _: anyhow::Result<()> = async {
-                                        let (protocol_name, stream, remote_addr, domain) =
-                                            stream.unwrap();
+                                    let _: Result<()> = async {
+                                        let (
+                                            protocol_name,
+                                            stream,
+                                            remote_addr,
+                                            _local_addr,
+                                            domain,
+                                        ) = stream.unwrap();
+                                        if _local_addr.is_some() {
+                                            local_addr = _local_addr.unwrap();
+                                        }
                                         if let Err(e) = service(
                                             protocol_name,
                                             stream,
@@ -274,12 +312,12 @@ where
     loop {
         tokio::select! {
             biased;
-            _ = executor.sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
+            _ = executors.executor.sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
                 let _ = shutdown_tx.send(());
                 log::info!("shutdown_timeout:{}s", shutdown_timeout);
             }
             _ = wait_conn_groups.wait() => {
-                log::info!("wait_conn_groups.wait thread_id:{:?}, listen_addr:{}", std::thread::current().id(), local_addr);
+                log::info!("wait listen thread_id:{:?}, Protocol7{}, listen_addr:{}", std::thread::current().id(), listen_server.protocol7().to_string(), local_addr);
                 break;
             }
             else => {
@@ -287,6 +325,12 @@ where
             }
         }
     }
+    log::info!(
+        "close listen thread_id:{:?}, Protocol7{}, listen_addr:{}",
+        std::thread::current().id(),
+        listen_server.protocol7().to_string(),
+        local_addr
+    );
 
     Ok(())
 }
