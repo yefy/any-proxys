@@ -10,7 +10,7 @@ tcp、quic、any-tunnel、any-tunnel2协议互转
 热加载配置  
 支持any-tunnel、any-tunnel2在高延迟网络加速  
 支持access_log  
-支持ebpf 
+支持ebpf导流  
 
 # 已经支持
 纯端口代理模式  
@@ -29,11 +29,12 @@ reinit配置热加载
 支持泛域名  
 支持配置范围端口监听   
 临时文件缓存  
-限流
-proxy_pass upstream 配置多主机回源  
+限流  
+proxy_pass回源  
+upstream 配置多主机回源  
 支持心跳检查  
 支持动态域名解析  
-支持ebpf  
+支持ebpf导流  
 
 # 未来支持  
 http 域名获取  
