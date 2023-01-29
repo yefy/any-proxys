@@ -16,7 +16,7 @@ tcp、quic、any-tunnel、any-tunnel2协议互转
 热加载配置  
 支持any-tunnel、any-tunnel2在高延迟网络加速  
 支持access_log  
-支持ebpf导流
+支持ebpf导流  
 纯端口代理模式  
 域名代理模式  
 

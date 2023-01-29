@@ -16,9 +16,9 @@ tcp、quic、any-tunnel、any-tunnel2协议互转
 热加载配置  
 支持any-tunnel、any-tunnel2在高延迟网络加速  
 支持access_log  
-支持ebpf导流
+支持ebpf导流  
 纯端口代理模式  
-域名代理模式
+域名代理模式  
 
 # 已经支持
 纯端口代理模式  
@@ -53,16 +53,16 @@ anyproxy -t命令,配置正确性检查
 支持链路日志,定位流走向，容易排查问题  
 sni域名解析  
 异步文件io  
-内存管理
+内存管理  
 
-# 未来支持
+# 未来支持  
 port模式http域名获取  
 port模式http2域名获取  
 支持多跳回源  
-支持http、http2的七层代理
+支持http、http2的七层代理  
 
 # doc
-[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)
+[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc) 
 
 # wiki
 [anyproxy编译运行](https://github.com/yefy/any-proxys/wiki/anyproxy%E7%BC%96%E8%AF%91%E8%BF%90%E8%A1%8C)  
