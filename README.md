@@ -65,7 +65,7 @@ port模式http2域名获取
 ./any-proxy/doc  
 
 # wiki
-[anyproxy编译运行](https://github.com/yefy/any-proxy/wiki/anyproxy%E7%BC%96%E8%AF%91%E8%BF%90%E8%A1%8C)  
-[nginx源站支持http和https](https://github.com/yefy/any-proxy/wiki/nginx%E6%BA%90%E7%AB%99%E6%94%AF%E6%8C%81http%E5%92%8Chttps)  
-[port与domain模式配置](https://github.com/yefy/any-proxy/wiki/port%E4%B8%8Edomain%E6%A8%A1%E5%BC%8F%E9%85%8D%E7%BD%AE)  
-[access_log支持](https://github.com/yefy/any-proxy/wiki/access_log%E6%94%AF%E6%8C%81)  
+[anyproxy编译运行](https://github.com/yefy/any-proxys/wiki/anyproxy%E7%BC%96%E8%AF%91%E8%BF%90%E8%A1%8C)  
+[nginx源站支持http和https](https://github.com/yefy/any-proxys/wiki/nginx%E6%BA%90%E7%AB%99%E6%94%AF%E6%8C%81http%E5%92%8Chttps)  
+[port与domain模式配置](https://github.com/yefy/any-proxys/wiki/port%E4%B8%8Edomain%E6%A8%A1%E5%BC%8F%E9%85%8D%E7%BD%AE)  
+[access_log支持](https://github.com/yefy/any-proxys/wiki/access_log%E6%94%AF%E6%8C%81)  
