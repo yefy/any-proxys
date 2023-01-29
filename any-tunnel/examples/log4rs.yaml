@@ -1,0 +1,23 @@
+# log4rs.yaml
+# 检查配置文件变动的时间间隔
+refresh_rate: 10 seconds
+# appender 负责将日志收集到控制台或文件, 可配置多个
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      kind: pattern
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l:<6})} {I:<7} {f}:{L}: {m}{n}"
+  file:
+    kind: file
+    path: "logs/anyproxy.log"
+    encoder:
+      kind: pattern
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l:<6})} {I:<7} {f}:{L}: {m}{n}"
+# 对全局 log 进行配置
+root:
+  level: info
+  appenders:
+    - stdout
+    #- file
+#"{d(%Y-%m-%d %H:%M:%S)} {h({l})} {T}:{I} {f}:{L} {M}: {m}{n}"
