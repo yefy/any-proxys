@@ -128,8 +128,9 @@ impl ExecutorSpawn {
 
     pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
         log::debug!("stop version:{}", self.executors.group_version);
-
-        let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
+        if is_fast_shutdown {
+            let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
+        }
         loop {
             tokio::select! {
                 biased;
