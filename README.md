@@ -2,10 +2,10 @@
 rust编写高性能四层代理服务器，支持tcp、quic、any-tunnel、any-tunnel2、ebpf等
 
 # any-tunnel
-文档 ./any-tunnel/README.md
+[文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
 
 # any-tunnel2
-文档 ./any-tunnel2/README.md
+[文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel2/README.md)
 
 # 特点
 底层tokio框架  
@@ -62,7 +62,7 @@ port模式http2域名获取
 支持http、http2的七层代理  
 
 #doc
-./any-proxy/doc  
+[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc) 
 
 # wiki
 [anyproxy编译运行](https://github.com/yefy/any-proxys/wiki/anyproxy%E7%BC%96%E8%AF%91%E8%BF%90%E8%A1%8C)  
