@@ -22,7 +22,9 @@ use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+const MIN_MERGER_CACHE_BUFFER: u64 = 4096;
 const MIN_CACHE_BUFFER: usize = 8192 * 2;
+const MIN_READ_BUFFER: usize = 1024;
 const MIN_CACHE_FILE: usize = 1024 * 1024 * 10;
 #[cfg(unix)]
 const PAGE_SIZE: usize = 4096;
@@ -54,12 +56,13 @@ pub struct StreamCacheFile {
 }
 
 pub struct StreamCacheBuffer {
-    pub data: Vec<u8>,
+    pub datas: Vec<u8>,
     pub start: u64,
     pub size: u64,
     pub is_cache: bool,
     pub seek: u64,
     pub file_fd: i32,
+    pub read_size: u64,
 }
 
 impl Default for StreamCacheBuffer {
@@ -77,31 +80,24 @@ impl DynamicReset for StreamCacheBuffer {
 impl StreamCacheBuffer {
     fn new() -> Self {
         StreamCacheBuffer {
-            data: Vec::with_capacity(MIN_CACHE_BUFFER),
+            datas: Vec::with_capacity(MIN_CACHE_BUFFER),
             start: 0,
             size: 0,
             is_cache: false,
             seek: 0,
             file_fd: 0,
+            read_size: 0,
         }
     }
 
     pub fn reset(&mut self) {
-        unsafe { self.data.set_len(0) };
+        unsafe { self.datas.set_len(0) };
         self.start = 0;
         self.size = 0;
         self.is_cache = false;
         self.seek = 0;
         self.file_fd = 0;
-    }
-
-    pub fn set_size(&mut self, data_size: Option<usize>) {
-        let data_size = if data_size.is_none() {
-            MIN_CACHE_BUFFER
-        } else {
-            data_size.unwrap()
-        };
-        self.size = data_size as u64;
+        self.read_size = 0;
     }
 
     fn resize(&mut self, data_size: Option<usize>) {
@@ -111,10 +107,10 @@ impl StreamCacheBuffer {
             data_size.unwrap()
         };
 
-        if self.data.len() < data_size {
-            self.data.resize(data_size, 0);
+        if self.datas.len() < data_size {
+            self.datas.resize(data_size, 0);
         } else {
-            unsafe { self.data.set_len(data_size) };
+            unsafe { self.datas.set_len(data_size) };
         }
         self.size = data_size as u64;
     }

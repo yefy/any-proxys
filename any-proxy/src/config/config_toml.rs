@@ -311,7 +311,7 @@ pub struct TmpFile {
 }
 
 fn default_stream_cache_size() -> usize {
-    8192
+    131072
 }
 fn default_stream_work_flow_times() -> bool {
     false
