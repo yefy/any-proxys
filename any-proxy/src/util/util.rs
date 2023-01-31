@@ -3,6 +3,8 @@ extern crate rand;
 use anyhow::anyhow;
 use anyhow::Result;
 use rand::Rng;
+use std::fs;
+use std::path::Path;
 
 pub fn str_addrs(addr: &str) -> Result<Vec<String>> {
     let mut datas = Vec::with_capacity(20);
@@ -169,6 +171,67 @@ pub fn memlock_rlimit(curr: u64, max: u64) -> Result<()> {
 
     if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
         return Err(anyhow!("Failed to increase rlimit:{:?}", rlimit));
+    }
+    Ok(())
+}
+
+pub fn extract(file_name: &str, target: &str) -> anyhow::Result<()> {
+    println!("file_name:{}", file_name);
+    let file_name = std::path::Path::new(file_name);
+    let zipfile = std::fs::File::open(file_name)
+        .map_err(|e| anyhow::anyhow!("err:open file => file_name:{:?}, e:{}", file_name, e))?;
+    let mut zip = zip::ZipArchive::new(zipfile).map_err(|e| {
+        anyhow::anyhow!(
+            "err:zip::ZipArchive::new => file_name:{:?}, e:{}",
+            file_name,
+            e
+        )
+    })?;
+    let target = std::path::Path::new(target);
+
+    if !target.exists() {
+        fs::create_dir_all(target)
+            .map_err(|e| anyhow::anyhow!("err:create_dir_all => target:{:?}, e:{}", target, e))?;
+    }
+
+    for i in 0..zip.len() {
+        let mut file = zip
+            .by_index(i)
+            .map_err(|e| anyhow::anyhow!("err:by_index => i:{}, e:{}", i, e))?;
+        println!("zip file name: {}", file.name());
+        if file.is_dir() {
+            println!("file utf8 path {:?}", file.name_raw());
+            let target = target.join(Path::new(&file.name().replace("\\", "")));
+            println!("create_dir_all {:?}", target);
+            fs::create_dir_all(&target).map_err(|e| {
+                anyhow::anyhow!("err:create_dir_all => target:{:?}, e:{}", target, e)
+            })?;
+        } else {
+            let file_path = target.join(Path::new(file.name()));
+            if file_path.exists() {
+                std::fs::remove_file(&file_path).map_err(|e| {
+                    anyhow::anyhow!("err::remove_file => file_path:{:?}, e:{}", file_path, e)
+                })?;
+            }
+            println!("create file_path {:?}", file_path);
+            let mut target_file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&file_path)
+                .map_err(|e| anyhow::anyhow!("err::open => file_path:{:?}, e:{}", file_path, e))?;
+            std::io::copy(&mut file, &mut target_file)
+                .map_err(|e| anyhow::anyhow!("err:copy => e:{}", e))?;
+            // Get and Set permissions
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                if let Some(mode) = file.unix_mode() {
+                    fs::set_permissions(&file_path, fs::Permissions::from_mode(mode))
+                        .map_err(|e| anyhow::anyhow!("err:set_permissions => e:{}", e))?;
+                }
+            }
+        }
     }
     Ok(())
 }

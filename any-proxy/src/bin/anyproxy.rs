@@ -68,6 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn do_main() -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("pwd:{:?}", std::env::current_dir()?);
+
     #[cfg(feature = "anyproxy-rustls")]
     log::info!("anyproxy-rustls");
 

@@ -99,6 +99,9 @@ num-traits = "0.2.15"
 #hyper = { version = "0.14.23", features = ["full"] }
 hyper = {git = "https://github.com/hyperium/hyper", features = ["full"]}
 dynamic-pool = "0.2.2"
+zip = "0.6.3"
+
+
 
 [dependencies.libbpf-rs]
 version = "0.19.1"
@@ -107,6 +110,12 @@ optional = true
 [build-dependencies.libbpf-cargo]
 version = "0.13.1"
 optional = true
+
+[build-dependencies.zip]
+version = "0.6.3"
+
+[build-dependencies.anyhow]
+path = "../anyhow"
 
 [dependencies.socket2]
 version = "0.4.2"

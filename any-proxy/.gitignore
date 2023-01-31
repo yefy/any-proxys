@@ -31,3 +31,4 @@ logs
 *.exe
 *.o
 anyproxy/work/anyproxy
+vmlinux.h
