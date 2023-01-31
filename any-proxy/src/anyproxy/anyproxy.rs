@@ -135,7 +135,9 @@ impl Anyproxy {
         #[cfg(feature = "anyproxy-ebpf")]
         let mut ebpf_group = any_ebpf::EbpfGroup::new(config.common.cpu_affinity, 0)?;
         #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = ebpf_group.start(config.common.is_open_ebpf_log).await?;
+        let ebpf_add_sock_hash = ebpf_group
+            .start(config.common.debug_is_open_ebpf_log)
+            .await?;
         #[cfg(feature = "anyproxy-ebpf")]
         let ebpf_add_sock_hash = Arc::new(ebpf_add_sock_hash);
 

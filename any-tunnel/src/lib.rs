@@ -30,3 +30,11 @@ impl Protocol4 {
         }
     }
 }
+
+pub fn get_flag(is_client: bool) -> &'static str {
+    if is_client {
+        "client"
+    } else {
+        "server"
+    }
+}

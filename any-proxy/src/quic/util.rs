@@ -32,7 +32,7 @@ pub fn bind(
     };
     let sk = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|e| anyhow!("err:Socket::new => e:{}", e))?;
-    let addr = socket2::SockAddr::from(addr);
+    let sk_addr = socket2::SockAddr::from(addr);
 
     #[cfg(unix)]
     {
@@ -52,8 +52,8 @@ pub fn bind(
 
     sk.set_nonblocking(true)
         .map_err(|e| anyhow!("err:sk.set_nonblocking => e:{}", e))?;
-    sk.bind(&addr)
-        .map_err(|e| anyhow!("err: sk.bind => e:{} addr:{:?}", e, addr))?;
+    sk.bind(&sk_addr)
+        .map_err(|e| anyhow!("err: sk.bind => addr:{}, e:{}", addr.to_string(), e))?;
     Ok(sk.into())
 }
 

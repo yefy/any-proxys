@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::get_flag;
 #[cfg(feature = "anytunnel-debug")]
 use crate::DEFAULT_PRINT_NUM;
 
@@ -138,7 +139,7 @@ impl PeerStream {
                 #[cfg(feature = "anytunnel-debug")]
                 log::info!(
                     "flag:{}, peer_stream_index:{} do_start",
-                    if self.is_client { "client" } else { "server" },
+                    get_flag(self.is_client),
                     self.peer_stream_index.load(Ordering::Relaxed),
                 );
                 self.init();
@@ -174,7 +175,7 @@ impl PeerStream {
                 {
                     log::info!(
                         "flag:{}, peer_stream_index:{}, do_stream start min_stream_cache_size:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         peer_stream_index,
                         min_stream_cache_size,
                     );
@@ -184,7 +185,7 @@ impl PeerStream {
                 {
                     log::info!(
                         "flag:{}, peer_stream_index:{}, do_stream wait min_stream_cache_size:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         peer_stream_index,
                         min_stream_cache_size,
                     );
@@ -197,7 +198,7 @@ impl PeerStream {
                 {
                     log::info!(
                         "flag:{}, peer_stream_index:{}, do_stream err min_stream_cache_size:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         peer_stream_index,
                         min_stream_cache_size,
                     );
@@ -234,13 +235,13 @@ impl PeerStream {
             #[cfg(feature = "anytunnel-debug")]
             log::info!(
                 "flag:{}, peer_stream_index:{} read_tunnel_hello start ",
-                if self.is_client { "client" } else { "server" },
+                get_flag(self.is_client),
                 self.peer_stream_index.load(Ordering::Relaxed),
             );
             let tunnel_hello = protopack::read_tunnel_hello(r).await.map_err(|e| {
                 anyhow!(
                     "flag:{}, peer_stream_index:{} read_tunnel_hello => err:{}",
-                    if self.is_client { "client" } else { "server" },
+                    get_flag(self.is_client),
                     self.peer_stream_index.load(Ordering::Relaxed),
                     e
                 )
@@ -343,7 +344,7 @@ impl PeerStream {
         {
             log::info!(
                 "flag:{}, peer_stream_index:{} read_stream",
-                if self.is_client { "client" } else { "server" },
+                get_flag(self.is_client),
                 self.peer_stream_index.load(Ordering::Relaxed),
             );
         }
@@ -370,16 +371,16 @@ impl PeerStream {
                         #[cfg(feature = "anytunnel-debug")]
                         log::info!(
                             "flag:{}, peer_stream_index:{} peer_stream read TunnelClose local value:{}, value:{}",
-                            if self.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
                             self.peer_stream_index.load(Ordering::Relaxed),
-                            if self.is_client { "client" } else { "server" },
-                            if value.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
+                            get_flag(value.is_client),
                         );
 
                         if min_stream_cache_size <= 0 {
                             return Err(anyhow!(
                                 "err:flag:{} min_stream_cache_size <= 0",
-                                if self.is_client { "client" } else { "server" }
+                                get_flag(self.is_client)
                             ));
                         }
 
@@ -391,7 +392,7 @@ impl PeerStream {
                                 {
                                     log::info!(
                                         "flag:{}, peer_stream_index:{} peer_stream read value.is_client != self.is_client",
-                                        if self.is_client { "client" } else { "server" },
+                                        get_flag(self.is_client),
                                         self.peer_stream_index.load(Ordering::Relaxed),
                                     );
                                 }
@@ -404,7 +405,7 @@ impl PeerStream {
                         #[cfg(feature = "anytunnel-debug")]
                         log::info!(
                             "flag:{}, peer_stream_index:{} peer_stream read value.is_client == self.is_client",
-                            if self.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
                             self.peer_stream_index.load(Ordering::Relaxed),
                         );
 
@@ -416,7 +417,7 @@ impl PeerStream {
                             if _value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
                                 log::info!(
                                     "flag:{}, peer_stream_index:{} peer_stream read pack_id:{}",
-                                    if self.is_client { "client" } else { "server" },
+                                    get_flag(self.is_client),
                                     self.peer_stream_index.load(Ordering::Relaxed),
                                     _value.header.pack_id
                                 );
@@ -436,7 +437,7 @@ impl PeerStream {
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream read break",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
 
@@ -446,7 +447,7 @@ impl PeerStream {
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream read wait exit",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
         //15秒后强制退出
@@ -467,7 +468,7 @@ impl PeerStream {
             {
                 log::info!(
                     "flag:{}, peer_stream_index:{} write_stream TunnelHello ",
-                    if self.is_client { "client" } else { "server" },
+                    get_flag(self.is_client),
                     self.peer_stream_index.load(Ordering::Relaxed),
                 );
             }
@@ -485,7 +486,7 @@ impl PeerStream {
         {
             log::info!(
                 "flag:{}, peer_stream_index:{} write_stream ",
-                if self.is_client { "client" } else { "server" },
+                get_flag(self.is_client),
                 self.peer_stream_index.load(Ordering::Relaxed),
             );
         }
@@ -497,7 +498,7 @@ impl PeerStream {
                     #[cfg(feature = "anytunnel-debug")]
                     log::info!(
                         "flag:{}, peer_stream_index:{} peer_stream tunnel_peer_close",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         self.peer_stream_index.load(Ordering::Relaxed),
                     );
 
@@ -515,7 +516,7 @@ impl PeerStream {
                     {
                         log::trace!(
                             "flag:{}, peer_stream_index:{} write_stream timeout ",
-                            if self.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
                             self.peer_stream_index.load(Ordering::Relaxed),
                         );
                     }
@@ -531,7 +532,7 @@ impl PeerStream {
                         #[cfg(feature = "anytunnel-debug")]
                         log::info!(
                             "flag:{}, peer_stream_index:{} peer_stream write TunnelClose",
-                            if self.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
                             self.peer_stream_index.load(Ordering::Relaxed),
                         );
 
@@ -573,7 +574,7 @@ impl PeerStream {
                             if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
                                 log::info!(
                                     "flag:{}, peer_stream_index:{} peer_stream write pack_id:{}",
-                                    if self.is_client { "client" } else { "server" },
+                                    get_flag(self.is_client),
                                     self.peer_stream_index.load(Ordering::Relaxed),
                                     value.header.pack_id
                                 );
@@ -614,14 +615,14 @@ impl PeerStream {
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream write break",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
 
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream write start exit",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
 
@@ -633,7 +634,7 @@ impl PeerStream {
                     #[cfg(feature = "anytunnel-debug")]
                     log::info!(
                         "flag:{}, peer_stream_index:{} peer_stream write TunnelClose take from read",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         self.peer_stream_index.load(Ordering::Relaxed),
                     );
                     let tunnel_peer_close = tunnel_peer_close.unwrap();
@@ -655,7 +656,7 @@ impl PeerStream {
             #[cfg(feature = "anytunnel-debug")]
             log::info!(
                 "flag:{}, peer_stream_index:{} peer_stream write sleep",
-                if self.is_client { "client" } else { "server" },
+                get_flag(self.is_client),
                 self.peer_stream_index.load(Ordering::Relaxed),
             );
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
@@ -673,7 +674,7 @@ impl PeerStream {
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream write end exit",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
 
@@ -688,7 +689,7 @@ impl PeerStream {
         #[cfg(feature = "anytunnel-debug")]
         log::info!(
             "flag:{}, peer_stream_index:{} peer_stream close",
-            if self.is_client { "client" } else { "server" },
+            get_flag(self.is_client),
             self.peer_stream_index.load(Ordering::Relaxed),
         );
 

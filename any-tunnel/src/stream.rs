@@ -130,15 +130,12 @@ impl Stream {
             #[cfg(feature = "anytunnel-debug")]
             log::info!(
                 "flag:{} stream stream_tx_pack_id:{}, stream_rx_pack_id:{}",
-                if self.is_client { "client" } else { "server" },
+                get_flag(self.is_client),
                 self.stream_tx_pack_id,
                 self.stream_rx_pack_id
             );
             #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{} stream read_close",
-                if self.is_client { "client" } else { "server" }
-            );
+            log::info!("flag:{} stream read_close", get_flag(self.is_client));
         }
     }
 
@@ -150,10 +147,7 @@ impl Stream {
             let stream_tx = &mut *stream_tx.lock().unwrap();
             stream_tx.close();
             #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{} stream write_close",
-                if self.is_client { "client" } else { "server" }
-            );
+            log::info!("flag:{} stream write_close", get_flag(self.is_client));
         }
     }
 
@@ -220,7 +214,7 @@ impl tokio::io::AsyncRead for Stream {
                     if self.stream_rx_pack_id % DEFAULT_PRINT_NUM == 0 {
                         log::info!(
                             "flag:{} stream read pack_id:{}",
-                            if self.is_client { "client" } else { "server" },
+                            get_flag(self.is_client),
                             self.stream_rx_pack_id
                         );
                     }
@@ -262,7 +256,7 @@ impl tokio::io::AsyncWrite for Stream {
                 if stream_tx_pack_id % DEFAULT_PRINT_NUM == 0 {
                     log::info!(
                         "flag:{} stream write pack_id:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         stream_tx_pack_id
                     );
                 }

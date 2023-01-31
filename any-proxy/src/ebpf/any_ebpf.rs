@@ -150,13 +150,13 @@ impl EbpfGroup {
         self.thread_spawn.stop(true, 10).await
     }
 
-    pub async fn start(&mut self, is_open_ebpf_log: bool) -> Result<AddSockHash> {
+    pub async fn start(&mut self, debug_is_open_ebpf_log: bool) -> Result<AddSockHash> {
         let (data_tx, data_rx) = async_channel::bounded(200);
 
         let mut thread_spawn_wait_run = self.thread_spawn.thread_spawn_wait_run();
         thread_spawn_wait_run._start(move |async_context| {
             _block_on(move |_| async move {
-                EbpfSockhash::create_sockhash(async_context, data_rx, is_open_ebpf_log)
+                EbpfSockhash::create_sockhash(async_context, data_rx, debug_is_open_ebpf_log)
                     .await
                     .map_err(|e| anyhow!("err:create_sockhash => e:{}", e))?;
                 Ok(())
@@ -176,10 +176,10 @@ impl EbpfSockhash {
     pub async fn create_sockhash(
         async_context: AsyncThreadContext,
         data_rx: async_channel::Receiver<AddSockHashData>,
-        is_open_ebpf_log: bool,
+        debug_is_open_ebpf_log: bool,
     ) -> Result<()> {
         let mut skel_builder = AnyEbpfSkelBuilder::default();
-        skel_builder.obj_builder.debug(is_open_ebpf_log);
+        skel_builder.obj_builder.debug(debug_is_open_ebpf_log);
         let open_skel = skel_builder.open()?;
         let mut skel = open_skel.load()?;
 

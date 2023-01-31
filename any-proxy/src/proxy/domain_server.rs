@@ -102,7 +102,7 @@ impl DomainServer {
                         domain_config_listen
                     };
 
-                    let mut domain_stream = domain_stream::DomainStream::new(
+                    let  domain_stream = domain_stream::DomainStream::new(
                         executors,
                         tunnel_publish,
                         tunnel2_publish,

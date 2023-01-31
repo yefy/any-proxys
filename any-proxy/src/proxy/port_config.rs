@@ -30,7 +30,6 @@ pub struct PortConfigContext {
 
 #[derive(Clone)]
 pub struct PortConfigListen {
-    //pub listen_config: ListenConfig,
     pub listen_server: Rc<Box<dyn server::Server>>,
     pub port_config_context: Rc<PortConfigContext>,
 }
@@ -66,6 +65,7 @@ impl PortConfig {
                 "tcp".to_string(),
                 SocketAddr::from(([127, 0, 0, 1], 8080)),
                 SocketAddr::from(([127, 0, 0, 1], 18080)),
+                false,
             );
             let access_context = if port_server_config.access.is_some() {
                 let mut access_context = Vec::new();

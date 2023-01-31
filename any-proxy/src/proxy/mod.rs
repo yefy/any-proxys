@@ -10,6 +10,7 @@ pub mod port_stream;
 pub mod proxy;
 pub mod sendfile;
 pub mod stream_info;
+pub mod stream_start;
 pub mod stream_stream;
 pub mod stream_var;
 pub mod tunnel_stream;

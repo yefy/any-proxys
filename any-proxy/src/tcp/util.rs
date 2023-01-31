@@ -21,15 +21,15 @@ pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
     };
     let sk = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
         .map_err(|e| anyhow!("err:Socket::new => e:{}", e))?;
-    let addr = socket2::SockAddr::from(addr);
+    let sk_addr = socket2::SockAddr::from(addr);
     #[cfg(unix)]
     {
         sk.set_reuse_port(_tcp_reuseport)?;
     }
     sk.set_nonblocking(true)
         .map_err(|e| anyhow!("err:sk.set_nonblocking => e:{}", e))?;
-    sk.bind(&addr)
-        .map_err(|e| anyhow!("err:sk.bind => e:{}", e))?;
+    sk.bind(&sk_addr)
+        .map_err(|e| anyhow!("err:sk.bind => addr:{}, e:{}", addr.to_string(), e))?;
     sk.listen(1024)
         .map_err(|e| anyhow!("err:sk.listen => e:{}", e))?;
     Ok(sk.into())

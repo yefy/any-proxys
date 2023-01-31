@@ -98,6 +98,7 @@ impl DomainConfig {
                 "tcp".to_string(),
                 SocketAddr::from(([127, 0, 0, 1], 8080)),
                 SocketAddr::from(([127, 0, 0, 1], 18080)),
+                false,
             );
             let access_context = if domain_server_config.access.is_some() {
                 let mut access_context = Vec::new();

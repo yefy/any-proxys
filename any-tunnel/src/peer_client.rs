@@ -52,10 +52,7 @@ impl Drop for PeerClient {
 impl PeerClient {
     pub fn close(&self) {
         #[cfg(feature = "anytunnel-debug")]
-        log::info!(
-            "flag:{} peer_client close",
-            if self.is_client { "client" } else { "server" }
-        );
+        log::info!("flag:{} peer_client close", get_flag(self.is_client));
         self.peer_stream_to_peer_client_rx.close();
         self.peer_client_to_stream_tx.close();
     }
@@ -67,10 +64,7 @@ impl PeerClient {
     pub fn del_stream(&self) {
         if self.server_context.is_some() {
             #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{} peer_client del_stream",
-                if self.is_client { "client" } else { "server" }
-            );
+            log::info!("flag:{} peer_client del_stream", get_flag(self.is_client));
 
             let session_id = { self.session_id.lock().unwrap().clone().unwrap() };
             {
@@ -171,7 +165,7 @@ impl PeerClient {
                 #[cfg(feature = "anytunnel-debug")]
                 log::info!(
                     "flag:{} peer_client self.peer_client_to_stream_tx.is_closed()",
-                    if self.is_client { "client" } else { "server" }
+                    get_flag(self.is_client)
                 );
                 return Ok(());
             }
@@ -187,7 +181,7 @@ impl PeerClient {
                         #[cfg(feature = "anytunnel-debug")]
                         log::info!(
                             "flag:{} peer_client self.peer_stream_to_peer_client_rx.recv()",
-                            if self.is_client { "client" } else { "server" }
+                            get_flag(self.is_client)
                         );
                         return Ok(());
                     }
@@ -219,7 +213,7 @@ impl PeerClient {
                             #[cfg(feature = "anytunnel-debug")]
                             log::info!(
                                 "flag:{} peer_client TunnelAddConnect:{:?}",
-                                if self.is_client { "client" } else { "server" },
+                                get_flag(self.is_client),
                                 value
                             );
                             if self.peer_stream_connect.is_none() {
@@ -251,7 +245,7 @@ impl PeerClient {
                             #[cfg(feature = "anytunnel-debug")]
                             log::info!(
                                 "flag:{} peer_client TunnelMaxConnect:{:?}",
-                                if self.is_client { "client" } else { "server" },
+                                get_flag(self.is_client),
                                 value
                             );
                             if self.peer_stream_connect.is_some() {
@@ -286,7 +280,7 @@ impl PeerClient {
                     #[cfg(feature = "anytunnel-debug")]
                     log::info!(
                         "flag:{} peer_client self.peer_client_to_stream_tx.send",
-                        if self.is_client { "client" } else { "server" }
+                        get_flag(self.is_client)
                     );
                     return Ok(());
                 }
@@ -300,7 +294,7 @@ impl PeerClient {
                 if pack_id % DEFAULT_PRINT_NUM == 0 {
                     log::info!(
                         "flag:{} peer_client pack_id:{} recv_pack_cache_map.len:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         pack_id,
                         recv_pack_cache_map.len()
                     );
@@ -322,7 +316,7 @@ impl PeerClient {
                     debug_num = 0;
                     log::info!(
                         "flag:{}, peer_client peer_stream_size:{}",
-                        if self.is_client { "client" } else { "server" },
+                        get_flag(self.is_client),
                         self.peer_stream_size()
                     );
                 }
@@ -493,17 +487,11 @@ impl PeerClient {
             .get_peer_stream_key(&connect_addr.to_string(), min_stream_cache_size);
         let peer_stream_key = if peer_stream_key.is_some() {
             #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{} peer_client cache",
-                if self.is_client { "client" } else { "server" }
-            );
+            log::info!("flag:{} peer_client cache", get_flag(self.is_client));
             peer_stream_key.unwrap()
         } else {
             #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{} peer_client new connect",
-                if self.is_client { "client" } else { "server" }
-            );
+            log::info!("flag:{} peer_client new connect", get_flag(self.is_client));
             let (stream, local_addr, remote_addr) = self
                 .peer_stream_connect
                 .as_ref()

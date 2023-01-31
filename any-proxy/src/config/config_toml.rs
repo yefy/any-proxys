@@ -159,7 +159,7 @@ fn default_config_log_stdout() -> bool {
 fn default_max_open_file_limit() -> u64 {
     1024003
 }
-fn default_is_open_ebpf_log() -> bool {
+fn default_debug_is_open_ebpf_log() -> bool {
     false
 }
 
@@ -177,12 +177,12 @@ pub struct CommonConfig {
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout: u64,
     #[serde(default = "default_config_log_stdout")]
-    pub config_log_stdout: bool,
+    pub debug_is_print_config: bool,
     #[serde(default = "default_max_open_file_limit")]
     pub max_open_file_limit: u64,
     pub memlock_rlimit: MemlockRlimit,
-    #[serde(default = "default_is_open_ebpf_log")]
-    pub is_open_ebpf_log: bool,
+    #[serde(default = "default_debug_is_open_ebpf_log")]
+    pub debug_is_open_ebpf_log: bool,
 }
 
 fn default_tunnel2_worker_thread() -> usize {
@@ -253,7 +253,7 @@ pub struct ConfigToml {
 fn default_is_open_ebpf() -> bool {
     false
 }
-fn default_is_open_print() -> bool {
+fn default_debug_is_open_print() -> bool {
     false
 }
 fn default_is_open_sendfile() -> bool {
@@ -264,8 +264,8 @@ fn default_is_open_sendfile() -> bool {
 pub struct FastConf {
     #[serde(default = "default_is_open_ebpf")]
     pub is_open_ebpf: bool,
-    #[serde(default = "default_is_open_print")]
-    pub is_open_print: bool,
+    #[serde(default = "default_debug_is_open_print")]
+    pub debug_is_open_print: bool,
     #[serde(default = "default_is_open_sendfile")]
     pub is_open_sendfile: bool,
 }
@@ -313,10 +313,13 @@ pub struct TmpFile {
 fn default_stream_cache_size() -> usize {
     131072
 }
-fn default_stream_work_flow_times() -> bool {
+fn default_debug_is_open_stream_work_times() -> bool {
     false
 }
-fn default_stream_work_debug_time() -> u64 {
+fn default_debug_print_access_log_time() -> u64 {
+    0
+}
+fn default_debug_print_stream_flow_time() -> u64 {
     0
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -324,10 +327,12 @@ fn default_stream_work_debug_time() -> u64 {
 pub struct StreamConfig {
     #[serde(default = "default_stream_cache_size")]
     pub stream_cache_size: usize,
-    #[serde(default = "default_stream_work_flow_times")]
-    pub stream_work_times: bool,
-    #[serde(default = "default_stream_work_debug_time")]
-    pub stream_work_debug_time: u64,
+    #[serde(default = "default_debug_is_open_stream_work_times")]
+    pub debug_is_open_stream_work_times: bool,
+    #[serde(default = "default_debug_print_access_log_time")]
+    pub debug_print_access_log_time: u64,
+    #[serde(default = "default_debug_print_stream_flow_time")]
+    pub debug_print_stream_flow_time: u64,
 }
 
 fn default_access_log() -> bool {

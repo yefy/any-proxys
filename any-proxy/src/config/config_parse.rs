@@ -61,7 +61,7 @@ pub fn check(mut config: config_toml::ConfigToml) -> Result<config_toml::ConfigT
         config.tunnel2.tunnel2_worker_thread = 1;
     }
 
-    if config.common.config_log_stdout {
+    if config.common.debug_is_print_config {
         log::info!("config = {:#?}", config);
     }
 

@@ -1,13 +1,14 @@
 use super::domain_config;
 use super::heartbeat_stream::HeartbeatStream;
+use super::proxy;
 use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
+use super::stream_start;
 use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
 use crate::io::buf_reader::BufReader;
-use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow;
 use crate::{protopack, Protocol7};
 use any_base::executor_local_spawn::ExecutorsLocal;
@@ -15,13 +16,13 @@ use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::prelude::*;
 use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 pub struct DomainStream {
     executors: ExecutorsLocal,
@@ -68,123 +69,52 @@ impl DomainStream {
     }
 
     pub async fn start(
-        &mut self,
+        self,
         protocol7: Protocol7,
         mut stream: stream_flow::StreamFlow,
     ) -> Result<()> {
-        let stream_work_debug_time = self.domain_config_listen.stream.stream_work_debug_time;
+        let (debug_print_access_log_time, debug_print_stream_flow_time) = {
+            let stream_conf = &self.domain_config_listen.stream;
+
+            (
+                stream_conf.debug_print_access_log_time,
+                stream_conf.debug_print_stream_flow_time,
+            )
+        };
+
         let stream_info = StreamInfo::new(
             protocol7.to_string(),
             self.local_addr.clone(),
             self.remote_addr.clone(),
+            self.domain_config_listen
+                .stream
+                .debug_is_open_stream_work_times,
         );
         stream.set_stream_info(Some(stream_info.client_stream_flow_info.clone()));
-        let mut shutdown_rx = self.executors.shutdown_thread_tx.subscribe();
-        let start_time = Instant::now();
-        let stream_info = Rc::new(RefCell::new(stream_info));
-        let stream_timeout = StreamTimeout::new();
-        let ret: Option<Result<()>> = async {
-            tokio::select! {
-                biased;
-                _ret = self.do_start(protocol7, stream_info.clone(), stream) => {
-                    return Some(_ret);
-                }
-                _ret = StreamStream::read_timeout(
-                    stream_info.as_ref().borrow().client_stream_flow_info.clone(),
-                    stream_info.clone(),
-                    stream_timeout.clone(),
-                    stream_timeout.client_read_timeout_millis.clone(),
-                ) => {
-                    return Some(_ret);
-                }
-                _ret = StreamStream::read_timeout(
-                    stream_info.as_ref().borrow().upstream_stream_flow_info.clone(),
-                    stream_info.clone(),
-                    stream_timeout.clone(),
-                    stream_timeout.ups_read_timeout_millis.clone(),
-                ) => {
-                    return Some(_ret);
-                }
-                _ret = StreamStream::write_timeout(
-                    stream_info.as_ref().borrow().client_stream_flow_info.clone(),
-                    stream_info.clone(),
-                    stream_timeout.clone(),
-                    stream_timeout.client_write_timeout_millis.clone(),
-                ) => {
-                    return Some(_ret);
-                }
-                _ret = StreamStream::write_timeout(
-                    stream_info.as_ref().borrow().upstream_stream_flow_info.clone(),
-                    stream_info.clone(),
-                    stream_timeout.clone(),
-                    stream_timeout.ups_write_timeout_millis.clone(),
-                ) => {
-                    return Some(_ret);
-                }
-                _ret = StreamStream::stream_work_debug(stream_work_debug_time, stream_info.clone()) => {
-                    return Some(_ret);
-                }
-                _ = shutdown_rx.recv() => {
-                    stream_info.borrow_mut().err_status = ErrStatus::ServerErr;
-                    return None;
-                }
-                else => {
-                    stream_info.borrow_mut().err_status = ErrStatus::ServerErr;
-                    return None;
-                }
-            }
-        }
-        .await;
+        let shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
 
-        let mut stream_info = stream_info.borrow_mut();
-        let session_time = start_time.elapsed().as_secs_f32();
-        stream_info.session_time = session_time;
-
-        let is_close = StreamStream::stream_info_parse(stream_timeout, &mut stream_info)
-            .await
-            .map_err(|e| anyhow!("err:StreamStream::stream_connect_parse => e:{}", e))?;
-
-        if !stream_info.is_discard_flow {
-            if self.domain_config_context.is_some() {
-                let domain_config_context = self.domain_config_context.as_ref().unwrap();
-                StreamStream::access_log(
-                    &domain_config_context.stream_config_context.access,
-                    &domain_config_context.stream_config_context.access_context,
-                    &domain_config_context.stream_config_context.stream_var,
-                    &mut stream_info,
-                )
-                .await
-                .map_err(|e| anyhow!("err:StreamStream::access_log => e:{}", e))?;
-            }
-        }
-
-        if ret.is_some() {
-            log::debug!("ret:{:?}", ret.as_ref().unwrap());
-        }
-
-        if is_close {
-            return Ok(());
-        }
-
-        if ret.is_some() {
-            let ret = ret.unwrap();
-            let _ = ret?;
-        }
-
-        Ok(())
+        stream_start::do_start(
+            self,
+            protocol7,
+            stream_info,
+            stream,
+            shutdown_thread_rx,
+            debug_print_access_log_time,
+            debug_print_stream_flow_time,
+        )
+        .await
     }
+}
 
-    pub async fn do_start(
+#[async_trait(?Send)]
+impl proxy::Stream for DomainStream {
+    async fn do_start(
         &mut self,
         protocol7: Protocol7,
         stream_info: Rc<RefCell<StreamInfo>>,
         client_stream: stream_flow::StreamFlow,
     ) -> Result<()> {
-        StreamStream::work_time(
-            "tunnel_stream",
-            self.domain_config_listen.stream.stream_work_times,
-            &mut stream_info.borrow_mut(),
-        );
+        stream_info.borrow_mut().add_work_time("tunnel_stream");
 
         let client_buf_reader = BufReader::new(client_stream);
         let (is_tunnel, client_buf_reader) = TunnelStream::tunnel_stream(
@@ -203,20 +133,12 @@ impl DomainStream {
         }
         let client_buf_reader = client_buf_reader.unwrap();
 
-        StreamStream::work_time(
-            "heartbeat",
-            self.domain_config_listen.stream.stream_work_times,
-            &mut stream_info.borrow_mut(),
-        );
+        stream_info.borrow_mut().add_work_time("heartbeat");
 
         let (mut client_buf_reader, stream_info) =
             HeartbeatStream::heartbeat_stream(client_buf_reader, stream_info).await?;
 
-        StreamStream::work_time(
-            "hello",
-            self.domain_config_listen.stream.stream_work_times,
-            &mut stream_info.borrow_mut(),
-        );
+        stream_info.borrow_mut().add_work_time("hello");
 
         let hello = {
             stream_info.borrow_mut().err_status = ErrStatus::ClientProtoErr;
@@ -309,7 +231,9 @@ impl DomainStream {
             .clone();
 
         stream_info.borrow_mut().stream_config_context = Some(config_ctx.clone());
-        stream_info.borrow_mut().is_open_print = config_ctx.fast_conf.is_open_print;
+        stream_info.borrow_mut().debug_is_open_print = config_ctx.fast_conf.debug_is_open_print;
+        stream_info.borrow_mut().debug_is_open_stream_work_times =
+            config_ctx.stream.debug_is_open_stream_work_times;
 
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];

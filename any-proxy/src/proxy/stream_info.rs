@@ -120,7 +120,7 @@ pub struct StreamInfo {
     pub local_addr: SocketAddr,
     pub remote_addr: SocketAddr,
     pub session_time: f32,
-    pub is_open_print: bool,
+    pub debug_is_open_print: bool,
     pub request_id: String,
     pub protocol_hello: std::sync::Arc<std::sync::Mutex<Option<AnyproxyHello>>>,
     pub err_status: ErrStatus,
@@ -138,6 +138,7 @@ pub struct StreamInfo {
     pub is_discard_timeout: bool,
     pub buffer_cache: Option<String>,
     pub upstream_connect_info: Option<ConnectInfo>,
+    pub debug_is_open_stream_work_times: bool,
 }
 
 impl StreamInfo {
@@ -145,6 +146,7 @@ impl StreamInfo {
         local_protocol_name: String,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
+        debug_is_open_stream_work_times: bool,
     ) -> StreamInfo {
         StreamInfo {
             ssl_domain: None,
@@ -154,7 +156,7 @@ impl StreamInfo {
             local_addr,
             remote_addr,
             session_time: 0.0,
-            is_open_print: false,
+            debug_is_open_print: false,
             request_id: "".to_string(),
             protocol_hello: std::sync::Arc::new(std::sync::Mutex::new(None)),
             err_status: ErrStatus::ClientProtoErr,
@@ -176,6 +178,21 @@ impl StreamInfo {
             is_discard_timeout: false,
             buffer_cache: None,
             upstream_connect_info: None,
+            debug_is_open_stream_work_times,
+        }
+    }
+
+    pub fn add_work_time(&mut self, name: &str) {
+        if self.debug_is_open_stream_work_times {
+            let stream_work_time = self
+                .stream_work_time
+                .as_ref()
+                .unwrap()
+                .elapsed()
+                .as_secs_f32();
+            self.stream_work_times
+                .push((name.to_string(), stream_work_time));
+            self.stream_work_time = Some(Instant::now());
         }
     }
 }
