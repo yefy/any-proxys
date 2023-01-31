@@ -1014,6 +1014,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
     }
 
     pub async fn write(&mut self, ssc: &mut StreamStreamContext) -> Result<StreamStatus> {
+        self.stream_info.borrow_mut().is_break_stream_write = false;
         loop {
             let buffer = self.read_buffer().await?;
             if buffer.is_none() {
@@ -1081,6 +1082,10 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 StreamStatus::DataEmpty => {
                     log::error!("err:StreamStatus::DataEmpty");
                 }
+            }
+
+            if self.stream_info.borrow().is_break_stream_write {
+                return Ok(StreamStatus::StreamFull(0));
             }
         }
     }

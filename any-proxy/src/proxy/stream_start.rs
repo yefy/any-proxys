@@ -72,6 +72,9 @@ pub async fn do_start(
             ) => {
                 return Some(_ret);
             }
+            _ret = check_break_stream_write(stream_info.clone()) => {
+                return Some(_ret);
+            }
             _ret = debug_print_access_log(debug_print_access_log_time, stream_info.clone()) => {
                 return Some(_ret);
             }
@@ -469,6 +472,13 @@ pub async fn write_timeout(
             }
         }
         write = curr_write;
+    }
+}
+
+pub async fn check_break_stream_write(stream_info: Rc<RefCell<StreamInfo>>) -> Result<()> {
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        stream_info.borrow_mut().is_break_stream_write = true;
     }
 }
 

@@ -139,6 +139,7 @@ pub struct StreamInfo {
     pub buffer_cache: Option<String>,
     pub upstream_connect_info: Option<ConnectInfo>,
     pub debug_is_open_stream_work_times: bool,
+    pub is_break_stream_write: bool,
 }
 
 impl StreamInfo {
@@ -179,6 +180,7 @@ impl StreamInfo {
             buffer_cache: None,
             upstream_connect_info: None,
             debug_is_open_stream_work_times,
+            is_break_stream_write: false,
         }
     }
 
