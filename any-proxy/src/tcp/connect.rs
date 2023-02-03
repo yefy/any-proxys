@@ -8,12 +8,13 @@ use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct Connect {
     host: String,
     address: SocketAddr, //ip:port, domain:port
-    tcp_config: TcpConfig,
+    tcp_config: Arc<TcpConfig>,
 }
 
 impl Connect {
@@ -25,7 +26,7 @@ impl Connect {
         Ok(Connect {
             host,
             address,
-            tcp_config,
+            tcp_config: Arc::new(tcp_config),
         })
     }
 }

@@ -9,16 +9,11 @@ use super::StreamCacheFile;
 use super::StreamConfigContext;
 use super::StreamLimit;
 use super::StreamStreamContext;
-use super::MIN_CACHE_BUFFER;
-use super::MIN_CACHE_FILE;
-use super::MIN_READ_BUFFER;
-#[cfg(unix)]
-use super::PAGE_SIZE;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
 use crate::protopack;
-use crate::proxy::MIN_MERGER_CACHE_BUFFER;
 use crate::stream::stream_flow;
+use crate::util::default_config;
 use anyhow::Result;
 use anyhow::{anyhow, Error};
 use dynamic_pool::{DynamicPool, DynamicPoolItem};
@@ -33,18 +28,42 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(feature = "anyproxy-write-block-time-ms")]
+use std::time::Instant;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const LIMIT_SLEEP_TIME_MILLIS: u64 = 100;
-const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 5;
+const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 1;
 const NOT_SLEEP_TIME_MILLIS: u64 = 0;
 const MIN_SLEEP_TIME_MILLIS: u64 = 10;
+const SENDFILE_FULL_SLEEP_TIME_MILLIS: u64 = 30;
+
+#[derive(Debug)]
+pub struct StreamFullInfo {
+    is_sendfile: bool,
+    _write_size: u64,
+}
+
+impl Default for StreamFullInfo {
+    fn default() -> Self {
+        StreamFullInfo::new(false, 0)
+    }
+}
+
+impl StreamFullInfo {
+    pub fn new(is_sendfile: bool, _write_size: u64) -> StreamFullInfo {
+        StreamFullInfo {
+            is_sendfile,
+            _write_size,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum StreamStatus {
     Limit,
-    StreamFull(u64),
+    StreamFull(StreamFullInfo),
     Ok(u64),
     DataEmpty,
 }
@@ -68,8 +87,8 @@ impl StreamStream {
         #[cfg(not(feature = "anyproxy-ebpf"))] client_stream: stream_flow::StreamFlow,
         thread_id: std::thread::ThreadId,
         tmp_file_id: Rc<RefCell<u64>>,
-        client_local_addr: &SocketAddr,
-        client_remote_addr: &SocketAddr,
+        client_local_addr: SocketAddr,
+        client_remote_addr: SocketAddr,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
     ) -> Result<()> {
         stream_info.borrow_mut().add_work_time("connect");
@@ -372,7 +391,9 @@ impl StreamStream {
         w: &mut W,
         is_client: bool,
         #[cfg(unix)] sendfile: &Option<SendFile>,
-    ) -> Result<StreamStatus> {
+    ) -> std::io::Result<(StreamStatus, u128)> {
+        let mut _write_max_block_time_ms = 0;
+        let mut _is_sendfile = false;
         let mut n = buffer.size - buffer.start;
         let curr_limit_rate = ssc.curr_limit_rate.load(Ordering::Relaxed);
         let limit_rate_size = if ssc.max_limit_rate <= 0 {
@@ -382,7 +403,7 @@ impl StreamStream {
         } else if curr_limit_rate > 0 {
             curr_limit_rate
         } else {
-            return Ok(StreamStatus::Limit);
+            return Ok((StreamStatus::Limit, _write_max_block_time_ms));
         };
 
         if limit_rate_size < n {
@@ -393,22 +414,51 @@ impl StreamStream {
         let wn = loop {
             #[cfg(unix)]
             if sendfile.is_some() && buffer.file_fd > 0 {
+                _is_sendfile = true;
                 let wn = sendfile
                     .as_ref()
                     .unwrap()
                     .write(buffer.file_fd, buffer.seek, n)
-                    .await
-                    .map_err(|e| anyhow!("err:w.write_all => e:{}", e))?;
-                break wn;
+                    .await;
+                if let Err(e) = wn {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        return Ok((
+                            StreamStatus::StreamFull(StreamFullInfo::new(_is_sendfile, 0)),
+                            _write_max_block_time_ms,
+                        ));
+                    }
+                    return Err(e);
+                }
+                break wn.unwrap();
             }
 
+            _is_sendfile = false;
             let end = buffer.start + n;
-            let wn = w
-                .write(&buffer.datas[buffer.start as usize..end as usize])
-                .await
-                .map_err(|e| anyhow!("err:w.write_all => e:{}", e))? as u64;
-
-            break wn;
+            if false {
+                let ret = tokio::time::timeout(
+                    tokio::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS),
+                    w.write(&buffer.datas[buffer.start as usize..end as usize]),
+                )
+                .await;
+                if ret.is_err() {
+                    return Ok((
+                        StreamStatus::StreamFull(StreamFullInfo::default()),
+                        _write_max_block_time_ms,
+                    ));
+                }
+                break ret.unwrap()? as u64;
+            } else {
+                #[cfg(feature = "anyproxy-write-block-time-ms")]
+                let write_start_time = Instant::now();
+                let write_size = w
+                    .write(&buffer.datas[buffer.start as usize..end as usize])
+                    .await? as u64;
+                #[cfg(feature = "anyproxy-write-block-time-ms")]
+                {
+                    _write_max_block_time_ms = write_start_time.elapsed().as_millis();
+                }
+                break write_size;
+            };
         };
 
         log::trace!("{}, wn:{}", StreamStream::get_flag(is_client), wn);
@@ -432,9 +482,12 @@ impl StreamStream {
         }
 
         if wn != n {
-            return Ok(StreamStatus::StreamFull(wn));
+            return Ok((
+                StreamStatus::StreamFull(StreamFullInfo::new(_is_sendfile, wn)),
+                _write_max_block_time_ms,
+            ));
         }
-        return Ok(StreamStatus::Ok(wn));
+        return Ok((StreamStatus::Ok(wn), _write_max_block_time_ms));
     }
 }
 
@@ -457,6 +510,7 @@ impl StreamStreamMemory {
             .borrow_mut()
             .add_work_time(&format!("{} cache", StreamStream::get_flag(is_client)));
 
+        let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
         let mut ssc = StreamStreamContext {
             stream_cache_size: 0,
             tmp_file_size: 0,
@@ -465,6 +519,12 @@ impl StreamStreamMemory {
             curr_limit_rate: limit.curr_limit_rate.clone(),
             max_stream_cache_size: 0,
             max_tmp_file_size: 0,
+            is_tmp_file_io_page: true,
+            page_size,
+            min_merge_cache_buffer_size: (page_size / 2) as u64,
+            min_cache_buffer_size: page_size * *default_config::MIN_CACHE_BUFFER_NUM,
+            min_read_buffer_size: page_size,
+            min_cache_file_size: page_size * 256,
         };
 
         let mut is_first = true;
@@ -482,9 +542,9 @@ impl StreamStreamMemory {
             if stream_info.borrow().debug_is_open_print {
                 let stream_info = stream_info.borrow();
                 log::info!(
-                    "{}---{}---{}:read buffer.size:{}",
+                    "{}---{:?}---{}:read buffer.size:{}",
                     stream_info.request_id,
-                    stream_info.local_addr,
+                    stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(is_client),
                     buffer.size,
                 );
@@ -505,16 +565,16 @@ impl StreamStreamMemory {
                 if stream_info.borrow().debug_is_open_print {
                     let stream_info = stream_info.borrow();
                     log::info!(
-                        "{}---{}---{}:write start:{}, size:{}",
+                        "{}---{:?}---{}:write start:{}, size:{}",
                         stream_info.request_id,
-                        stream_info.local_addr,
+                        stream_info.server_stream_info.local_addr,
                         StreamStream::get_flag(is_client),
                         buffer.start,
                         buffer.size
                     );
                 }
 
-                let stream_status = StreamStream::stream_limit_write(
+                let (stream_status, _write_max_block_time_ms) = StreamStream::stream_limit_write(
                     &mut buffer,
                     &mut ssc,
                     &mut w,
@@ -527,12 +587,19 @@ impl StreamStreamMemory {
                 if stream_info.borrow().debug_is_open_print {
                     let stream_info = stream_info.borrow();
                     log::info!(
-                        "{}---{}---{}: stream_status:{:?}",
+                        "{}---{:?}---{}: stream_status:{:?}",
                         stream_info.request_id,
-                        stream_info.local_addr,
+                        stream_info.server_stream_info.local_addr,
                         StreamStream::get_flag(is_client),
                         stream_status
                     );
+                }
+
+                #[cfg(feature = "anyproxy-write-block-time-ms")]
+                {
+                    if _write_max_block_time_ms > stream_info.borrow().write_max_block_time_ms {
+                        stream_info.borrow_mut().write_max_block_time_ms = _write_max_block_time_ms;
+                    }
                 }
 
                 if let StreamStatus::Limit = stream_status {
@@ -562,6 +629,7 @@ pub struct StreamStreamCacheOrFile<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> 
     #[cfg(unix)]
     fr_fd: i32,
     fr: Arc<Mutex<File>>,
+    write_err: Option<Result<()>>,
 }
 
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> {
@@ -573,12 +641,11 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
         is_client: bool,
         stream_cache_size: usize,
     ) -> Result<StreamStreamCacheOrFile<R, W>> {
-        let maximum_capacity =
-            std::cmp::max(stream_cache_size as u64, MIN_MERGER_CACHE_BUFFER * 32);
+        let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
+        let maximum_capacity = std::cmp::max(stream_cache_size as u64, page_size as u64 * 32);
 
         let initial_capacity = 8;
-        let maximum_capacity =
-            (maximum_capacity / MIN_MERGER_CACHE_BUFFER) as usize + initial_capacity;
+        let maximum_capacity = (maximum_capacity / page_size as u64) as usize + initial_capacity;
         let buffer_pool = DynamicPool::new(
             initial_capacity,
             maximum_capacity,
@@ -614,7 +681,19 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             #[cfg(unix)]
             fr_fd,
             fr,
+            write_err: None,
         })
+    }
+    pub fn is_empty(&self) -> bool {
+        if self.caches.len() <= 0
+            && self.left_buffer.is_none()
+            && (self.read_buffer.is_none()
+                || (self.read_buffer.is_some()
+                    && self.read_buffer.as_ref().unwrap().read_size == 0))
+        {
+            return true;
+        }
+        return false;
     }
     pub async fn start(
         &mut self,
@@ -635,6 +714,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             .borrow_mut()
             .add_work_time(&format!("{} file", StreamStream::get_flag(self.is_client)));
 
+        let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
         let mut ssc = StreamStreamContext {
             stream_cache_size: config_ctx.stream.stream_cache_size as u64,
             tmp_file_size: limit.tmp_file_size,
@@ -643,112 +723,83 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             curr_limit_rate: limit.curr_limit_rate.clone(),
             max_stream_cache_size: config_ctx.stream.stream_cache_size as u64,
             max_tmp_file_size: limit.tmp_file_size,
+            is_tmp_file_io_page: config_ctx.stream.is_tmp_file_io_page,
+            page_size,
+            min_merge_cache_buffer_size: (page_size / 2) as u64,
+            min_cache_buffer_size: page_size * *default_config::MIN_CACHE_BUFFER_NUM,
+            min_read_buffer_size: page_size,
+            min_cache_file_size: page_size * 256,
         };
 
-        if ssc.stream_cache_size > 0 && ssc.stream_cache_size < MIN_CACHE_BUFFER as u64 {
-            ssc.stream_cache_size = MIN_CACHE_BUFFER as u64;
-            ssc.max_stream_cache_size = MIN_CACHE_BUFFER as u64;
+        if ssc.stream_cache_size > 0 && ssc.stream_cache_size < ssc.min_cache_buffer_size as u64 {
+            ssc.stream_cache_size = ssc.min_cache_buffer_size as u64;
+            ssc.max_stream_cache_size = ssc.min_cache_buffer_size as u64;
         }
 
-        if ssc.tmp_file_size > 0 && ssc.tmp_file_size < MIN_CACHE_FILE as u64 {
-            ssc.tmp_file_size = MIN_CACHE_FILE as u64;
-            ssc.max_tmp_file_size = MIN_CACHE_FILE as u64;
+        if ssc.tmp_file_size > 0 && ssc.tmp_file_size < ssc.min_cache_file_size as u64 {
+            ssc.tmp_file_size = ssc.min_cache_file_size as u64;
+            ssc.max_tmp_file_size = ssc.min_cache_file_size as u64;
+        }
+
+        if ssc.stream_cache_size > 0 {
+            let stream_cache_size =
+                (ssc.stream_cache_size / ssc.page_size as u64 + 1) * ssc.page_size as u64;
+            ssc.stream_cache_size = stream_cache_size;
+            ssc.max_stream_cache_size = stream_cache_size;
+        }
+
+        if ssc.tmp_file_size > 0 {
+            let tmp_file_size =
+                (ssc.tmp_file_size / ssc.page_size as u64 + 1) * ssc.page_size as u64;
+            ssc.tmp_file_size = tmp_file_size;
+            ssc.max_tmp_file_size = tmp_file_size;
         }
 
         let mut is_first = true;
+        let mut _is_runing = true;
         loop {
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{}---{}:read file stream_cache_size:{}, tmp_file_size:{}, read_err.is_none:{}",
+                    "{}---{:?}---{}:read file stream_cache_size:{}, tmp_file_size:{}, read_err.is_none:{}, write_err.is_none:{}, is_empty:{}",
                     stream_info.request_id,
-                    stream_info.local_addr,
+                    stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
                     ssc.stream_cache_size,
                     ssc.tmp_file_size,
                     self.read_err.is_none(),
+                    self.write_err.is_none(),
+                    self.is_empty(),
                 );
             }
 
-            if (ssc.stream_cache_size > 0 || ssc.tmp_file_size > 0) && self.read_err.is_none() {
-                let mut buffer = if self.read_buffer.is_some() {
-                    self.read_buffer.take().unwrap()
-                } else {
-                    self.buffer_pool.take()
-                };
+            if _is_runing
+                && (self.write_err.is_some()
+                    || (self.read_err.is_some() && self.is_empty())
+                    || (self.stream_info.borrow().close_num >= 1 && self.is_empty())
+                    || self.is_sendfile_close())
+            {
+                _is_runing = false;
+                self.stream_info.borrow_mut().close_num += 1;
+                loop {
+                    if self.stream_info.borrow().close_num >= 2 {
+                        if self.write_err.is_some() {
+                            self.write_err.take().unwrap()?;
+                        }
 
-                buffer.resize(None);
-                buffer.is_cache = false;
-
-                if buffer.size < buffer.read_size {
-                    log::error!("err:buffer.size < buffer.read_size");
-                    return Err(anyhow!("err:buffer.size < buffer.read_size"));
-                }
-
-                if ssc.stream_cache_size < buffer.read_size && ssc.tmp_file_size < buffer.read_size
-                {
-                    log::error!("err:buffer.read_size");
-                    return Err(anyhow!("err:buffer.read_size"));
-                }
-
-                if ssc.stream_cache_size > 0 && ssc.stream_cache_size >= buffer.read_size {
-                    buffer.is_cache = true;
-                    if ssc.stream_cache_size < buffer.size {
-                        buffer.size = ssc.stream_cache_size;
-                    }
-                }
-
-                if !buffer.is_cache {
-                    if ssc.tmp_file_size < buffer.size {
-                        buffer.size = ssc.tmp_file_size;
-                    }
-                }
-
-                let ret: std::io::Result<usize> = async {
-                    if buffer.size == buffer.read_size {
-                        self.check_sleep(false).await;
-                        return Ok(0);
-                    }
-
-                        let sleep_read_time_millis =   match &self.stream_status {
-                            StreamStatus::Limit => {
-                                LIMIT_SLEEP_TIME_MILLIS
-                            }
-                            StreamStatus::StreamFull(_) => {
-                                NOT_SLEEP_TIME_MILLIS
-                            }
-                            StreamStatus::Ok(_) => {
-                                NOT_SLEEP_TIME_MILLIS
-                            }
-                            StreamStatus::DataEmpty => {
-                                if buffer.read_size > 0  {
-                                    MIN_SLEEP_TIME_MILLIS
-                                }else {
-                                    NORMAL_SLEEP_TIME_MILLIS
-                                }
-                            }
-                        };
-
-                    let read_size = buffer.read_size as usize;
-                    let end_size = buffer.size as usize;
-                    tokio::select! {
-                        biased;
-                        ret = self.r.read(&mut buffer.datas[read_size..end_size]) => {
-                            let n = ret?;
-                            return Ok(n);
-                        },
-                        _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
-                            return Ok(0);
-                        },
-                        else => {
-                            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                            "err:do_stream_to_stream_or_file select close"
-                        )));
+                        if self.read_err.is_some() {
+                            self.read_err.take().unwrap()?;
                         }
                     }
-                }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                        NORMAL_SLEEP_TIME_MILLIS + 100,
+                    ))
                     .await;
+                }
+            }
 
+            if (ssc.stream_cache_size > 0 || ssc.tmp_file_size > 0) && self.read_err.is_none() {
+                let (ret, buffer) = self.read(&mut ssc).await?;
                 if is_first {
                     is_first = false;
                     self.stream_info
@@ -757,22 +808,124 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 }
                 self.write_buffer(ret, buffer, &mut ssc).await?;
             } else {
-                self.check_sleep(true).await;
+                self.check_sleep().await;
             }
             self.stream_status = self.write(&mut ssc).await?;
         }
     }
 
-    pub async fn check_sleep(&self, is_stream_full_err: bool) {
+    pub fn is_sendfile_close(&self) -> bool {
+        #[cfg(unix)]
+        {
+            let is_stream_full = if let StreamStatus::StreamFull(_) = self.stream_status {
+                true
+            } else {
+                false
+            };
+            if is_stream_full && self.stream_info.borrow().close_num >= 1 && self.sendfile.is_some()
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub async fn read(
+        &mut self,
+        ssc: &mut StreamStreamContext,
+    ) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
+        let mut buffer = if self.read_buffer.is_some() {
+            self.read_buffer.take().unwrap()
+        } else {
+            self.buffer_pool.take()
+        };
+
+        buffer.resize(None);
+        buffer.is_cache = false;
+
+        if buffer.size < buffer.read_size {
+            log::error!("err:buffer.size < buffer.read_size");
+            return Err(anyhow!("err:buffer.size < buffer.read_size"));
+        }
+
+        if ssc.stream_cache_size < buffer.read_size && ssc.tmp_file_size < buffer.read_size {
+            log::error!("err:buffer.read_size");
+            return Err(anyhow!("err:buffer.read_size"));
+        }
+
+        if ssc.stream_cache_size > 0 && ssc.stream_cache_size >= buffer.read_size {
+            buffer.is_cache = true;
+            if ssc.stream_cache_size < buffer.size {
+                buffer.size = ssc.stream_cache_size;
+            }
+        }
+
+        if !buffer.is_cache {
+            if ssc.tmp_file_size < buffer.size {
+                buffer.size = ssc.tmp_file_size;
+            }
+        }
+
+        let ret: std::io::Result<usize> = async {
+            if buffer.size == buffer.read_size {
+                self.check_sleep().await;
+                return Ok(0);
+            }
+
+            let sleep_read_time_millis = match &self.stream_status {
+                StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
+                StreamStatus::StreamFull(info) => {
+                    if info.is_sendfile {
+                        SENDFILE_FULL_SLEEP_TIME_MILLIS
+                    } else {
+                        NOT_SLEEP_TIME_MILLIS
+                    }
+                }
+                StreamStatus::Ok(_) => NOT_SLEEP_TIME_MILLIS,
+                StreamStatus::DataEmpty => {
+                    if buffer.read_size > 0 {
+                        MIN_SLEEP_TIME_MILLIS
+                    } else {
+                        NORMAL_SLEEP_TIME_MILLIS
+                    }
+                }
+            };
+
+            let read_size = buffer.read_size as usize;
+            let end_size = buffer.size as usize;
+            tokio::select! {
+                biased;
+                ret = self.r.read(&mut buffer.datas[read_size..end_size]) => {
+                    let n = ret?;
+                    return Ok(n);
+                },
+                _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
+                    return Ok(0);
+                },
+                else => {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
+                    "err:do_stream_to_stream_or_file select close"
+                )));
+                }
+            }
+        }
+        .await;
+
+        Ok((ret, buffer))
+    }
+
+    pub async fn check_sleep(&self) {
         match &self.stream_status {
             StreamStatus::Limit => {
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            StreamStatus::StreamFull(_) => {
-                if is_stream_full_err {
-                    log::error!("err:StreamStatus::StreamFull");
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
+            StreamStatus::StreamFull(info) => {
+                let sleep_time = if info.is_sendfile {
+                    SENDFILE_FULL_SLEEP_TIME_MILLIS
+                } else {
+                    LIMIT_SLEEP_TIME_MILLIS
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(sleep_time)).await;
             }
             StreamStatus::Ok(_) => {
                 log::error!("err:StreamStatus::Ok");
@@ -816,12 +969,12 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
 
             if buffer.size != buffer.read_size {
                 if self.caches.len() > 0 || self.left_buffer.is_some() {
-                    if buffer.read_size < MIN_READ_BUFFER as u64 {
+                    if buffer.read_size < ssc.min_read_buffer_size as u64 {
                         self.read_buffer = Some(buffer);
                         return Ok(());
                     }
                 } else {
-                    if old_read_size <= 0 && buffer.read_size < MIN_READ_BUFFER as u64 {
+                    if old_read_size <= 0 && buffer.read_size < ssc.min_read_buffer_size as u64 {
                         self.read_buffer = Some(buffer);
                         return Ok(());
                     }
@@ -829,13 +982,13 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             }
         }
         buffer.size = buffer.read_size;
-        let size = buffer.size;
+        let mut size = buffer.size;
         if self.stream_info.borrow().debug_is_open_print {
             let stream_info = self.stream_info.borrow();
             log::info!(
-                "{}---{}---{}:read file is_cache:{}, size:{}",
+                "{}---{:?}---{}:read file is_cache:{}, size:{}",
                 stream_info.request_id,
-                stream_info.local_addr,
+                stream_info.server_stream_info.local_addr,
                 StreamStream::get_flag(self.is_client),
                 buffer.is_cache,
                 size,
@@ -848,8 +1001,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             if last_cache.is_some() {
                 let last_cache = last_cache.unwrap();
                 if let StreamCache::Buffer(last_cache) = last_cache {
-                    if last_cache.size < MIN_MERGER_CACHE_BUFFER
-                        || buffer.size < MIN_MERGER_CACHE_BUFFER
+                    if last_cache.size < ssc.min_merge_cache_buffer_size
+                        || buffer.size < ssc.min_merge_cache_buffer_size
                     {
                         let resize = last_cache.size as usize;
                         last_cache.resize(Some(resize));
@@ -864,6 +1017,29 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             self.caches.push_back(StreamCache::Buffer(buffer));
             return Ok(());
         }
+
+        if ssc.is_tmp_file_io_page {
+            let next_seek_end = (self.fw_seek / ssc.page_size as u64 + 1) * ssc.page_size as u64;
+            let fw_seek_end = self.fw_seek + size;
+            let fw_seek_page = (fw_seek_end / ssc.page_size as u64) * ssc.page_size as u64;
+            if fw_seek_end > next_seek_end {
+                let left_size = fw_seek_end - fw_seek_page;
+                if left_size > 0 {
+                    buffer.size = size - left_size;
+                    let copy_start = buffer.size;
+                    let mut left_buffer = self.buffer_pool.take();
+                    left_buffer
+                        .datas
+                        .extend_from_slice(&buffer.datas[copy_start as usize..size as usize]);
+                    left_buffer.read_size = left_size;
+                    left_buffer.size = left_size;
+                    self.read_buffer = Some(left_buffer);
+
+                    size = buffer.size;
+                }
+            }
+        }
+
         ssc.tmp_file_size -= size;
         let fw = self.fw.clone();
         let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
@@ -887,8 +1063,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             return Err(e);
         }
 
-        #[cfg(unix)]
-        if self.sendfile.is_some() {
+        if ssc.is_tmp_file_io_page {
             let mut is_first = true;
             let mut size = size;
             loop {
@@ -897,9 +1072,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 }
 
                 let w_size = if is_first {
-                    PAGE_SIZE as u64 - self.fw_seek % PAGE_SIZE as u64
+                    ssc.page_size as u64 - self.fw_seek % ssc.page_size as u64
                 } else {
-                    PAGE_SIZE as u64
+                    ssc.page_size as u64
                 };
                 let w_size = if w_size > size { size } else { w_size };
 
@@ -909,7 +1084,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
 
                 if is_first {
                     is_first = false;
-                    if w_size != PAGE_SIZE as u64 {
+                    if w_size != ssc.page_size as u64 {
                         let last_cache = self.caches.back_mut();
                         if last_cache.is_some() {
                             let last_cache = last_cache.unwrap();
@@ -934,7 +1109,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
         if last_cache.is_some() {
             let last_cache = last_cache.unwrap();
             if let StreamCache::File(last_cache) = last_cache {
-                if last_cache.size < MIN_MERGER_CACHE_BUFFER || size < MIN_MERGER_CACHE_BUFFER {
+                if last_cache.size < ssc.min_merge_cache_buffer_size
+                    || size < ssc.min_merge_cache_buffer_size
+                {
                     last_cache.size += size;
                     return Ok(());
                 }
@@ -955,13 +1132,6 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             log::trace!("{}, caches", StreamStream::get_flag(self.is_client));
             let cache = self.caches.pop_front();
             if cache.is_none() {
-                if self.read_err.is_some() {
-                    log::trace!(
-                        "{}, read_err.is_some() return",
-                        StreamStream::get_flag(self.is_client)
-                    );
-                    self.read_err.take().unwrap()?;
-                }
                 return Ok(None);
             }
             let cache = cache.unwrap();
@@ -1031,9 +1201,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{}---{}:read file buffer.start:{}, buffer.size:{}",
+                    "{}---{:?}---{}:read file buffer.start:{}, buffer.size:{}",
                     stream_info.request_id,
-                    stream_info.local_addr,
+                    stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
                     buffer.start,
                     buffer.size,
@@ -1048,15 +1218,34 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 #[cfg(unix)]
                 &self.sendfile,
             )
-            .await
-            .map_err(|e| anyhow!("err:StreamStream.stream_write => e:{}", e))?;
+            .await;
+
+            if let Err(ref e) = stream_status {
+                log::debug!(
+                    "{}, write_err = Some(ret)",
+                    StreamStream::get_flag(self.is_client)
+                );
+                if e.kind() != std::io::ErrorKind::ConnectionReset {
+                    return Err(anyhow!("err:StreamStream.stream_write => e:{}", e))?;
+                }
+                self.write_err = Some(Err(anyhow!("err:StreamStream.stream_write => e:{}", e)));
+                return Ok(StreamStatus::StreamFull(StreamFullInfo::default()));
+            }
+            let (stream_status, _write_max_block_time_ms) = stream_status.unwrap();
+            #[cfg(feature = "anyproxy-write-block-time-ms")]
+            {
+                if _write_max_block_time_ms > self.stream_info.borrow().write_max_block_time_ms {
+                    self.stream_info.borrow_mut().write_max_block_time_ms =
+                        _write_max_block_time_ms;
+                }
+            }
 
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{}---{}:read file stream_status:{:?}, stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{} ",
+                    "{}---{:?}---{}:read file stream_status:{:?}, stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{} ",
                     stream_info.request_id,
-                    stream_info.local_addr,
+                    stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
                     stream_status,
                     ssc.stream_cache_size,
@@ -1068,7 +1257,6 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             if buffer.start < buffer.size {
                 self.left_buffer = Some(buffer);
             }
-
             match &stream_status {
                 StreamStatus::Limit => {
                     return Ok(stream_status);
@@ -1085,7 +1273,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             }
 
             if self.stream_info.borrow().is_break_stream_write {
-                return Ok(StreamStatus::StreamFull(0));
+                return Ok(StreamStatus::StreamFull(StreamFullInfo::default()));
             }
         }
     }

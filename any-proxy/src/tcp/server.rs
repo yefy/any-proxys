@@ -1,6 +1,7 @@
 use super::util as tcp_util;
 use crate::config::config_toml::TcpConfig as Config;
 use crate::stream::server;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::util;
 use crate::Protocol7;
@@ -10,13 +11,14 @@ use async_trait::async_trait;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
 pub struct Server {
     addr: SocketAddr,
     reuseport: bool,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Server {
@@ -24,7 +26,7 @@ impl Server {
         Ok(Server {
             addr,
             reuseport,
-            config,
+            config: Arc::new(config),
         })
     }
 }
@@ -62,11 +64,11 @@ impl server::Server for Server {
 
 pub struct Listener {
     listener: TcpListener,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, config: Config) -> Result<Listener> {
+    pub fn new(listener: TcpListener, config: Arc<Config>) -> Result<Listener> {
         Ok(Listener { listener, config })
     }
 }
@@ -102,11 +104,15 @@ impl server::Listener for Listener {
 pub struct Connection {
     stream: Option<TcpStream>,
     remote_addr: Option<SocketAddr>,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Connection {
-    pub fn new(stream: TcpStream, remote_addr: SocketAddr, config: Config) -> Result<Connection> {
+    pub fn new(
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+        config: Arc<Config>,
+    ) -> Result<Connection> {
         Ok(Connection {
             stream: Some(stream),
             remote_addr: Some(remote_addr),
@@ -117,17 +123,7 @@ impl Connection {
 
 #[async_trait(?Send)]
 impl server::Connection for Connection {
-    async fn stream(
-        &mut self,
-    ) -> Result<
-        Option<(
-            Protocol7,
-            stream_flow::StreamFlow,
-            SocketAddr,
-            Option<SocketAddr>,
-            Option<String>,
-        )>,
-    > {
+    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
         if self.stream.is_none() {
             return Ok(None);
         }
@@ -144,11 +140,13 @@ impl server::Connection for Connection {
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);
         Ok(Some((
-            Protocol7::Tcp,
             stream,
-            remote_addr,
-            Some(local_addr),
-            None,
+            ServerStreamInfo {
+                protocol7: Protocol7::Tcp,
+                remote_addr: remote_addr,
+                local_addr: Some(local_addr),
+                domain: None,
+            },
         )))
     }
 }

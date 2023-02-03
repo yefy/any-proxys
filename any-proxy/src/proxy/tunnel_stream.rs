@@ -1,16 +1,14 @@
 use super::stream_info::StreamInfo;
-use crate::io::buf_reader::BufReader;
-use crate::io::buf_stream::BufStream;
-use crate::io::buf_writer::BufWriter;
+use crate::protopack;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
-use crate::{protopack, Protocol7};
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct TunnelStream {}
 
@@ -18,14 +16,18 @@ impl TunnelStream {
     pub async fn tunnel_stream(
         tunnel_publish: tunnel_server::Publish,
         tunnel2_publish: tunnel2_server::Publish,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        protocol7: Protocol7,
-        mut client_buf_reader: BufReader<stream_flow::StreamFlow>,
+        server_stream_info: Arc<ServerStreamInfo>,
+        mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
         stream_info: Rc<RefCell<StreamInfo>>,
-    ) -> Result<(bool, Option<BufReader<stream_flow::StreamFlow>>)> {
-        log::debug!("server protocol7:{}", protocol7.to_string());
-        if protocol7.is_tunnel() {
+    ) -> Result<(
+        bool,
+        Option<any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>>,
+    )> {
+        log::debug!(
+            "server protocol7:{}",
+            server_stream_info.protocol7.to_string()
+        );
+        if server_stream_info.protocol7.is_tunnel() {
             return Ok((false, Some(client_buf_reader)));
         }
 
@@ -38,9 +40,15 @@ impl TunnelStream {
             log::debug!("tunnel_hello:{:?}", tunnel_hello);
             stream_info.borrow_mut().is_discard_flow = true;
             stream_info.borrow_mut().is_discard_timeout = true;
-            let client_buf_stream = BufStream::from(BufWriter::new(client_buf_reader));
+            let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+                any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+            );
             tunnel_publish
-                .push_peer_stream(client_buf_stream, local_addr, remote_addr)
+                .push_peer_stream(
+                    client_buf_stream,
+                    server_stream_info.local_addr.clone().unwrap(),
+                    server_stream_info.remote_addr,
+                )
                 .await
                 .map_err(|e| anyhow!("err:self.tunnel_publish.push_peer_stream => e:{}", e))?;
             return Ok((true, None));
@@ -55,9 +63,15 @@ impl TunnelStream {
             log::debug!("tunnel_hello:{:?}", tunnel_hello);
             stream_info.borrow_mut().is_discard_flow = true;
             stream_info.borrow_mut().is_discard_timeout = true;
-            let client_buf_stream = BufStream::from(BufWriter::new(client_buf_reader));
+            let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+                any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+            );
             tunnel2_publish
-                .push_peer_stream(client_buf_stream, local_addr, remote_addr)
+                .push_peer_stream(
+                    client_buf_stream,
+                    server_stream_info.local_addr.clone().unwrap(),
+                    server_stream_info.remote_addr,
+                )
                 .await
                 .map_err(|e| anyhow!("err:self.tunnel2_publish.push_peer_stream => e:{}", e))?;
             return Ok((true, None));

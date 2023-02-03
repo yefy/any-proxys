@@ -35,10 +35,10 @@ fn default_quic_send_buffer_size() -> usize {
     10485760
 }
 fn default_quic_send_timeout() -> usize {
-    10
+    60
 }
 fn default_quic_recv_timeout() -> usize {
-    10
+    60
 }
 fn default_quic_connect_timeout() -> usize {
     10
@@ -95,10 +95,10 @@ fn default_tcp_nodelay() -> bool {
     true
 }
 fn default_tcp_send_timeout() -> usize {
-    10
+    60
 }
 fn default_tcp_recv_timeout() -> usize {
-    10
+    60
 }
 fn default_tcp_connect_timeout() -> usize {
     10
@@ -322,6 +322,9 @@ fn default_debug_print_access_log_time() -> u64 {
 fn default_debug_print_stream_flow_time() -> u64 {
     0
 }
+fn default_is_tmp_file_io_page() -> bool {
+    true
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
@@ -333,6 +336,8 @@ pub struct StreamConfig {
     pub debug_print_access_log_time: u64,
     #[serde(default = "default_debug_print_stream_flow_time")]
     pub debug_print_stream_flow_time: u64,
+    #[serde(default = "default_is_tmp_file_io_page")]
+    pub is_tmp_file_io_page: bool,
 }
 
 fn default_access_log() -> bool {
@@ -344,7 +349,7 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
+    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
 }
 
 fn default_access_log_stdout() -> bool {

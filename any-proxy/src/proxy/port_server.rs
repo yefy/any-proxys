@@ -82,45 +82,41 @@ impl PortServer {
             shutdown_timeout,
             listen_server,
             self.listen_shutdown_tx.clone(),
-            move |protocol_name, stream, local_addr, remote_addr, ssl_domain, executors| {
-                async move {
-                    let port_config_listen = {
-                        let port_config_listen_map_borrow = port_config_listen_map.borrow_mut();
-                        let port_listen = port_config_listen_map_borrow.get(&key);
-                        if port_listen.is_none() {
-                            log::error!(
-                                "err:port_config_listen_map => key:{} invalid, group_version:{}",
-                                key,
-                                executors.group_version
-                            );
-                            return Ok(());
-                        }
-                        let port_listen = port_listen.unwrap();
-                        let port_config_listen = port_listen.port_config_listen.clone();
-                        port_config_listen
-                    };
+            move |stream, server_stream_info, executors| async move {
+                let port_config_listen = {
+                    let port_config_listen_map_borrow = port_config_listen_map.borrow_mut();
+                    let port_listen = port_config_listen_map_borrow.get(&key);
+                    if port_listen.is_none() {
+                        log::error!(
+                            "err:port_config_listen_map => key:{} invalid, group_version:{}",
+                            key,
+                            executors.group_version
+                        );
+                        return Ok(());
+                    }
+                    let port_listen = port_listen.unwrap();
+                    let port_config_listen = port_listen.port_config_listen.clone();
+                    port_config_listen
+                };
 
-                    let port_stream = port_stream::PortStream::new(
-                        executors,
-                        tunnel_publish,
-                        tunnel2_publish,
-                        local_addr,
-                        remote_addr,
-                        ssl_domain,
-                        port_config_listen,
-                        tmp_file_id,
-                        #[cfg(feature = "anyproxy-ebpf")]
-                        ebpf_add_sock_hash,
-                        session_id,
-                    )
-                    .map_err(|e| anyhow!("err:PortStream::new => e:{}", e))?;
-                    port_stream
-                        .start(protocol_name, stream)
-                        .await
-                        .map_err(|e| anyhow!("err:port_stream.start => e:{}", e))?;
+                let port_stream = port_stream::PortStream::new(
+                    executors,
+                    server_stream_info,
+                    tunnel_publish,
+                    tunnel2_publish,
+                    port_config_listen,
+                    tmp_file_id,
+                    #[cfg(feature = "anyproxy-ebpf")]
+                    ebpf_add_sock_hash,
+                    session_id,
+                )
+                .map_err(|e| anyhow!("err:PortStream::new => e:{}", e))?;
+                port_stream
+                    .start(stream)
+                    .await
+                    .map_err(|e| anyhow!("err:port_stream.start => e:{}", e))?;
 
-                    Ok(())
-                }
+                Ok(())
             },
         )
         .await

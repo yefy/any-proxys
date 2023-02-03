@@ -2,10 +2,11 @@ use super::StreamConfigContext;
 use crate::config::config_toml::UpstreamDispatch;
 use crate::protopack::anyproxy::AnyproxyHello;
 use crate::stream::connect::ConnectInfo;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,12 +114,10 @@ impl ErrStatus200 for ErrStatusUpstream {
 }
 
 pub struct StreamInfo {
+    pub server_stream_info: Arc<ServerStreamInfo>,
     pub ssl_domain: Option<String>,
     pub local_domain: Option<String>,
     pub remote_domain: Option<String>,
-    pub local_protocol_name: String,
-    pub local_addr: SocketAddr,
-    pub remote_addr: SocketAddr,
     pub session_time: f32,
     pub debug_is_open_print: bool,
     pub request_id: String,
@@ -140,22 +139,20 @@ pub struct StreamInfo {
     pub upstream_connect_info: Option<ConnectInfo>,
     pub debug_is_open_stream_work_times: bool,
     pub is_break_stream_write: bool,
+    pub close_num: usize,
+    pub write_max_block_time_ms: u128,
 }
 
 impl StreamInfo {
     pub fn new(
-        local_protocol_name: String,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
+        server_stream_info: Arc<ServerStreamInfo>,
         debug_is_open_stream_work_times: bool,
     ) -> StreamInfo {
         StreamInfo {
+            server_stream_info,
             ssl_domain: None,
             local_domain: None,
             remote_domain: None,
-            local_protocol_name,
-            local_addr,
-            remote_addr,
             session_time: 0.0,
             debug_is_open_print: false,
             request_id: "".to_string(),
@@ -181,6 +178,8 @@ impl StreamInfo {
             upstream_connect_info: None,
             debug_is_open_stream_work_times,
             is_break_stream_write: false,
+            close_num: 0,
+            write_max_block_time_ms: 0,
         }
     }
 

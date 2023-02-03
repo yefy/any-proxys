@@ -1,6 +1,4 @@
 use super::UpstreamData;
-use crate::io::buf_reader::BufReader;
-use crate::io::buf_writer::BufWriter;
 use crate::protopack;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use anyhow::anyhow;
@@ -101,8 +99,8 @@ impl UpstreamHeartbeatServer {
                 upstream_connect_info.remote_addr
             );
             let (r, w) = upstream_stream.split();
-            let mut r = BufReader::new(r);
-            let mut w = BufWriter::new(w);
+            let mut r = any_base::io::buf_reader::BufReader::new(r);
+            let mut w = any_base::io::buf_writer::BufWriter::new(w);
 
             let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
 

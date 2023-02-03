@@ -17,18 +17,12 @@ pub mod tunnel_stream;
 
 use crate::config::config_toml;
 use crate::upstream::UpstreamData;
+use crate::util::default_config;
 use dynamic_pool::{DynamicPoolItem, DynamicReset};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
-
-const MIN_MERGER_CACHE_BUFFER: u64 = 4096;
-const MIN_CACHE_BUFFER: usize = 8192 * 2;
-const MIN_READ_BUFFER: usize = 1024;
-const MIN_CACHE_FILE: usize = 1024 * 1024 * 10;
-#[cfg(unix)]
-const PAGE_SIZE: usize = 4096;
 
 pub struct StreamConfigContext {
     pub common: config_toml::CommonConfig,
@@ -81,7 +75,10 @@ impl DynamicReset for StreamCacheBuffer {
 impl StreamCacheBuffer {
     fn new() -> Self {
         StreamCacheBuffer {
-            datas: Vec::with_capacity(MIN_CACHE_BUFFER),
+            datas: Vec::with_capacity(
+                default_config::PAGE_SIZE.load(Ordering::Relaxed)
+                    * *default_config::MIN_CACHE_BUFFER_NUM,
+            ),
             start: 0,
             size: 0,
             is_cache: false,
@@ -103,7 +100,8 @@ impl StreamCacheBuffer {
 
     fn resize(&mut self, data_size: Option<usize>) {
         let data_size = if data_size.is_none() {
-            MIN_CACHE_BUFFER
+            default_config::PAGE_SIZE.load(Ordering::Relaxed)
+                * *default_config::MIN_CACHE_BUFFER_NUM
         } else {
             data_size.unwrap()
         };
@@ -125,6 +123,12 @@ pub struct StreamStreamContext {
     pub curr_limit_rate: Arc<AtomicU64>,
     pub max_stream_cache_size: u64,
     pub max_tmp_file_size: u64,
+    pub is_tmp_file_io_page: bool,
+    pub page_size: usize,
+    pub min_merge_cache_buffer_size: u64,
+    pub min_cache_buffer_size: usize,
+    pub min_read_buffer_size: usize,
+    pub min_cache_file_size: usize,
 }
 
 #[derive(Clone)]

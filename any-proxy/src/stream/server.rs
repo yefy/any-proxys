@@ -15,6 +15,13 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::sync::broadcast;
 
+pub struct ServerStreamInfo {
+    pub protocol7: Protocol7,
+    pub remote_addr: SocketAddr,
+    pub local_addr: Option<SocketAddr>,
+    pub domain: Option<String>,
+}
+
 #[async_trait(?Send)]
 pub trait Server {
     async fn listen(&self) -> Result<Box<dyn Listener>>;
@@ -33,17 +40,7 @@ pub trait Listener {
 
 #[async_trait(?Send)]
 pub trait Connection {
-    async fn stream(
-        &mut self,
-    ) -> Result<
-        Option<(
-            Protocol7,
-            stream_flow::StreamFlow,
-            SocketAddr,
-            Option<SocketAddr>,
-            Option<String>,
-        )>,
-    >;
+    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>>;
 }
 
 pub async fn accept<A: Listener + ?Sized>(
@@ -87,15 +84,7 @@ pub async fn stream<C: Connection + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
     shutdown_rx2: &mut broadcast::Receiver<()>,
     connection: &mut Box<C>,
-) -> Result<
-    Option<(
-        Protocol7,
-        stream_flow::StreamFlow,
-        SocketAddr,
-        Option<SocketAddr>,
-        Option<String>,
-    )>,
-> {
+) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
     tokio::select! {
         biased;
         stream = connection.stream() => {
@@ -124,16 +113,7 @@ pub async fn listen<S, F>(
     service: S,
 ) -> Result<()>
 where
-    S: FnOnce(
-            Protocol7,
-            stream_flow::StreamFlow,
-            SocketAddr,
-            SocketAddr,
-            Option<String>,
-            ExecutorsLocal,
-        ) -> F
-        + 'static
-        + Clone,
+    S: FnOnce(stream_flow::StreamFlow, ServerStreamInfo, ExecutorsLocal) -> F + 'static + Clone,
     F: Future<Output = Result<()>> + 'static,
 {
     let mut executor_local_spawn = ExecutorLocalSpawn::new(executors.clone());
@@ -187,7 +167,7 @@ where
         }
         let (mut connection, is_async) = accept.unwrap();
         if !is_async {
-            let mut local_addr = local_addr.clone();
+            let local_addr = local_addr.clone();
             let service = service.clone();
             executor_local_spawn._start(move |executors| async move {
                 let stream = connection
@@ -197,20 +177,11 @@ where
                 if stream.is_none() {
                     return Ok(());
                 }
-                let (protocol_name, stream, remote_addr, _local_addr, domain) = stream.unwrap();
-                if _local_addr.is_some() {
-                    local_addr = _local_addr.unwrap();
+                let (stream, mut server_stream_info) = stream.unwrap();
+                if server_stream_info.local_addr.is_none() {
+                    server_stream_info.local_addr = Some(local_addr);
                 }
-                if let Err(e) = service(
-                    protocol_name,
-                    stream,
-                    local_addr,
-                    remote_addr,
-                    domain,
-                    executors,
-                )
-                .await
-                {
+                if let Err(e) = service(stream, server_stream_info, executors).await {
                     log::error!("err:stream => e:{}", e);
                 }
                 Ok(())
@@ -234,24 +205,14 @@ where
                     if stream.is_none() {
                         return Ok(());
                     }
-                    let mut local_addr = local_addr.clone();
+                    let local_addr = local_addr.clone();
                     let service = service.clone();
                     executors._start(move |executor| async move {
-                        let (protocol_name, stream, remote_addr, _local_addr, domain) =
-                            stream.unwrap();
-                        if _local_addr.is_some() {
-                            local_addr = _local_addr.unwrap();
+                        let (stream, mut server_stream_info) = stream.unwrap();
+                        if server_stream_info.local_addr.is_none() {
+                            server_stream_info.local_addr = Some(local_addr);
                         }
-                        if let Err(e) = service(
-                            protocol_name,
-                            stream,
-                            local_addr,
-                            remote_addr,
-                            domain,
-                            executor,
-                        )
-                        .await
-                        {
+                        if let Err(e) = service(stream, server_stream_info, executor).await {
                             log::error!("err:stream => e:{}", e);
                         }
                         Ok(())

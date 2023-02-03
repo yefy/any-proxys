@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
+extern crate page_size;
 
 /// unix内存管理器
 #[cfg(unix)]
@@ -25,6 +26,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
     target_vendor = "pc"
 ))]
 use mimalloc::MiMalloc;
+use std::sync::atomic::Ordering;
 
 #[cfg(windows)]
 #[cfg(all(
@@ -55,7 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     std::panic::set_hook(Box::new(thread_panic));
     if let Err(e) = log4rs::init_file(
-        default_config::ANYPROXY_LOG_FULL_PATH.as_str(),
+        default_config::ANYPROXY_LOG_FULL_PATH
+            .lock()
+            .unwrap()
+            .as_str(),
         Default::default(),
     ) {
         eprintln!("err:log4rs::init_file => e:{}", e);
@@ -69,6 +74,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("pwd:{:?}", std::env::current_dir()?);
+    let page_size = page_size::get();
+    default_config::PAGE_SIZE.store(page_size, Ordering::Relaxed);
+    log::info!("page_size:{:?}", page_size);
 
     #[cfg(feature = "anyproxy-rustls")]
     log::info!("anyproxy-rustls");

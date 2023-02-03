@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
-use std::future::Future;
+//use std::future::Future;
 use std::io;
 use std::io::ErrorKind;
 use std::pin::Pin;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+//use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub type StreamFlowRead = tokio::io::ReadHalf<StreamFlow>;
 pub type StreamFlowWrite = tokio::io::WriteHalf<StreamFlow>;
@@ -105,12 +105,71 @@ impl StreamFlow {
         }
         self.info = info;
     }
+    /*
+       async fn read_flow(&mut self, buf: &mut tokio::io::ReadBuf<'_>) -> io::Result<()> {
+           let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
+           let mut kind: ErrorKind = io::ErrorKind::NotFound;
+           let ret: Result<usize> = async {
+               match self.r.read(buf.initialize_unfilled()).await {
+                   Ok(0) => {
+                       stream_err = StreamFlowErr::ReadClose;
+                       kind = io::ErrorKind::ConnectionReset;
+                       return Err(anyhow!("err:read_flow close"));
+                   }
+                   Ok(usize) => {
+                       return Ok(usize);
+                   }
+                   Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                       stream_err = StreamFlowErr::ReadTimeout;
+                       kind = io::ErrorKind::TimedOut;
+                       return Err(anyhow!("err:read_flow timeout"));
+                   }
+                   Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                       stream_err = StreamFlowErr::ReadReset;
+                       kind = io::ErrorKind::ConnectionReset;
+                       return Err(anyhow!("err:read_flow reset"));
+                   }
+                   Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
+                       stream_err = StreamFlowErr::ReadClose;
+                       kind = io::ErrorKind::ConnectionReset;
+                       return Err(anyhow!("err:read_flow close"));
+                   }
+                   Err(e) => {
+                       stream_err = StreamFlowErr::ReadErr;
+                       kind = e.kind();
+                       return Err(anyhow!("err:read_flow => kind:{:?}, e:{}", e.kind(), e));
+                   }
+               }
+           }
+           .await;
 
-    async fn read_flow(&mut self, buf: &mut tokio::io::ReadBuf<'_>) -> io::Result<()> {
+           match ret {
+               Err(e) => {
+                   if self.info.is_some() {
+                       let mut info = self.info.as_ref().unwrap().lock().unwrap();
+                       info.err = stream_err;
+                       info.err_time_millis = Local::now().timestamp_millis();
+                   }
+                   log::debug!("read_flow kind:{:?}, e:{:?}", kind, e);
+                   Err(std::io::Error::new(kind, e))
+               }
+               Ok(usize) => {
+                   buf.advance(usize);
+                   if self.info.is_some() {
+                       self.info.as_ref().unwrap().lock().unwrap().read += usize as i64;
+                   }
+                   Ok(())
+               }
+           }
+       }
+
+    */
+
+    fn read_flow(&mut self, ret: io::Result<usize>) -> io::Result<()> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
-        let ret: Result<usize> = async {
-            match self.r.read(buf.initialize_unfilled()).await {
+        let mut parse_err = |ret: io::Result<usize>| -> Result<usize> {
+            match ret {
                 Ok(0) => {
                     stream_err = StreamFlowErr::ReadClose;
                     kind = io::ErrorKind::ConnectionReset;
@@ -140,8 +199,9 @@ impl StreamFlow {
                     return Err(anyhow!("err:read_flow => kind:{:?}, e:{}", e.kind(), e));
                 }
             }
-        }
-        .await;
+        };
+
+        let ret = parse_err(ret);
 
         match ret {
             Err(e) => {
@@ -154,7 +214,6 @@ impl StreamFlow {
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {
-                buf.advance(usize);
                 if self.info.is_some() {
                     self.info.as_ref().unwrap().lock().unwrap().read += usize as i64;
                 }
@@ -163,6 +222,7 @@ impl StreamFlow {
         }
     }
 
+    /*
     async fn write_flow(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
@@ -221,6 +281,68 @@ impl StreamFlow {
             }
         }
     }
+
+     */
+
+    fn write_flow(&mut self, ret: io::Result<usize>, buffer_len: usize) -> io::Result<usize> {
+        let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
+        let mut kind: ErrorKind = io::ErrorKind::NotFound;
+        let mut parse_err = |ret: io::Result<usize>| -> Result<usize> {
+            match ret {
+                Ok(0) => {
+                    if buffer_len == 0 {
+                        return Ok(0);
+                    }
+                    stream_err = StreamFlowErr::WriteClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:write_flow close"));
+                }
+                Ok(usize) => {
+                    return Ok(usize);
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                    stream_err = StreamFlowErr::WriteTimeout;
+                    kind = io::ErrorKind::TimedOut;
+                    return Err(anyhow!("err:write_flow timeout"));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                    stream_err = StreamFlowErr::WriteReset;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:write_flow reset"));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
+                    stream_err = StreamFlowErr::WriteClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:write_flow close"));
+                }
+                Err(e) => {
+                    stream_err = StreamFlowErr::WriteErr;
+                    kind = e.kind();
+                    return Err(anyhow!("err:write_flow => kind:{:?}, e:{}", e.kind(), e));
+                }
+            }
+        };
+
+        let ret = parse_err(ret);
+
+        match ret {
+            Err(e) => {
+                if self.info.is_some() {
+                    let mut info = self.info.as_ref().unwrap().lock().unwrap();
+                    info.err = stream_err;
+                    info.err_time_millis = Local::now().timestamp_millis();
+                }
+                log::debug!("write_flow kind:{:?}, e:{:?}", kind, e);
+                Err(std::io::Error::new(kind, e))
+            }
+            Ok(usize) => {
+                if self.info.is_some() {
+                    self.info.as_ref().unwrap().lock().unwrap().write += usize as i64;
+                }
+                Ok(usize)
+            }
+        }
+    }
 }
 
 impl tokio::io::AsyncRead for StreamFlow {
@@ -229,13 +351,24 @@ impl tokio::io::AsyncRead for StreamFlow {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        //Pin::new(&mut self.r).poll_read(cx, buf)
-        let mut read_fut = Box::pin(self.read_flow(buf));
-        let ret = read_fut.as_mut().poll(cx);
+        let ret = Pin::new(&mut self.r).poll_read(cx, buf);
         match ret {
-            Poll::Ready(ret) => Poll::Ready(ret),
+            Poll::Ready(ret) => {
+                let ret = if let Err(e) = ret {
+                    self.read_flow(io::Result::Err(e))
+                } else {
+                    self.read_flow(io::Result::Ok(buf.filled().len()))
+                };
+                Poll::Ready(ret)
+            }
             Poll::Pending => Poll::Pending,
         }
+        // let mut read_fut = Box::pin(self.read_flow(buf));
+        // let ret = read_fut.as_mut().poll(cx);
+        // match ret {
+        //     Poll::Ready(ret) => Poll::Ready(ret),
+        //     Poll::Pending => Poll::Pending,
+        // }
     }
 }
 
@@ -245,13 +378,17 @@ impl tokio::io::AsyncWrite for StreamFlow {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        //Pin::new(&mut *self.w).poll_write(cx, buf)
-        let mut write_fut = Box::pin(self.write_flow(buf));
-        let ret = write_fut.as_mut().poll(cx);
+        let ret = Pin::new(&mut self.w).poll_write(cx, buf);
         match ret {
-            Poll::Ready(ret) => Poll::Ready(ret),
+            Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
             Poll::Pending => Poll::Pending,
         }
+        // let mut write_fut = Box::pin(self.write_flow(buf));
+        // let ret = write_fut.as_mut().poll(cx);
+        // match ret {
+        //     Poll::Ready(ret) => Poll::Ready(ret),
+        //     Poll::Pending => Poll::Pending,
+        // }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

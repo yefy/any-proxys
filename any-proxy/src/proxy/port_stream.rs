@@ -8,9 +8,9 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
-use crate::io::buf_reader::BufReader;
+use crate::protopack;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
-use crate::{protopack, Protocol7};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
@@ -19,18 +19,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::prelude::*;
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct PortStream {
     executors: ExecutorsLocal,
+    server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: tunnel_server::Publish,
     tunnel2_publish: tunnel2_server::Publish,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    ssl_domain: Option<String>,
     port_config_listen: Rc<port_config::PortConfigListen>,
     tmp_file_id: Rc<RefCell<u64>>,
     #[cfg(feature = "anyproxy-ebpf")]
@@ -41,11 +38,9 @@ pub struct PortStream {
 impl PortStream {
     pub fn new(
         executors: ExecutorsLocal,
+        server_stream_info: ServerStreamInfo,
         tunnel_publish: tunnel_server::Publish,
         tunnel2_publish: tunnel2_server::Publish,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        ssl_domain: Option<String>,
         port_config_listen: Rc<port_config::PortConfigListen>,
         tmp_file_id: Rc<RefCell<u64>>,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
@@ -53,11 +48,9 @@ impl PortStream {
     ) -> Result<PortStream> {
         Ok(PortStream {
             executors,
+            server_stream_info: Arc::new(server_stream_info),
             tunnel_publish,
             tunnel2_publish,
-            local_addr,
-            remote_addr,
-            ssl_domain,
             port_config_listen,
             tmp_file_id,
             #[cfg(feature = "anyproxy-ebpf")]
@@ -66,11 +59,7 @@ impl PortStream {
         })
     }
 
-    pub async fn start(
-        self,
-        protocol7: Protocol7,
-        mut stream: stream_flow::StreamFlow,
-    ) -> Result<()> {
+    pub async fn start(self, mut stream: stream_flow::StreamFlow) -> Result<()> {
         let (
             debug_print_access_log_time,
             debug_print_stream_flow_time,
@@ -89,9 +78,7 @@ impl PortStream {
             )
         };
         let stream_info = StreamInfo::new(
-            protocol7.to_string(),
-            self.local_addr.clone(),
-            self.remote_addr.clone(),
+            self.server_stream_info.clone(),
             debug_is_open_stream_work_times,
         );
 
@@ -100,7 +87,6 @@ impl PortStream {
 
         stream_start::do_start(
             self,
-            protocol7,
             stream_info,
             stream,
             shutdown_thread_rx,
@@ -115,9 +101,8 @@ impl PortStream {
 impl proxy::Stream for PortStream {
     async fn do_start(
         &mut self,
-        protocol7: Protocol7,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_stream: stream_flow::StreamFlow,
+        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
     ) -> Result<()> {
         let config_ctx = &self
             .port_config_listen
@@ -127,13 +112,10 @@ impl proxy::Stream for PortStream {
         stream_info.borrow_mut().debug_is_open_print = config_ctx.fast_conf.debug_is_open_print;
         stream_info.borrow_mut().add_work_time("tunnel_stream");
 
-        let client_buf_reader = BufReader::new(client_stream);
         let (is_tunnel, client_buf_reader) = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
-            self.local_addr.clone(),
-            self.remote_addr.clone(),
-            protocol7,
+            self.server_stream_info.clone(),
             client_buf_reader,
             stream_info.clone(),
         )
@@ -155,8 +137,8 @@ impl proxy::Stream for PortStream {
         let hello = {
             stream_info.borrow_mut().err_status = ErrStatus::ClientProtoErr;
             //quic协议ssl_domain有值
-            stream_info.borrow_mut().ssl_domain = self.ssl_domain.clone();
-            stream_info.borrow_mut().remote_domain = self.ssl_domain.clone();
+            stream_info.borrow_mut().ssl_domain = self.server_stream_info.domain.clone();
+            stream_info.borrow_mut().remote_domain = self.server_stream_info.domain.clone();
             //优先使用本地配置值
             stream_info.borrow_mut().local_domain = config_ctx.domain.clone();
             let hello = protopack::anyproxy::read_hello(&mut client_buf_reader)
@@ -187,7 +169,7 @@ impl proxy::Stream for PortStream {
                             self.session_id.fetch_add(1, Ordering::Relaxed),
                             Local::now().timestamp()
                         ),
-                        client_addr: stream_info.borrow().remote_addr.clone(),
+                        client_addr: stream_info.borrow().server_stream_info.remote_addr.clone(),
                         domain: stream_info.borrow().local_domain.clone().unwrap(),
                     };
 
@@ -210,8 +192,8 @@ impl proxy::Stream for PortStream {
             client_stream,
             self.executors.thread_id.clone(),
             self.tmp_file_id.clone(),
-            &self.local_addr,
-            &self.remote_addr,
+            self.server_stream_info.local_addr.clone().unwrap(),
+            self.server_stream_info.remote_addr,
             #[cfg(feature = "anyproxy-ebpf")]
             self.ebpf_add_sock_hash.clone(),
         )

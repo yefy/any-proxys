@@ -54,6 +54,8 @@ anyproxy -t命令,配置正确性检查
 sni域名解析  
 异步文件io  
 内存管理  
+支持小数据包合并发送  
+支持文件io page_size对齐  
 
 # 未来支持  
 port模式http域名获取  

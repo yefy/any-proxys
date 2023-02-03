@@ -223,7 +223,7 @@ impl Config {
                 return Err(anyhow!("err:dir nil => file_full_path:{}", file_full_path));
             }
             let dir = dir.unwrap().to_string_lossy().to_string();
-            let dir = default_config::ANYPROXY_CONF_PATH.clone() + dir.as_str();
+            let dir = default_config::ANYPROXY_CONF_PATH.lock().unwrap().clone() + dir.as_str();
 
             let file_names = Config::get_dir_file_info(&dir)
                 .map_err(|e| anyhow!("err:Config::get_dir_file_info => e:{}", e))?;
@@ -275,8 +275,13 @@ impl Config {
     }
 
     pub fn new() -> Result<config_toml::ConfigToml> {
-        let file_name = default_config::ANYPROXY_CONF_FULL_PATH.as_str();
-        let contents = fs::read_to_string(file_name)
+        let file_name = {
+            default_config::ANYPROXY_CONF_FULL_PATH
+                .lock()
+                .unwrap()
+                .clone()
+        };
+        let contents = fs::read_to_string(&file_name)
             .map_err(|e| anyhow!("err:fs::read_to_string => e:{}", e))?;
 
         // 支持配置include
@@ -292,7 +297,10 @@ impl Config {
 
         // 最终生成的配置文件，提供给错误排查
         fs::write(
-            default_config::ANYPROXY_CONF_LOG_FULL_PATH.as_str(),
+            default_config::ANYPROXY_CONF_LOG_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
             contents.as_str(),
         )
         .map_err(|e| anyhow!("err:ANYPROXY_CONF_LOG_FULL_PATH => e:{}", e))?;

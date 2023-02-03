@@ -3,6 +3,7 @@ use crate::config::config_toml::QuicConfig as Config;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
 use crate::stream::server;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_any;
 use crate::stream::stream_flow;
 use crate::util;
@@ -15,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 pub struct Server {
-    config: Config,
+    config: Arc<Config>,
     reuseport: bool,
     addr: SocketAddr,
     sni_rustls_map: RefCell<Arc<util::rustls::ResolvesServerCertUsingSNI>>,
@@ -32,7 +33,7 @@ impl Server {
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
     ) -> Result<Server> {
         Ok(Server {
-            config,
+            config: std::sync::Arc::new(config),
             reuseport,
             addr,
             sni_rustls_map: RefCell::new(sni_rustls_map),
@@ -81,11 +82,11 @@ impl server::Server for Server {
 
 pub struct Listener {
     endpoint: quinn::Endpoint,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Listener {
-    pub fn new(endpoint: quinn::Endpoint, config: Config) -> Result<Listener> {
+    pub fn new(endpoint: quinn::Endpoint, config: Arc<Config>) -> Result<Listener> {
         Ok(Listener { endpoint, config })
     }
 }
@@ -137,7 +138,7 @@ pub struct Connection {
     conn: quinn::Connection,
     remote_addr: SocketAddr,
     domain: String,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Connection {
@@ -145,7 +146,7 @@ impl Connection {
         conn: quinn::Connection,
         remote_addr: SocketAddr,
         domain: String,
-        config: Config,
+        config: Arc<Config>,
     ) -> Result<Connection> {
         Ok(Connection {
             conn,
@@ -158,17 +159,7 @@ impl Connection {
 
 #[async_trait(?Send)]
 impl server::Connection for Connection {
-    async fn stream(
-        &mut self,
-    ) -> Result<
-        Option<(
-            Protocol7,
-            stream_flow::StreamFlow,
-            SocketAddr,
-            Option<SocketAddr>,
-            Option<String>,
-        )>,
-    > {
+    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
         let stream = self.conn.accept_bi().await;
         match stream {
             Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
@@ -189,11 +180,13 @@ impl server::Connection for Connection {
                     tokio::time::Duration::from_secs(self.config.quic_send_timeout as u64);
                 stream.set_config(read_timeout, write_timeout, None);
                 return Ok(Some((
-                    Protocol7::Quic,
                     stream,
-                    self.remote_addr.clone(),
-                    None,
-                    Some(self.domain.clone()),
+                    ServerStreamInfo {
+                        protocol7: Protocol7::Quic,
+                        remote_addr: self.remote_addr.clone(),
+                        local_addr: None,
+                        domain: Some(self.domain.clone()),
+                    },
                 )));
             }
         }

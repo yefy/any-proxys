@@ -10,16 +10,21 @@ use std::io;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 
 pub struct Client {
     addr: SocketAddr,
     timeout: tokio::time::Duration,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Client {
-    pub fn new(addr: SocketAddr, timeout: tokio::time::Duration, config: Config) -> Result<Client> {
+    pub fn new(
+        addr: SocketAddr,
+        timeout: tokio::time::Duration,
+        config: Arc<Config>,
+    ) -> Result<Client> {
         Ok(Client {
             addr,
             timeout,
@@ -49,14 +54,14 @@ impl client::Client for Client {
 pub struct Connection {
     addr: SocketAddr,
     timeout: tokio::time::Duration,
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Connection {
     pub fn new(
         addr: SocketAddr,
         timeout: tokio::time::Duration,
-        config: Config,
+        config: Arc<Config>,
     ) -> Result<Connection> {
         Ok(Connection {
             addr,

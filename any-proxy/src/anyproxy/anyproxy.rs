@@ -275,29 +275,51 @@ impl Anyproxy {
         let anyproxy_pid = unsafe { libc::getpid() };
         log::info!("anyproxy pid:{}", anyproxy_pid);
         std::fs::write(
-            default_config::ANYPROXY_PID_FULL_PATH.as_str(),
+            default_config::ANYPROXY_PID_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
             format!("{}", anyproxy_pid),
         )
         .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
         Ok(())
     }
     pub fn remove_pid_file() {
-        let _ = std::fs::remove_file(default_config::ANYPROXY_PID_FULL_PATH.as_str());
+        let _ = std::fs::remove_file(
+            default_config::ANYPROXY_PID_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
+        );
     }
 
     pub fn read_pid_file() -> Result<String> {
-        let pid = std::fs::read_to_string(default_config::ANYPROXY_PID_FULL_PATH.as_str())
-            .map_err(|e| anyhow!("err:std::fs::read_to_string => e:{}", e))?;
+        let pid = std::fs::read_to_string(
+            default_config::ANYPROXY_PID_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
+        )
+        .map_err(|e| anyhow!("err:std::fs::read_to_string => e:{}", e))?;
         Ok(pid)
     }
 
     pub fn remove_signal_file() {
-        let _ = std::fs::remove_file(default_config::ANYPROXY_SIGNAL_FULL_PATH.as_str());
+        let _ = std::fs::remove_file(
+            default_config::ANYPROXY_SIGNAL_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
+        );
     }
 
     pub fn load_signal_file() -> AnyproxyState {
-        let sig = match std::fs::read_to_string(default_config::ANYPROXY_SIGNAL_FULL_PATH.as_str())
-        {
+        let sig = match std::fs::read_to_string(
+            default_config::ANYPROXY_SIGNAL_FULL_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
+        ) {
             Err(_) => "".to_string(),
             Ok(sig) => sig.trim().to_string(),
         };
@@ -349,8 +371,14 @@ impl Anyproxy {
             }
         };
         if is_sig {
-            std::fs::write(default_config::ANYPROXY_SIGNAL_FULL_PATH.as_str(), sig)
-                .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
+            std::fs::write(
+                default_config::ANYPROXY_SIGNAL_FULL_PATH
+                    .lock()
+                    .unwrap()
+                    .as_str(),
+                sig,
+            )
+            .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
             Ok(true)
         } else {
             Ok(false)

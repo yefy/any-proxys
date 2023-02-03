@@ -1,8 +1,5 @@
 use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
-use crate::io::buf_reader::BufReader;
-use crate::io::buf_stream::BufStream;
-use crate::io::buf_writer::BufWriter;
 use crate::protopack;
 use crate::stream::stream_flow;
 use anyhow::anyhow;
@@ -14,9 +11,12 @@ pub struct HeartbeatStream {}
 
 impl HeartbeatStream {
     pub async fn heartbeat_stream(
-        mut client_buf_reader: BufReader<stream_flow::StreamFlow>,
+        mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
         stream_info: Rc<RefCell<StreamInfo>>,
-    ) -> Result<(BufReader<stream_flow::StreamFlow>, Rc<RefCell<StreamInfo>>)> {
+    ) -> Result<(
+        any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        Rc<RefCell<StreamInfo>>,
+    )> {
         let mut heartbeat = protopack::anyproxy::read_heartbeat_rollback(&mut client_buf_reader)
             .await
             .map_err(|e| anyhow!("err:anyproxy::read_heartbeat => e:{}", e))?;
@@ -28,7 +28,9 @@ impl HeartbeatStream {
         stream_info.borrow_mut().is_discard_flow = true;
         stream_info.borrow_mut().is_discard_timeout = true;
 
-        let mut client_buf_stream = BufStream::from(BufWriter::new(client_buf_reader));
+        let mut client_buf_stream = any_base::io::buf_stream::BufStream::from(
+            any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+        );
 
         loop {
             let heartbeat = if heartbeat.is_none() {
@@ -47,7 +49,7 @@ impl HeartbeatStream {
             log::debug!(
                 "heartbeat:{:?}, remote_addr:{}",
                 heartbeat,
-                stream_info.borrow().remote_addr
+                stream_info.borrow().server_stream_info.remote_addr
             );
 
             protopack::anyproxy::write_pack(

@@ -3,7 +3,7 @@ use crate::proxy::stream_info::StreamInfo;
 use crate::stream::stream_flow;
 use crate::upstream::upstream;
 use crate::util::var;
-use crate::{Protocol7, TunnelClients};
+use crate::TunnelClients;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::cell::RefCell;
@@ -34,9 +34,8 @@ pub trait Config {
 pub trait Stream {
     async fn do_start(
         &mut self,
-        protocol7: Protocol7,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_stream: stream_flow::StreamFlow,
+        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
     ) -> Result<()>;
 }
 

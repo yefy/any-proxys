@@ -33,37 +33,65 @@ impl SendFile {
             count
         );
 
-        let ret: Result<u64> = tokio::task::spawn_blocking(move || {
-            let wn = match unsafe { libc::sendfile(socket_fd, file_fd, &mut offset, count) } {
-                -1 => return Err(anyhow!("err:libc::sendfile =>"))?,
-                copied => copied as u64,
-            };
-            Ok(wn)
+        let ret: isize = tokio::task::spawn_blocking(move || {
+            let wn = unsafe { libc::sendfile(socket_fd, file_fd, &mut offset, count) };
+            wn
         })
         .await?;
         let ret: Result<u64> = async {
             match ret {
-                Err(_) => {
-                    stream_err = StreamFlowErr::WriteClose;
-                    kind = io::ErrorKind::ConnectionReset;
-                    return Err(anyhow!("err:sendfile close"));
+                -1 => {
+                    let c_err = unsafe { *libc::__errno_location() };
+                    log::trace!("sendfile c_err:{}", c_err);
+                    if c_err == libc::EAGAIN {
+                        stream_err = StreamFlowErr::Init;
+                        kind = io::ErrorKind::WouldBlock;
+                        return Err(anyhow!("err:sendfile EAGAIN"));
+                    }
+
+                    if c_err == libc::EINPROGRESS {
+                        if self.info.is_some() {
+                            self.info.as_ref().unwrap().lock().unwrap().err =
+                                StreamFlowErr::WriteClose;
+                        }
+                        stream_err = StreamFlowErr::Init;
+                        kind = io::ErrorKind::WouldBlock;
+                        return Err(anyhow!("err:sendfile EAGAIN"));
+                    }
+
+                    if c_err == libc::ECONNRESET {
+                        stream_err = StreamFlowErr::WriteClose;
+                        kind = io::ErrorKind::ConnectionReset;
+                        return Err(anyhow!("err:sendfile close"));
+                    }
+
+                    stream_err = StreamFlowErr::WriteErr;
+                    kind = io::ErrorKind::AddrNotAvailable;
+                    return Err(anyhow!("err:sendfile AddrNotAvailable => c_err:{}", c_err));
                 }
-                Ok(size) => {
-                    return Ok(size);
+                copied => {
+                    if copied == 0 {
+                        stream_err = StreamFlowErr::Init;
+                        kind = io::ErrorKind::WouldBlock;
+                        return Err(anyhow!("err:sendfile EAGAIN"));
+                    }
+                    log::trace!("sendfile copied:{}", copied);
+                    return Ok(copied as u64);
                 }
-            }
+            };
         }
         .await;
 
         match ret {
             Err(e) => {
-                if self.info.is_some() {
+                if self.info.is_some() && stream_err != StreamFlowErr::Init {
                     self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
                 }
-                log::debug!("write kind:{:?}, e:{:?}", kind, e);
+                //log::error!("write kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(size) => {
+                log::trace!("sendfile write size:{:?}", size);
                 if self.info.is_some() {
                     self.info.as_ref().unwrap().lock().unwrap().write += size as i64;
                 }

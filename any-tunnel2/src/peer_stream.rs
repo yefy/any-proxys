@@ -13,9 +13,8 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
-use tokio::io::BufReader;
-use tokio::io::BufWriter;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 
 pub struct PeerStream {}
 
@@ -69,9 +68,9 @@ impl PeerStream {
             tokio::time::Duration::from_secs(60 * 10),
             Some(stream_info.clone()),
         );
-        let (tr, tw) = stream.split();
-        let r = any_base::io::buf_reader::BufReader::new(tr);
-        let w = any_base::io::buf_writer::BufWriter::new(tw);
+        let (r, w) = stream.split();
+        let r = any_base::io::buf_reader::BufReader::new(r);
+        let w = any_base::io::buf_writer::BufWriter::new(w);
 
         let ret: Result<()> = async {
             tokio::select! {
@@ -102,13 +101,12 @@ impl PeerStream {
     }
 
     async fn read_stream<R: AsyncRead + std::marker::Unpin>(
-        r: R,
+        mut r: R,
         peer_stream_to_peer_client_tx: &PeerStreamToPeerClientSender,
     ) -> Result<()> {
-        let mut buf_read = BufReader::new(r);
         let mut slice = [0u8; protopack::TUNNEL_MAX_HEADER_SIZE];
         loop {
-            let pack = protopack::read_pack_all(&mut buf_read, &mut slice)
+            let pack = protopack::read_pack_all(&mut r, &mut slice)
                 .await
                 .map_err(|e| anyhow!("err:protopack::read_pack => e:{}", e))?;
             match pack {
@@ -205,10 +203,9 @@ impl PeerStream {
     }
 
     async fn write_stream<W: AsyncWrite + std::marker::Unpin>(
-        w: W,
+        mut w: W,
         pack_to_peer_stream_rx: &mut async_channel::Receiver<TunnelArcPack>,
     ) -> Result<()> {
-        let mut buf_writer = BufWriter::new(w);
         loop {
             let pack = pack_to_peer_stream_rx
                 .recv()
@@ -232,20 +229,20 @@ impl PeerStream {
                             log::info!("peer_stream write pack_id:{}", value.header.pack_id);
                         }
                     }
-                    protopack::write_tunnel_data(&mut buf_writer, &value)
+                    protopack::write_tunnel_data(&mut w, &value)
                         .await
                         .map_err(|e| anyhow!("err:write_tunnel_data => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelDataAck(value) => {
                     log::trace!("peer_stream_write TunnelDataAck:{:?}", value);
-                    protopack::write_tunnel_data_ack(&mut buf_writer, &value)
+                    protopack::write_tunnel_data_ack(&mut w, &value)
                         .await
                         .map_err(|e| anyhow!("err:write_tunnel_data_ack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelClose(value) => {
                     log::trace!("peer_stream_write TunnelClose:{:?}", value);
                     protopack::write_pack(
-                        &mut buf_writer,
+                        &mut w,
                         TunnelHeaderType::TunnelClose,
                         value.as_ref(),
                         true,
@@ -256,7 +253,7 @@ impl PeerStream {
                 TunnelArcPack::TunnelHeartbeat(value) => {
                     log::trace!("peer_stream_write TunnelHeartbeat:{:?}", value);
                     protopack::write_pack(
-                        &mut buf_writer,
+                        &mut w,
                         TunnelHeaderType::TunnelHeartbeat,
                         value.as_ref(),
                         true,
@@ -267,7 +264,7 @@ impl PeerStream {
                 TunnelArcPack::TunnelHeartbeatAck(value) => {
                     log::trace!("peer_stream_write TunnelHeartbeatAck:{:?}", value);
                     protopack::write_pack(
-                        &mut buf_writer,
+                        &mut w,
                         TunnelHeaderType::TunnelHeartbeatAck,
                         value.as_ref(),
                         true,
@@ -278,7 +275,7 @@ impl PeerStream {
                 TunnelArcPack::TunnelAddConnect(value) => {
                     log::trace!("peer_stream_write TunnelAddConnect:{:?}", value);
                     protopack::write_pack(
-                        &mut buf_writer,
+                        &mut w,
                         TunnelHeaderType::TunnelAddConnect,
                         value.as_ref(),
                         true,
@@ -289,7 +286,7 @@ impl PeerStream {
                 TunnelArcPack::TunnelMaxConnect(value) => {
                     log::trace!("peer_stream_write TunnelMaxConnect:{:?}", value);
                     protopack::write_pack(
-                        &mut buf_writer,
+                        &mut w,
                         TunnelHeaderType::TunnelMaxConnect,
                         value.as_ref(),
                         true,

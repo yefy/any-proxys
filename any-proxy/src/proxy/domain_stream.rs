@@ -8,9 +8,9 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
-use crate::io::buf_reader::BufReader;
+use crate::protopack;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
-use crate::{protopack, Protocol7};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
@@ -19,18 +19,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::prelude::*;
 use std::cell::RefCell;
-use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct DomainStream {
     executors: ExecutorsLocal,
+    server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: tunnel_server::Publish,
     tunnel2_publish: tunnel2_server::Publish,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    ssl_domain: Option<String>,
     domain_config_listen: Rc<domain_config::DomainConfigListen>,
     domain_config_context: Option<Rc<domain_config::DomainConfigContext>>,
     tmp_file_id: Rc<RefCell<u64>>,
@@ -42,11 +39,9 @@ pub struct DomainStream {
 impl DomainStream {
     pub fn new(
         executors: ExecutorsLocal,
+        server_stream_info: ServerStreamInfo,
         tunnel_publish: tunnel_server::Publish,
         tunnel2_publish: tunnel2_server::Publish,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        ssl_domain: Option<String>,
         domain_config_listen: Rc<domain_config::DomainConfigListen>,
         tmp_file_id: Rc<RefCell<u64>>,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
@@ -54,11 +49,9 @@ impl DomainStream {
     ) -> Result<DomainStream> {
         Ok(DomainStream {
             executors,
+            server_stream_info: Arc::new(server_stream_info),
             tunnel_publish,
             tunnel2_publish,
-            local_addr,
-            remote_addr,
-            ssl_domain,
             domain_config_listen,
             domain_config_context: None,
             tmp_file_id,
@@ -68,11 +61,7 @@ impl DomainStream {
         })
     }
 
-    pub async fn start(
-        self,
-        protocol7: Protocol7,
-        mut stream: stream_flow::StreamFlow,
-    ) -> Result<()> {
+    pub async fn start(self, mut stream: stream_flow::StreamFlow) -> Result<()> {
         let (debug_print_access_log_time, debug_print_stream_flow_time) = {
             let stream_conf = &self.domain_config_listen.stream;
 
@@ -83,9 +72,7 @@ impl DomainStream {
         };
 
         let stream_info = StreamInfo::new(
-            protocol7.to_string(),
-            self.local_addr.clone(),
-            self.remote_addr.clone(),
+            self.server_stream_info.clone(),
             self.domain_config_listen
                 .stream
                 .debug_is_open_stream_work_times,
@@ -95,7 +82,6 @@ impl DomainStream {
 
         stream_start::do_start(
             self,
-            protocol7,
             stream_info,
             stream,
             shutdown_thread_rx,
@@ -110,19 +96,15 @@ impl DomainStream {
 impl proxy::Stream for DomainStream {
     async fn do_start(
         &mut self,
-        protocol7: Protocol7,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_stream: stream_flow::StreamFlow,
+        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
     ) -> Result<()> {
         stream_info.borrow_mut().add_work_time("tunnel_stream");
 
-        let client_buf_reader = BufReader::new(client_stream);
         let (is_tunnel, client_buf_reader) = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
-            self.local_addr.clone(),
-            self.remote_addr.clone(),
-            protocol7,
+            self.server_stream_info.clone(),
             client_buf_reader,
             stream_info.clone(),
         )
@@ -147,8 +129,9 @@ impl proxy::Stream for DomainStream {
                 .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
             match hello {
                 Some(hello) => {
-                    if self.ssl_domain.is_some() {
-                        stream_info.borrow_mut().ssl_domain = self.ssl_domain.clone();
+                    if self.server_stream_info.domain.is_some() {
+                        stream_info.borrow_mut().ssl_domain =
+                            self.server_stream_info.domain.clone();
                     } else {
                         stream_info.borrow_mut().ssl_domain = Some(hello.domain.clone());
                     }
@@ -163,15 +146,16 @@ impl proxy::Stream for DomainStream {
                     let domain = match domain {
                         Some(domain) => domain,
                         None => {
-                            if self.ssl_domain.is_none() {
+                            if self.server_stream_info.domain.is_none() {
                                 return Err(anyhow!("err:domain null"));
                             }
-                            self.ssl_domain.clone().unwrap()
+                            self.server_stream_info.domain.clone().unwrap()
                         }
                     };
 
-                    if self.ssl_domain.is_some() {
-                        stream_info.borrow_mut().ssl_domain = self.ssl_domain.clone();
+                    if self.server_stream_info.domain.is_some() {
+                        stream_info.borrow_mut().ssl_domain =
+                            self.server_stream_info.domain.clone();
                     } else {
                         stream_info.borrow_mut().ssl_domain = Some(domain.clone());
                     }
@@ -186,7 +170,7 @@ impl proxy::Stream for DomainStream {
                             self.session_id.fetch_add(1, Ordering::Relaxed),
                             Local::now().timestamp()
                         ),
-                        client_addr: stream_info.borrow().remote_addr.clone(),
+                        client_addr: stream_info.borrow().server_stream_info.remote_addr.clone(),
                         domain,
                     }
                 }
@@ -244,8 +228,8 @@ impl proxy::Stream for DomainStream {
             client_stream,
             self.executors.thread_id.clone(),
             self.tmp_file_id.clone(),
-            &self.local_addr,
-            &self.remote_addr,
+            self.server_stream_info.local_addr.clone().unwrap(),
+            self.server_stream_info.remote_addr,
             #[cfg(feature = "anyproxy-ebpf")]
             self.ebpf_add_sock_hash.clone(),
         )

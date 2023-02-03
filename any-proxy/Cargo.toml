@@ -25,6 +25,7 @@ anyproxy-rustls = []
 anyproxy-ebpf = ["libbpf-rs", "libbpf-cargo"]
 anyproxy-reuseport = []
 anyproxy-msg-verdict = []
+anyproxy-write-block-time-ms = []
 
 
 
@@ -100,8 +101,7 @@ num-traits = "0.2.15"
 hyper = {git = "https://github.com/hyperium/hyper", features = ["full"]}
 dynamic-pool = "0.2.2"
 zip = "0.6.3"
-
-
+page_size = "0.5.0"
 
 [dependencies.libbpf-rs]
 version = "0.19.1"

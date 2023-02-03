@@ -9,7 +9,6 @@ use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::util::var;
-use crate::Protocol7;
 use any_base::stream_flow;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -24,7 +23,6 @@ use tokio::sync::broadcast;
 
 pub async fn do_start(
     mut start_stream: impl proxy::Stream,
-    protocol7: Protocol7,
     stream_info: StreamInfo,
     stream: stream_flow::StreamFlow,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
@@ -34,10 +32,11 @@ pub async fn do_start(
     let start_time = Instant::now();
     let stream_info = Rc::new(RefCell::new(stream_info));
     let stream_timeout = StreamTimeout::new();
+    let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
     let ret: Option<Result<()>> = async {
         tokio::select! {
             biased;
-            _ret = start_stream.do_start(protocol7, stream_info.clone(), stream) => {
+            _ret = start_stream.do_start(stream_info.clone(), client_buf_reader) => {
                 return Some(_ret);
             }
             _ret = read_timeout(
@@ -96,9 +95,9 @@ pub async fn do_start(
     if stream_info.borrow().debug_is_open_print {
         let stream_info = stream_info.borrow();
         log::info!(
-            "{}---{}:do_start end",
+            "{}---{:?}:do_start end",
             stream_info.request_id,
-            stream_info.local_addr,
+            stream_info.server_stream_info.local_addr,
         );
     }
 

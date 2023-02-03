@@ -8,13 +8,13 @@ use crate::config::config_toml::Listen;
 use crate::config::config_toml::SSL;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
-use crate::quic;
 use crate::quic::server as quic_server;
-use crate::stream::server::Server;
+use crate::stream::server::{Server, ServerStreamInfo};
 use crate::tcp::server as tcp_server;
 use crate::upstream::upstream;
 use crate::util;
 use crate::TunnelClients;
+use crate::{quic, Protocol7};
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -95,9 +95,12 @@ impl DomainConfig {
         for domain_server_config in config._domain.as_ref().unwrap()._server.iter() {
             let stream_var = stream_var::StreamVar::new();
             let stream_info_test = stream_info::StreamInfo::new(
-                "tcp".to_string(),
-                SocketAddr::from(([127, 0, 0, 1], 8080)),
-                SocketAddr::from(([127, 0, 0, 1], 18080)),
+                std::sync::Arc::new(ServerStreamInfo {
+                    protocol7: Protocol7::Tcp,
+                    remote_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
+                    local_addr: Some(SocketAddr::from(([127, 0, 0, 1], 18080))),
+                    domain: None,
+                }),
                 false,
             );
             let access_context = if domain_server_config.access.is_some() {

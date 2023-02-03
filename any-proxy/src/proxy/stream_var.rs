@@ -53,6 +53,8 @@ impl StreamVar {
         var_map.insert("buffer_cache", buffer_cache);
         var_map.insert("upstream_curr_stream_size", upstream_curr_stream_size);
         var_map.insert("upstream_max_stream_size", upstream_max_stream_size);
+        var_map.insert("write_max_block_time_ms", write_max_block_time_ms);
+
         var_map.insert(
             "upstream_min_stream_cache_size",
             upstream_min_stream_cache_size,
@@ -101,7 +103,7 @@ pub fn remote_domain(stream_info: &stream_info::StreamInfo) -> Option<String> {
 }
 
 pub fn local_protocol(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.local_protocol_name.clone())
+    Some(stream_info.server_stream_info.protocol7.to_string())
 }
 
 pub fn upstream_protocol(stream_info: &stream_info::StreamInfo) -> Option<String> {
@@ -119,27 +121,53 @@ pub fn upstream_protocol(stream_info: &stream_info::StreamInfo) -> Option<String
 }
 
 pub fn local_addr(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.local_addr.to_string())
+    Some(
+        stream_info
+            .server_stream_info
+            .local_addr
+            .unwrap()
+            .to_string(),
+    )
 }
 
 pub fn local_ip(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.local_addr.ip().to_string())
+    Some(
+        stream_info
+            .server_stream_info
+            .local_addr
+            .unwrap()
+            .ip()
+            .to_string(),
+    )
 }
 
 pub fn local_port(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.local_addr.port().to_string())
+    Some(
+        stream_info
+            .server_stream_info
+            .local_addr
+            .unwrap()
+            .port()
+            .to_string(),
+    )
 }
 
 pub fn remote_addr(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.remote_addr.to_string())
+    Some(stream_info.server_stream_info.remote_addr.to_string())
 }
 
 pub fn remote_ip(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.remote_addr.ip().to_string())
+    Some(stream_info.server_stream_info.remote_addr.ip().to_string())
 }
 
 pub fn remote_port(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.remote_addr.port().to_string())
+    Some(
+        stream_info
+            .server_stream_info
+            .remote_addr
+            .port()
+            .to_string(),
+    )
 }
 
 pub fn session_time(stream_info: &stream_info::StreamInfo) -> Option<String> {
@@ -450,4 +478,11 @@ pub fn upstream_min_stream_cache_size(stream_info: &stream_info::StreamInfo) -> 
         .unwrap();
 
     return Some(min_stream_cache_size.to_string());
+}
+
+pub fn write_max_block_time_ms(stream_info: &stream_info::StreamInfo) -> Option<String> {
+    if stream_info.write_max_block_time_ms == 0 {
+        return None;
+    }
+    return Some(stream_info.write_max_block_time_ms.to_string());
 }

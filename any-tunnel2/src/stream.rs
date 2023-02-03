@@ -67,19 +67,35 @@ impl Stream {
     }
 
     pub fn close(&mut self) {
-        let stream_tx = self.stream_tx.take();
+        self.write_close();
+        self.read_close();
+    }
+
+    pub fn is_read_close(&self) -> bool {
+        self.stream_rx.is_none()
+    }
+
+    pub fn is_write_close(&self) -> bool {
+        self.stream_tx.is_none()
+    }
+
+    pub fn read_close(&mut self) {
         let stream_rx = self.stream_rx.take();
-        if stream_tx.is_some() {
-            log::debug!("close stream_tx");
-            let stream_tx = stream_tx.unwrap();
-            stream_tx.close();
-            std::mem::drop(stream_tx);
-        }
         if stream_rx.is_some() {
             log::debug!("close stream_rx");
             let stream_rx = stream_rx.unwrap();
             stream_rx.close();
             std::mem::drop(stream_rx);
+        }
+    }
+
+    pub fn write_close(&mut self) {
+        let stream_tx = self.stream_tx.take();
+        if stream_tx.is_some() {
+            log::debug!("close stream_tx");
+            let stream_tx = stream_tx.unwrap();
+            stream_tx.close();
+            std::mem::drop(stream_tx);
         }
     }
 
@@ -169,10 +185,17 @@ impl tokio::io::AsyncWrite for Stream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_write_close() {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "ConnectionReset",
+            )));
+        }
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.write_close();
         Poll::Ready(Ok(()))
     }
 }

@@ -1,4 +1,5 @@
 use crate::stream::server;
+use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
 use any_tunnel::server as tunnel_server;
@@ -85,17 +86,7 @@ impl Connection {
 
 #[async_trait(?Send)]
 impl server::Connection for Connection {
-    async fn stream(
-        &mut self,
-    ) -> Result<
-        Option<(
-            Protocol7,
-            stream_flow::StreamFlow,
-            SocketAddr,
-            Option<SocketAddr>,
-            Option<String>,
-        )>,
-    > {
+    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
         if self.stream.is_none() {
             return Ok(None);
         }
@@ -106,11 +97,13 @@ impl server::Connection for Connection {
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);
         Ok(Some((
-            self.protocol7.clone(),
             stream,
-            remote_addr,
-            None,
-            None,
+            ServerStreamInfo {
+                protocol7: self.protocol7.clone(),
+                remote_addr,
+                local_addr: None,
+                domain: None,
+            },
         )))
     }
 }
