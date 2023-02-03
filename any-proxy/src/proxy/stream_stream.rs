@@ -232,14 +232,23 @@ impl StreamStream {
         #[cfg(unix)]
         let (client_sendfile, upstream_sendfile) =
             if config_ctx.fast_conf.is_open_sendfile && !_is_open_ebpf {
-                let client_sendfile = Some(SendFile::new(
-                    _client_stream_fd,
-                    Some(stream_info.borrow().client_stream_flow_info.clone()),
-                ));
-                let upstream_sendfile = Some(SendFile::new(
-                    _upstream_stream_fd,
-                    Some(stream_info.borrow().upstream_stream_flow_info.clone()),
-                ));
+                let client_sendfile = if _client_stream_fd > 0 {
+                    Some(SendFile::new(
+                        _client_stream_fd,
+                        Some(stream_info.borrow().client_stream_flow_info.clone()),
+                    ))
+                } else {
+                    None
+                };
+
+                let upstream_sendfile = if _upstream_stream_fd > 0 {
+                    Some(SendFile::new(
+                        _upstream_stream_fd,
+                        Some(stream_info.borrow().upstream_stream_flow_info.clone()),
+                    ))
+                } else {
+                    None
+                };
                 (client_sendfile, upstream_sendfile)
             } else {
                 (None, None)
@@ -391,8 +400,8 @@ impl StreamStream {
         w: &mut W,
         is_client: bool,
         #[cfg(unix)] sendfile: &Option<SendFile>,
-    ) -> std::io::Result<(StreamStatus, u128)> {
-        let mut _write_max_block_time_ms = 0;
+        stream_info: Rc<RefCell<StreamInfo>>,
+    ) -> std::io::Result<StreamStatus> {
         let mut _is_sendfile = false;
         let mut n = buffer.size - buffer.start;
         let curr_limit_rate = ssc.curr_limit_rate.load(Ordering::Relaxed);
@@ -403,7 +412,7 @@ impl StreamStream {
         } else if curr_limit_rate > 0 {
             curr_limit_rate
         } else {
-            return Ok((StreamStatus::Limit, _write_max_block_time_ms));
+            return Ok(StreamStatus::Limit);
         };
 
         if limit_rate_size < n {
@@ -414,6 +423,21 @@ impl StreamStream {
         let wn = loop {
             #[cfg(unix)]
             if sendfile.is_some() && buffer.file_fd > 0 {
+                if stream_info.borrow().debug_is_open_print {
+                    let stream_info = stream_info.borrow();
+                    log::info!(
+                        "{}---{:?}---{}:sendfile stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{}, file_fd:{}, seek:{}",
+                        stream_info.request_id,
+                        stream_info.server_stream_info.local_addr,
+                        StreamStream::get_flag(is_client),
+                        ssc.stream_cache_size,
+                        ssc.max_tmp_file_size,
+                        ssc.tmp_file_size,
+                        buffer.file_fd,
+                        buffer.seek,
+                    );
+                }
+
                 _is_sendfile = true;
                 let wn = sendfile
                     .as_ref()
@@ -422,10 +446,10 @@ impl StreamStream {
                     .await;
                 if let Err(e) = wn {
                     if e.kind() == std::io::ErrorKind::WouldBlock {
-                        return Ok((
-                            StreamStatus::StreamFull(StreamFullInfo::new(_is_sendfile, 0)),
-                            _write_max_block_time_ms,
-                        ));
+                        return Ok(StreamStatus::StreamFull(StreamFullInfo::new(
+                            _is_sendfile,
+                            0,
+                        )));
                     }
                     return Err(e);
                 }
@@ -434,31 +458,37 @@ impl StreamStream {
 
             _is_sendfile = false;
             let end = buffer.start + n;
-            if false {
-                let ret = tokio::time::timeout(
-                    tokio::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS),
-                    w.write(&buffer.datas[buffer.start as usize..end as usize]),
-                )
-                .await;
-                if ret.is_err() {
-                    return Ok((
-                        StreamStatus::StreamFull(StreamFullInfo::default()),
-                        _write_max_block_time_ms,
-                    ));
+
+            if stream_info.borrow().debug_is_open_print {
+                let stream_info = stream_info.borrow();
+                log::info!(
+                    "{}---{:?}---{}:write stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{}, start:{}, end:{}",
+                    stream_info.request_id,
+                    stream_info.server_stream_info.local_addr,
+                    StreamStream::get_flag(is_client),
+                    ssc.stream_cache_size,
+                    ssc.max_tmp_file_size,
+                    ssc.tmp_file_size,
+                    buffer.start,
+                    end,
+                );
+            }
+
+            #[cfg(feature = "anyproxy-write-block-time-ms")]
+            let write_start_time = Instant::now();
+
+            let write_size = w
+                .write(&buffer.datas[buffer.start as usize..end as usize])
+                .await? as u64;
+
+            #[cfg(feature = "anyproxy-write-block-time-ms")]
+            {
+                let write_max_block_time_ms = write_start_time.elapsed().as_millis();
+                if write_max_block_time_ms > stream_info.borrow().write_max_block_time_ms {
+                    stream_info.borrow_mut().write_max_block_time_ms = write_max_block_time_ms;
                 }
-                break ret.unwrap()? as u64;
-            } else {
-                #[cfg(feature = "anyproxy-write-block-time-ms")]
-                let write_start_time = Instant::now();
-                let write_size = w
-                    .write(&buffer.datas[buffer.start as usize..end as usize])
-                    .await? as u64;
-                #[cfg(feature = "anyproxy-write-block-time-ms")]
-                {
-                    _write_max_block_time_ms = write_start_time.elapsed().as_millis();
-                }
-                break write_size;
-            };
+            }
+            break write_size;
         };
 
         log::trace!("{}, wn:{}", StreamStream::get_flag(is_client), wn);
@@ -482,12 +512,12 @@ impl StreamStream {
         }
 
         if wn != n {
-            return Ok((
-                StreamStatus::StreamFull(StreamFullInfo::new(_is_sendfile, wn)),
-                _write_max_block_time_ms,
-            ));
+            return Ok(StreamStatus::StreamFull(StreamFullInfo::new(
+                _is_sendfile,
+                wn,
+            )));
         }
-        return Ok((StreamStatus::Ok(wn), _write_max_block_time_ms));
+        return Ok(StreamStatus::Ok(wn));
     }
 }
 
@@ -574,13 +604,14 @@ impl StreamStreamMemory {
                     );
                 }
 
-                let (stream_status, _write_max_block_time_ms) = StreamStream::stream_limit_write(
+                let stream_status = StreamStream::stream_limit_write(
                     &mut buffer,
                     &mut ssc,
                     &mut w,
                     is_client,
                     #[cfg(unix)]
                     &None,
+                    stream_info.clone(),
                 )
                 .await
                 .map_err(|e| anyhow!("err:StreamStream.stream_write => e:{}", e))?;
@@ -593,13 +624,6 @@ impl StreamStreamMemory {
                         StreamStream::get_flag(is_client),
                         stream_status
                     );
-                }
-
-                #[cfg(feature = "anyproxy-write-block-time-ms")]
-                {
-                    if _write_max_block_time_ms > stream_info.borrow().write_max_block_time_ms {
-                        stream_info.borrow_mut().write_max_block_time_ms = _write_max_block_time_ms;
-                    }
                 }
 
                 if let StreamStatus::Limit = stream_status {
@@ -684,13 +708,18 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             write_err: None,
         })
     }
-    pub fn is_empty(&self) -> bool {
-        if self.caches.len() <= 0
-            && self.left_buffer.is_none()
-            && (self.read_buffer.is_none()
-                || (self.read_buffer.is_some()
-                    && self.read_buffer.as_ref().unwrap().read_size == 0))
+
+    pub fn is_read_empty(&self) -> bool {
+        if self.read_buffer.is_none()
+            || (self.read_buffer.is_some() && self.read_buffer.as_ref().unwrap().read_size == 0)
         {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn is_write_empty(&self) -> bool {
+        if self.caches.len() <= 0 && self.left_buffer.is_none() {
             return true;
         }
         return false;
@@ -761,7 +790,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{:?}---{}:read file stream_cache_size:{}, tmp_file_size:{}, read_err.is_none:{}, write_err.is_none:{}, is_empty:{}",
+                    "{}---{:?}---{}:read file stream_cache_size:{}, tmp_file_size:{}, read_err.is_none:{}, write_err.is_none:{}, is_read_empty:{}, is_write_empty:{}",
                     stream_info.request_id,
                     stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
@@ -769,14 +798,17 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                     ssc.tmp_file_size,
                     self.read_err.is_none(),
                     self.write_err.is_none(),
-                    self.is_empty(),
+                    self.is_read_empty(),
+                    self.is_write_empty(),
                 );
             }
 
             if _is_runing
                 && (self.write_err.is_some()
-                    || (self.read_err.is_some() && self.is_empty())
-                    || (self.stream_info.borrow().close_num >= 1 && self.is_empty())
+                    || (self.read_err.is_some() && self.is_read_empty() && self.is_write_empty())
+                    || (self.stream_info.borrow().close_num >= 1
+                        && self.is_read_empty()
+                        && self.is_write_empty())
                     || self.is_sendfile_close())
             {
                 _is_runing = false;
@@ -810,6 +842,22 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             } else {
                 self.check_sleep().await;
             }
+            if self.stream_info.borrow().debug_is_open_print {
+                let stream_info = self.stream_info.borrow();
+                log::info!(
+                    "{}---{:?}---{}:write file stream_cache_size:{}, tmp_file_size:{}, read_err.is_none:{}, write_err.is_none:{}, is_read_empty:{}, is_write_empty:{}",
+                    stream_info.request_id,
+                    stream_info.server_stream_info.local_addr,
+                    StreamStream::get_flag(self.is_client),
+                    ssc.stream_cache_size,
+                    ssc.tmp_file_size,
+                    self.read_err.is_none(),
+                    self.write_err.is_none(),
+                    self.is_read_empty(),
+                    self.is_write_empty(),
+                );
+            }
+
             self.stream_status = self.write(&mut ssc).await?;
         }
     }
@@ -1201,7 +1249,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{:?}---{}:read file buffer.start:{}, buffer.size:{}",
+                    "{}---{:?}---{}:start stream_limit_write buffer.start:{}, buffer.size:{}",
                     stream_info.request_id,
                     stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
@@ -1217,6 +1265,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 self.is_client,
                 #[cfg(unix)]
                 &self.sendfile,
+                self.stream_info.clone(),
             )
             .await;
 
@@ -1231,19 +1280,12 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 self.write_err = Some(Err(anyhow!("err:StreamStream.stream_write => e:{}", e)));
                 return Ok(StreamStatus::StreamFull(StreamFullInfo::default()));
             }
-            let (stream_status, _write_max_block_time_ms) = stream_status.unwrap();
-            #[cfg(feature = "anyproxy-write-block-time-ms")]
-            {
-                if _write_max_block_time_ms > self.stream_info.borrow().write_max_block_time_ms {
-                    self.stream_info.borrow_mut().write_max_block_time_ms =
-                        _write_max_block_time_ms;
-                }
-            }
+            let stream_status = stream_status.unwrap();
 
             if self.stream_info.borrow().debug_is_open_print {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{:?}---{}:read file stream_status:{:?}, stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{} ",
+                    "{}---{:?}---{}:end stream_limit_write stream_status:{:?}, stream_cache_size:{}, max_tmp_file_size:{}, tmp_file_size:{} ",
                     stream_info.request_id,
                     stream_info.server_stream_info.local_addr,
                     StreamStream::get_flag(self.is_client),
