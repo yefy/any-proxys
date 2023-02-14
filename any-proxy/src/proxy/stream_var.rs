@@ -54,6 +54,7 @@ impl StreamVar {
         var_map.insert("upstream_curr_stream_size", upstream_curr_stream_size);
         var_map.insert("upstream_max_stream_size", upstream_max_stream_size);
         var_map.insert("write_max_block_time_ms", write_max_block_time_ms);
+        var_map.insert("is_timeout_exit", is_timeout_exit);
 
         var_map.insert(
             "upstream_min_stream_cache_size",
@@ -485,4 +486,11 @@ pub fn write_max_block_time_ms(stream_info: &stream_info::StreamInfo) -> Option<
         return None;
     }
     return Some(stream_info.write_max_block_time_ms.to_string());
+}
+
+pub fn is_timeout_exit(stream_info: &stream_info::StreamInfo) -> Option<String> {
+    if !stream_info.is_timeout_exit {
+        return None;
+    }
+    return Some("timeout exit".to_string());
 }

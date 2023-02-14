@@ -6,7 +6,7 @@
         #default "./logs/access.log"
         access_log_file = "./logs/access.log"
         #default
-        access_format = "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]"
+        access_format = "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]"
         #default false
         access_log_stdout = false
 [[access]]
@@ -15,7 +15,7 @@
         #default "./logs/access.log"
         access_log_file = "./logs/access.log"
         #default
-        access_format = "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]"
+        access_format = "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} [${stream_work_times}]"
         #default false
         access_log_stdout = false  
 ```

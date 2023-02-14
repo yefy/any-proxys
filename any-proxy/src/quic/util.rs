@@ -101,7 +101,7 @@ pub fn server_config(
 
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
     server_config.transport = Arc::new(transport_config);
-    server_config.use_retry(true);
+    //server_config.use_retry(true);
 
     Ok(server_config)
 }
@@ -152,13 +152,15 @@ pub fn client_config(config: &Config) -> Result<quinn::ClientConfig> {
 
 pub fn endpoint(
     config: &Config,
-    reuseport: bool,
+    mut reuseport: bool,
     addr: Option<SocketAddr>,
 ) -> Result<quinn::Endpoint> {
     //ipv6
     //let addr = &"[::]:0".parse()
     //    .map_err(|e| anyhow!("err:bind [::]:0 => e:{}", e))?;
-
+    if reuseport {
+        reuseport = false;
+    }
     let addr = if addr.is_some() {
         addr.unwrap()
     } else {
@@ -199,6 +201,7 @@ pub fn endpoint(
             quinn::TokioRuntime,
         )?
     };
+
     client_endpoint.set_default_client_config(client_config);
     Ok(client_endpoint)
 }
@@ -245,18 +248,19 @@ pub async fn listen(
         }
     }
 
-    let client_config =
-        client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;
+    //let client_config =
+    //   client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;
     let server_config = server_config(config, Some(sni_rustls_map.clone()))
         .map_err(|e| anyhow!("err:server_config => e:{}", e))?;
-    let mut endpoint = quinn::Endpoint::new(
+    let endpoint = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
         Some(server_config),
         udp_socket,
         quinn::TokioRuntime,
     )
     .map_err(|e| anyhow!("err:Endpoint::new => e:{}", e))?;
-    endpoint.set_default_client_config(client_config);
+
+    //endpoint.set_default_client_config(client_config);
     Ok(endpoint)
 }
 

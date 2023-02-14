@@ -1,7 +1,6 @@
 use super::peer_client::PeerClient;
 use super::protopack;
 use super::stream::Stream;
-use super::stream_flow::AsyncReadAsyncWrite;
 use super::stream_flow::StreamFlow;
 use super::tunnel::Tunnel;
 use super::Protocol4;
@@ -11,6 +10,7 @@ use anyhow::Result;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 pub type AcceptSenderType = async_channel::Sender<(Stream, SocketAddr, SocketAddr)>;
@@ -43,16 +43,17 @@ impl Publish {
         Publish { tunnel_key, server }
     }
 
-    pub async fn push_peer_stream<RW: 'static + AsyncReadAsyncWrite>(
+    pub async fn push_peer_stream(
         &self,
-        stream: RW,
+        r: Box<dyn AsyncRead + Send + Unpin>,
+        w: Box<dyn AsyncWrite + Send + Unpin>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
         self.server
             .insert_peer_stream(
                 self.tunnel_key.clone(),
-                StreamFlow::new(0, Box::new(stream)),
+                StreamFlow::new(0, r, w),
                 local_addr,
                 remote_addr,
             )

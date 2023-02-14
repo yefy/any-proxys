@@ -16,8 +16,9 @@ pub trait Proxy {
         config: &config_toml::ConfigToml,
         ups: Rc<upstream::Upstream>,
     ) -> Result<()>;
-    async fn stop(&self, _: bool) -> Result<()>;
-    async fn send(&self, _: bool) -> Result<()>;
+    async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) -> Result<()>;
+    async fn send(&self, flag: &str, is_fast_shutdown: bool) -> Result<()>;
+    async fn wait(&self, flag: &str) -> Result<()>;
 }
 
 #[async_trait(?Send)]

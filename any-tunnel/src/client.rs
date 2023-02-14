@@ -17,13 +17,13 @@ lazy_static! {
 }
 
 #[derive(Clone)]
-pub struct AsyncClient {
+pub struct ClientContext {
     peer_stream_key_map: Arc<Mutex<HashMap<String, VecDeque<(Arc<PeerStreamKey>, i64)>>>>,
 }
 
-impl AsyncClient {
-    pub fn new() -> AsyncClient {
-        AsyncClient {
+impl ClientContext {
+    pub fn new() -> ClientContext {
+        ClientContext {
             peer_stream_key_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -34,6 +34,10 @@ impl AsyncClient {
         peer_stream_key: Arc<PeerStreamKey>,
         min_stream_cache_size: usize,
     ) {
+        if min_stream_cache_size <= 0 {
+            return;
+        }
+
         let curr_time = Local::now().timestamp();
         let mut peer_stream_key_map = self.peer_stream_key_map.lock().unwrap();
         let values = peer_stream_key_map.get_mut(&key);
@@ -68,6 +72,9 @@ impl AsyncClient {
         key: &str,
         min_stream_cache_size: usize,
     ) -> Option<Arc<PeerStreamKey>> {
+        if min_stream_cache_size <= 0 {
+            return None;
+        }
         let curr_time = Local::now().timestamp();
         let mut peer_stream_key_map = self.peer_stream_key_map.lock().unwrap();
         let values = peer_stream_key_map.get_mut(key);
@@ -108,7 +115,7 @@ impl AsyncClient {
 
 #[derive(Clone)]
 pub struct Client {
-    async_client: Arc<AsyncClient>,
+    client_context: Arc<ClientContext>,
     pid: i32,
 }
 
@@ -116,26 +123,25 @@ impl Client {
     pub fn new() -> Client {
         let pid = unsafe { libc::getpid() };
         Client {
-            async_client: Arc::new(AsyncClient::new()),
+            client_context: Arc::new(ClientContext::new()),
             pid,
         }
     }
 
     pub async fn connect(
         &self,
+        request_id: Option<String>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
-        self.do_connect(peer_stream_connect, peer_stream_size)
+        self.do_connect(request_id, peer_stream_connect, peer_stream_size)
             .await
-            .map_err(|e| {
-                log::error!("{}", e);
-                e
-            })
+            .map_err(|e| anyhow!("err:connect => e:{}", e))
     }
 
     pub async fn do_connect(
         &self,
+        request_id: Option<String>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
@@ -147,14 +153,15 @@ impl Client {
             true,
             max_stream_size,
             Some((self.pid, client_id)),
-            Some(self.async_client.clone()),
+            Some(self.client_context.clone()),
             Some(peer_stream_connect),
             None,
             min_stream_cache_size,
             peer_stream_size,
-            None,
+            request_id,
             None,
             channel_size,
+            None,
         )
         .await
         .map_err(|e| anyhow!("err:create_client => e:{}", e))?;

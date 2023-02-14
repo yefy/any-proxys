@@ -19,6 +19,9 @@ tcp、quic、any-tunnel、any-tunnel2协议互转
 支持ebpf导流  
 纯端口代理模式  
 域名代理模式  
+各种信息统计  
+链路日志  
+支持各种网络环境加速  
 
 # 已经支持
 纯端口代理模式  
@@ -30,7 +33,7 @@ any-tunnel代理加速
 any-tunnel2代理加速  
 proxy_protocol_hello协议头   
 tcp, tcp ssl, quic, any-tunnel, any-tunnel2互转  
-access log和变量  
+access log和变量包括各种信息统计    
 reload配置热加载和超时断流    
 reinit重新创建线程和配置热加载  
 流量统计  
@@ -54,6 +57,8 @@ anyproxy -t命令,配置正确性检查
 sni域名解析  
 异步文件io  
 内存管理  
+小数据包合并发送  
+page大小读写文件  
 
 # 未来支持  
 port模式http域名获取  

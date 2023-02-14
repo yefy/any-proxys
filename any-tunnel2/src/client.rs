@@ -35,7 +35,7 @@ impl Client {
     pub fn new(tunnel: Tunnel, peer_stream_max_len: Arc<AtomicUsize>) -> Client {
         let pid = unsafe { libc::getpid() };
         let client_id = CLIENT_ID.fetch_add(1, Ordering::Relaxed);
-        #[cfg(not(feature = "anytunnel2-ack"))]
+        #[cfg(not(feature = "anyack"))]
         {
             peer_stream_max_len.store(1, Ordering::Relaxed);
         }
@@ -106,7 +106,7 @@ impl Client {
                 peer_client_sender.unwrap()
             } else {
                 let (stream, local_addr, remote_addr) = peer_stream_connect
-                    .connect(&connect_addr)
+                    .connect()
                     .await
                     .map_err(|e| anyhow!("err:peer_stream_connect.connect => e:{}", e))?;
                 let session_id = {

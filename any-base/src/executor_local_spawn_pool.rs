@@ -49,17 +49,17 @@ impl ExecutorLocalSpawnPool {
         Ok(())
     }
 
-    pub fn send(&self, is_fast_shutdown: bool) {
-        self.executor_local_spawn.send(is_fast_shutdown)
+    pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
+        self.executor_local_spawn.send(flag, is_fast_shutdown)
     }
 
-    pub async fn wait(&self) -> Result<()> {
-        self.executor_local_spawn.wait().await
+    pub async fn wait(&self, flag: &str) -> Result<()> {
+        self.executor_local_spawn.wait(flag).await
     }
 
-    pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
+    pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
         self.executor_local_spawn
-            .stop(is_fast_shutdown, shutdown_timeout)
+            .stop(flag, is_fast_shutdown, shutdown_timeout)
             .await
     }
 }

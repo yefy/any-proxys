@@ -16,7 +16,7 @@ use super::DEFAULT_STREAM_CHANNEL_SIZE;
 use crate::anychannel::AnyAsyncChannel;
 use crate::anychannel::AnyAsyncReceiver;
 use crate::protopack::{TunnelAddConnect, TunnelMaxConnect};
-#[cfg(feature = "anytunnel2-debug")]
+#[cfg(feature = "anydebug")]
 use crate::DEFAULT_PRINT_NUM;
 use crate::{
     PeerClientToStreamPackChannel, PeerClientToStreamPackReceiver, PeerStreamToPeerClientChannel,
@@ -156,7 +156,7 @@ impl PeerClientAsync {
 
         log::debug!("connect_addr:{}", connect_addr);
         let (stream, _, _) = peer_stream_connect
-            .connect(connect_addr)
+            .connect()
             .await
             .map_err(|e| anyhow!("err:peer_stream_connect.connect => e:{}", e))?;
         let session_id = self.session_id.clone();
@@ -347,7 +347,7 @@ impl PeerClient {
             return Ok(());
         }
 
-        #[cfg(feature = "anytunnel2-debug")]
+        #[cfg(feature = "anydebug")]
         {
             match pack.clone() {
                 TunnelArcPack::TunnelData(value) => {
@@ -528,19 +528,22 @@ impl PeerClient {
         let (stream_pack_to_stream_tx, stream_pack_to_stream_rx) =
             StreamPackToStreamChannel::channel(DEFAULT_STREAM_CHANNEL_SIZE);
 
-        tokio::spawn(async move {
+        let async_ = Box::pin(async move {
             let stream_pack = StreamPack::new(stream_id, stream_pack_to_peer_stream_tx);
-            if let Err(e) = stream_pack
+            stream_pack
                 .start(
                     stream_pack_to_stream_tx,
                     peer_client_to_stream_pack_rx,
                     stream_to_stream_pack_rx,
                 )
                 .await
-            {
-                log::error!("err:pack.start() => e:{}", e);
-            }
         });
+
+        if cfg!(feature = "anyruntime-tokio-spawn-local") {
+            any_base::executor_local_spawn::_start_and_free2(move || async move { async_.await });
+        } else {
+            any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+        }
 
         Ok((
             Stream::new(stream_to_stream_pack_tx, stream_pack_to_stream_rx),

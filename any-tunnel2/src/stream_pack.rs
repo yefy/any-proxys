@@ -8,7 +8,7 @@ use super::protopack::TunnelDataAckHeader;
 use super::protopack::TunnelDataHeader;
 use super::DEFAULT_CLOSE_TIMEOUT;
 use super::DEFAULT_HEADBEAT_TIMEOUT;
-#[cfg(feature = "anytunnel2-debug")]
+#[cfg(feature = "anydebug")]
 use super::DEFAULT_PRINT_NUM;
 use super::DEFAULT_WINDOW_LEN;
 use crate::anychannel::AnyAsyncSender;
@@ -220,7 +220,7 @@ impl StreamPack {
                                         ));
                                     }
 
-                                    #[cfg(feature = "anytunnel2-debug")]
+                                    #[cfg(feature = "anydebug")]
                                     {
                                         if tunnel_data.header.pack_id % DEFAULT_PRINT_NUM == 0 {
                                             log::info!(
@@ -255,7 +255,7 @@ impl StreamPack {
                                             self.waiting_pack_map.lock().await;
                                         for pack_id in value.data.pack_ids.iter() {
                                             log::trace!("pack_id drop:{:?}", pack_id);
-                                            #[cfg(feature = "anytunnel2-debug")]
+                                            #[cfg(feature = "anydebug")]
                                             {
                                                 if pack_id % DEFAULT_PRINT_NUM == 0 {
                                                     log::info!(
@@ -414,7 +414,7 @@ impl StreamPack {
         let mut pack_id = 0;
         loop {
             let ret: Result<()> = async {
-                #[cfg(feature = "anytunnel2-ack")]
+                #[cfg(feature = "anyack")]
                 self.send_window_wait.clone().await;
 
                 let datas = match tokio::time::timeout(
@@ -429,7 +429,7 @@ impl StreamPack {
                         return Ok(());
                     }
                 };
-                #[cfg(feature = "anytunnel2-debug")]
+                #[cfg(feature = "anydebug")]
                 {
                     if pack_id % DEFAULT_PRINT_NUM == 0 {
                         log::info!("stream_pack write pack_id:{}", pack_id);
@@ -480,7 +480,7 @@ impl StreamPack {
                 continue;
             }
 
-            #[cfg(not(feature = "anytunnel2-ack"))]
+            #[cfg(not(feature = "anyack"))]
             if true {
                 continue;
             }
@@ -518,7 +518,7 @@ impl StreamPack {
                 }
                 let (waiting_pack, first_send_time) = waiting_pack.unwrap();
 
-                #[cfg(feature = "anytunnel2-debug")]
+                #[cfg(feature = "anydebug")]
                 log::info!(
                     "timeout waiting_pack_info.pack_id:{}",
                     waiting_pack_info.pack_id
@@ -538,7 +538,7 @@ impl StreamPack {
     async fn heartbeat(&self) -> Result<()> {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            #[cfg(feature = "anytunnel2-debug")]
+            #[cfg(feature = "anydebug")]
             {
                 log::info!(
                     "waiting_pack_map len:{}",
@@ -575,7 +575,7 @@ impl StreamPack {
     }
 
     async fn send_tunnel_data_ack(&self, stream_id: u32, pack_ids: Vec<u32>) -> Result<()> {
-        #[cfg(not(feature = "anytunnel2-ack"))]
+        #[cfg(not(feature = "anyack"))]
         if true {
             return Ok(());
         }

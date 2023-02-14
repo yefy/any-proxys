@@ -80,7 +80,7 @@ impl UpstreamHeartbeatServer {
 
         loop {
             let connect_info = connect
-                .connect(&mut None)
+                .connect(None, &mut None)
                 .await
                 .map_err(|e| anyhow!("err:connect => e:{}", e));
 

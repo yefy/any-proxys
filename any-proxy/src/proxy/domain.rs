@@ -181,13 +181,19 @@ impl proxy::Proxy for Domain {
         }
         Ok(())
     }
-    async fn stop(&self, is_fast_shutdown: bool) -> Result<()> {
-        self.executor_local_spawn.stop(is_fast_shutdown, 10).await;
+    async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) -> Result<()> {
+        self.executor_local_spawn
+            .stop(flag, is_fast_shutdown, shutdown_timeout)
+            .await;
         Ok(())
     }
 
-    async fn send(&self, is_fast_shutdown: bool) -> Result<()> {
-        self.executor_local_spawn.send(is_fast_shutdown);
+    async fn send(&self, flag: &str, is_fast_shutdown: bool) -> Result<()> {
+        self.executor_local_spawn.send(flag, is_fast_shutdown);
         Ok(())
+    }
+
+    async fn wait(&self, flag: &str) -> Result<()> {
+        self.executor_local_spawn.wait(flag).await
     }
 }

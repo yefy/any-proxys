@@ -134,8 +134,8 @@ impl server::Connection for Connection {
         let fd = tcp_stream.as_raw_fd();
         #[cfg(not(unix))]
         let fd = 0;
-
-        let mut stream = stream_flow::StreamFlow::new(fd, Box::new(tcp_stream));
+        let (r, w) = tokio::io::split(tcp_stream);
+        let mut stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);

@@ -1,16 +1,17 @@
 use super::executor_spawn_wait_run::ExecutorSpawnWaitRun;
 use crate::executor_spawn::AsyncContextSpawn;
 use crate::executor_spawn::ExecutorsSpawn;
+use crate::rt::SpawnExec;
 use anyhow::Result;
 use std::future::Future;
 
-pub struct ExecutorSpawnPoolWaitRun {
+pub struct ExecutorSpawnPoolWaitRun<E: Clone> {
     worker_threads: usize,
-    executor_spawn_wait_run: ExecutorSpawnWaitRun,
+    executor_spawn_wait_run: ExecutorSpawnWaitRun<E>,
 }
 
-impl ExecutorSpawnPoolWaitRun {
-    pub fn new(worker_threads: usize, executors: ExecutorsSpawn) -> ExecutorSpawnPoolWaitRun {
+impl<E: Clone> ExecutorSpawnPoolWaitRun<E> {
+    pub fn new(worker_threads: usize, executors: ExecutorsSpawn<E>) -> ExecutorSpawnPoolWaitRun<E> {
         let executor_spawn_wait_run = ExecutorSpawnWaitRun::new(executors);
         ExecutorSpawnPoolWaitRun {
             worker_threads,
@@ -18,13 +19,15 @@ impl ExecutorSpawnPoolWaitRun {
         }
     }
 
-    pub fn _start<S, F>(&mut self, service: S) -> Result<()>
+    pub fn _start<S, F>(&mut self, is_wait: bool, service: S) -> Result<()>
     where
-        S: FnOnce(AsyncContextSpawn) -> F + 'static + Send + Clone,
+        S: FnOnce(AsyncContextSpawn<E>) -> F + 'static + Send + Clone,
         F: Future<Output = Result<()>> + 'static + Send,
+        E: SpawnExec<F>,
     {
         for _ in 0..self.worker_threads {
-            self.executor_spawn_wait_run._start::<S, F>(service.clone());
+            self.executor_spawn_wait_run
+                ._start::<S, F>(is_wait, service.clone());
         }
 
         Ok(())

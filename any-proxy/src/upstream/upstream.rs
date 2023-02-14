@@ -93,14 +93,22 @@ impl Upstream {
         Ok(())
     }
 
-    pub async fn send(&self, is_fast_shutdown: bool) -> Result<()> {
-        self.executor_local_spawn.send(is_fast_shutdown);
+    pub async fn send(&self, flag: &str, is_fast_shutdown: bool) -> Result<()> {
+        self.executor_local_spawn.send(flag, is_fast_shutdown);
         Ok(())
     }
 
-    pub async fn stop(&self, is_fast_shutdown: bool, ups_version: i32) -> Result<()> {
+    pub async fn stop(
+        &self,
+        flag: &str,
+        is_fast_shutdown: bool,
+        shutdown_timeout: u64,
+        ups_version: i32,
+    ) -> Result<()> {
         log::info!("upstream stop version:{}", ups_version);
-        self.executor_local_spawn.stop(is_fast_shutdown, 10).await;
+        self.executor_local_spawn
+            .stop(flag, is_fast_shutdown, shutdown_timeout)
+            .await;
         Ok(())
     }
 }

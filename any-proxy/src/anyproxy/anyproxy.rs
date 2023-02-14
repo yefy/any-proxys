@@ -89,7 +89,7 @@ impl Anyproxy {
         }
 
         if arg_config.check_config {
-            executor_local_spawn::_block_on(move |executor_local_spawn| async move {
+            executor_local_spawn::_block_on(1, move |executor_local_spawn| async move {
                 AnyproxyGroup::check(0, executor_local_spawn.executors())
                     .await
                     .map_err(|e| anyhow::anyhow!("err:check => e:{}", e))?;
@@ -131,6 +131,7 @@ impl Anyproxy {
         let server = server::Server::new();
 
         let session_id = Arc::new(AtomicU64::new(100000));
+        let shutdown_timeout = config.common.shutdown_timeout;
 
         #[cfg(feature = "anyproxy-ebpf")]
         let mut ebpf_group = any_ebpf::EbpfGroup::new(config.common.cpu_affinity, 0)?;
@@ -173,15 +174,19 @@ impl Anyproxy {
                     continue;
                 }
                 AnyproxyState::Quit => {
-                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), false)
-                        .await;
+                    self.async_anyproxy_group_stop(
+                        anyproxy_group.unwrap(),
+                        false,
+                        shutdown_timeout,
+                    )
+                    .await;
                     #[cfg(feature = "anyproxy-ebpf")]
                     ebpf_group.stop().await;
                     log::info!("signal: quit");
                     break;
                 }
                 AnyproxyState::Stop => {
-                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true)
+                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true, shutdown_timeout)
                         .await;
                     #[cfg(feature = "anyproxy-ebpf")]
                     ebpf_group.stop().await;
@@ -250,7 +255,6 @@ impl Anyproxy {
         }
 
         self.wait_anyproxy_groups().await?;
-
         Ok(())
     }
 
@@ -258,16 +262,21 @@ impl Anyproxy {
         &mut self,
         anyproxy_group: anyproxy_group::AnyproxyGroup,
         is_fast_shutdown: bool,
+        shutdown_timeout: u64,
     ) {
         self.executor_local_spawn._start(move |_| async move {
-            anyproxy_group.stop(is_fast_shutdown).await;
+            anyproxy_group
+                .stop(is_fast_shutdown, shutdown_timeout)
+                .await;
             Ok(())
         });
     }
 
     pub async fn wait_anyproxy_groups(&mut self) -> Result<()> {
         log::info!("anyproxy wait_anyproxy_groups");
-        self.executor_local_spawn.stop(true, 10).await;
+        self.executor_local_spawn
+            .wait("anyproxy wait anyproxy_groups")
+            .await?;
         Ok(())
     }
 

@@ -7,9 +7,13 @@ edition = "2021"
 
 
 [features]
-default = ["anytunnel2-ack"]
-anytunnel2-debug = []
-anytunnel2-ack = []
+default = ["anyack", "anyruntime-tokio-spawn-local"]
+anydebug-error = ["anydebug", "anyerror"]
+anydebug = []
+anyerror = []
+anyack = []
+anyruntime-tokio-spawn-local =[]
+anyruntime-tokio-spawn =[]
 
 [dependencies]
 any-base = {path = "../any-base"}

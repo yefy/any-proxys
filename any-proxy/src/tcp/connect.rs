@@ -11,10 +11,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub struct Connect {
+pub struct ConnectContext {
     host: String,
     address: SocketAddr, //ip:port, domain:port
-    tcp_config: Arc<TcpConfig>,
+    tcp_config: TcpConfig,
+}
+
+pub struct Connect {
+    context: Arc<ConnectContext>,
 }
 
 impl Connect {
@@ -22,26 +26,31 @@ impl Connect {
         host: String,
         address: SocketAddr, //ip:port, domain:port
         tcp_config: TcpConfig,
-    ) -> Result<Connect> {
-        Ok(Connect {
-            host,
-            address,
-            tcp_config: Arc::new(tcp_config),
-        })
+    ) -> Connect {
+        Connect {
+            context: Arc::new(ConnectContext {
+                host,
+                address,
+                tcp_config,
+            }),
+        }
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl connect::Connect for Connect {
     async fn connect(
         &self,
+        _request_id: Option<String>,
         stream_info: &mut Option<&mut stream_flow::StreamFlowInfo>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
-        let timeout = tokio::time::Duration::from_secs(self.tcp_config.tcp_connect_timeout as u64);
+        let timeout =
+            tokio::time::Duration::from_secs(self.context.tcp_config.tcp_connect_timeout as u64);
         let start_time = Instant::now();
-        let addr = self.address.clone();
-        let client = tcp_lient::Client::new(addr, timeout, self.tcp_config.clone())
-            .map_err(|e| anyhow!("err:tcp_lient::Client::new => e:{}", e))?;
+        let addr = self.context.address.clone();
+        let client =
+            tcp_lient::Client::new(addr, timeout, Arc::new(self.context.tcp_config.clone()))
+                .map_err(|e| anyhow!("err:tcp_lient::Client::new => e:{}", e))?;
         let connection = {
             client
                 .connect(stream_info)
@@ -57,16 +66,16 @@ impl connect::Connect for Connect {
         let elapsed = start_time.elapsed().as_secs_f32();
 
         let read_timeout =
-            tokio::time::Duration::from_secs(self.tcp_config.tcp_recv_timeout as u64);
+            tokio::time::Duration::from_secs(self.context.tcp_config.tcp_recv_timeout as u64);
         let write_timeout =
-            tokio::time::Duration::from_secs(self.tcp_config.tcp_send_timeout as u64);
+            tokio::time::Duration::from_secs(self.context.tcp_config.tcp_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);
 
         Ok((
             stream,
             ConnectInfo {
                 protocol7: protocol_name,
-                domain: self.host.clone(),
+                domain: self.context.host.clone(),
                 elapsed,
                 local_addr,
                 remote_addr,

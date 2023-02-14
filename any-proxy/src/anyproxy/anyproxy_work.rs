@@ -42,12 +42,7 @@ impl AnyproxyWork {
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
         session_id: Arc<AtomicU64>,
     ) -> Result<()> {
-        // log::info!(
-        //     "work group_version:{} config:{:?}",
-        //     self.group_version,
-        //     config
-        // );
-
+        let shutdown_timeout = config.common.shutdown_timeout;
         let mut proxys: Vec<Box<dyn proxy::Proxy>> = vec![
             Box::new(port::Port::new(
                 self.executor_local_spawn.executors(),
@@ -109,7 +104,7 @@ impl AnyproxyWork {
                     }
                     let config = config?;
 
-                    ups.stop(true, ups_version).await?;
+                    ups.stop("anyproxy_work stop ups", true, shutdown_timeout, ups_version).await?;
 
                     ups_version += 1;
                     let mut _ups = upstream::Upstream::new(self.executor_local_spawn.executors(),tunnel_clients.clone())
@@ -133,9 +128,9 @@ impl AnyproxyWork {
                     } else {
                         ret.unwrap()
                     };
-                    ups.send(is_fast_shutdown).await?;
+                    ups.send("anyproxy_work send ups", is_fast_shutdown).await?;
                     for proxy in proxys.iter_mut() {
-                        if let Err(e) = proxy.send(is_fast_shutdown).await {
+                        if let Err(e) = proxy.send("anyproxy_work send", is_fast_shutdown).await {
                             log::error!("err:proxy.stop => e:{}", e);
                         }
                     }
@@ -146,13 +141,28 @@ impl AnyproxyWork {
                 }
             }
         };
-        ups.stop(is_fast_shutdown, ups_version).await?;
+        ups.stop(
+            "anyproxy_work stop ups",
+            is_fast_shutdown,
+            shutdown_timeout,
+            ups_version,
+        )
+        .await?;
         for proxy in proxys.iter_mut() {
-            if let Err(e) = proxy.stop(is_fast_shutdown).await {
+            if let Err(e) = proxy
+                .stop(
+                    "anyproxy_work stop proxy",
+                    is_fast_shutdown,
+                    shutdown_timeout,
+                )
+                .await
+            {
                 log::error!("err:proxy.stop => e:{}", e);
             }
         }
-        self.executor_local_spawn.stop(true, 10).await;
+        self.executor_local_spawn
+            .stop("anyproxy_work stop", is_fast_shutdown, shutdown_timeout)
+            .await;
         Ok(())
     }
 

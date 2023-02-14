@@ -5,7 +5,7 @@ use super::protopack::TunnelPack;
 use super::stream_flow::StreamFlow;
 use super::stream_flow::StreamFlowErr;
 use super::stream_flow::StreamFlowInfo;
-#[cfg(feature = "anytunnel2-debug")]
+#[cfg(feature = "anydebug")]
 use super::DEFAULT_PRINT_NUM;
 use crate::anychannel::AnyAsyncSender;
 use crate::{PeerStreamToPeerClientSender, PeerStreamTunnelData};
@@ -27,21 +27,24 @@ impl PeerStream {
         pack_to_peer_stream_rx: async_channel::Receiver<TunnelArcPack>,
     ) -> Result<()> {
         if is_spawn {
-            tokio::spawn(async move {
-                let ret: Result<()> = async {
-                    PeerStream::do_start(
-                        peer_stream_len,
-                        stream,
-                        peer_stream_to_peer_client_tx,
-                        pack_to_peer_stream_rx,
-                    )
-                    .await
-                    .map_err(|e| anyhow!("err:PeerStream::do_start => e:{}", e))?;
-                    Ok(())
-                }
-                .await;
-                ret.unwrap_or_else(|e| log::error!("err:PeerStream::do_start => e:{}", e));
+            let async_ = Box::pin(async move {
+                PeerStream::do_start(
+                    peer_stream_len,
+                    stream,
+                    peer_stream_to_peer_client_tx,
+                    pack_to_peer_stream_rx,
+                )
+                .await
+                .map_err(|e| anyhow!("err:PeerStream::do_start => e:{}", e))
             });
+
+            if cfg!(feature = "anyruntime-tokio-spawn-local") {
+                any_base::executor_local_spawn::_start_and_free2(
+                    move || async move { async_.await },
+                );
+            } else {
+                any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+            }
         } else {
             PeerStream::do_start(
                 peer_stream_len,
@@ -115,7 +118,7 @@ impl PeerStream {
                 }
                 TunnelPack::TunnelData(value) => {
                     log::trace!("peer_stream_to_peer_client TunnelData:{:?}", value.header);
-                    #[cfg(feature = "anytunnel2-debug")]
+                    #[cfg(feature = "anydebug")]
                     {
                         if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
                             log::info!("peer_stream read pack_id:{}", value.header.pack_id);
@@ -223,7 +226,7 @@ impl PeerStream {
                 }
                 TunnelArcPack::TunnelData(value) => {
                     log::trace!("peer_stream_write TunnelData:{:?}", value.header);
-                    #[cfg(feature = "anytunnel2-debug")]
+                    #[cfg(feature = "anydebug")]
                     {
                         if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
                             log::info!("peer_stream write pack_id:{}", value.header.pack_id);

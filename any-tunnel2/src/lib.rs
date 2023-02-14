@@ -10,21 +10,21 @@ pub mod stream_pack;
 pub mod tunnel;
 
 use crate::anychannel::{AnyChannel, AnyReceiver, AnySender};
-#[cfg(feature = "anytunnel2-ack")]
+#[cfg(feature = "anyack")]
 use crate::anychannel::{AnyUnboundedChannel, AnyUnboundedReceiver};
 use crate::protopack::{TunnelArcPack, TunnelData, TunnelHeaderType};
 pub use any_base::anychannel;
 pub use any_base::stream_flow;
 use std::sync::Arc;
 
-#[cfg(not(feature = "anytunnel2-ack"))]
+#[cfg(not(feature = "anyack"))]
 pub type PeerClientToStreamPackChannel = AnyChannel<TunnelArcPack>;
-#[cfg(not(feature = "anytunnel2-ack"))]
+#[cfg(not(feature = "anyack"))]
 pub type PeerClientToStreamPackReceiver = AnyReceiver<TunnelArcPack>;
 
-#[cfg(feature = "anytunnel2-ack")]
+#[cfg(feature = "anyack")]
 pub type PeerClientToStreamPackChannel = AnyUnboundedChannel<TunnelArcPack>;
-#[cfg(feature = "anytunnel2-ack")]
+#[cfg(feature = "anyack")]
 pub type PeerClientToStreamPackReceiver = AnyUnboundedReceiver<TunnelArcPack>;
 
 #[derive(Clone)]
@@ -58,7 +58,7 @@ pub const DEFAULT_WINDOW_LEN: usize = 1024 * 1024;
 pub const DEFAULT_HEADBEAT_TIMEOUT: i64 = 1000 * 2;
 pub const DEFAULT_CLOSE_TIMEOUT: i64 = 1000 * 10;
 
-#[cfg(feature = "anytunnel2-debug")]
+#[cfg(feature = "anydebug")]
 pub const DEFAULT_PRINT_NUM: u32 = 1000;
 
 #[derive(Clone, Eq, PartialEq)]

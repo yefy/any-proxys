@@ -83,6 +83,7 @@ impl AnyproxyGroup {
             config.common.cpu_affinity,
             self.group_version,
         );
+        let worker_threads_blocking = config.common.worker_threads_blocking;
         let mut thread_pool_wait_run = thread_pool.thread_pool_wait_run();
         thread_pool_wait_run._start(move |async_context| {
             log::debug!(
@@ -91,22 +92,25 @@ impl AnyproxyGroup {
                 async_context.cpu_affinity,
                 async_context.thread_id
             );
-            _block_on(move |executor_local_spawn| async move {
-                let mut anyproxy_work =
-                    anyproxy_work::AnyproxyWork::new(executor_local_spawn, tunnels, config_tx)
-                        .map_err(|e| anyhow!("err:AnyproxyWork::new => e:{}", e))?;
-                anyproxy_work
-                    .start(
-                        config,
-                        async_context,
-                        #[cfg(feature = "anyproxy-ebpf")]
-                        ebpf_add_sock_hash,
-                        session_id,
-                    )
-                    .await
-                    .map_err(|e| anyhow!("err:anyproxy_work.start => e:{}", e))?;
-                Ok(())
-            })?;
+            _block_on(
+                worker_threads_blocking,
+                move |executor_local_spawn| async move {
+                    let mut anyproxy_work =
+                        anyproxy_work::AnyproxyWork::new(executor_local_spawn, tunnels, config_tx)
+                            .map_err(|e| anyhow!("err:AnyproxyWork::new => e:{}", e))?;
+                    anyproxy_work
+                        .start(
+                            config,
+                            async_context,
+                            #[cfg(feature = "anyproxy-ebpf")]
+                            ebpf_add_sock_hash,
+                            session_id,
+                        )
+                        .await
+                        .map_err(|e| anyhow!("err:anyproxy_work.start => e:{}", e))?;
+                    Ok(())
+                },
+            )?;
             Ok(())
         });
 
@@ -211,11 +215,11 @@ impl AnyproxyGroup {
         Ok(config)
     }
 
-    pub async fn stop(&self, is_fast_shutdown: bool) {
+    pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
         self.thread_pool
             .as_ref()
             .unwrap()
-            .stop(is_fast_shutdown, 10)
+            .stop(is_fast_shutdown, shutdown_timeout)
             .await
     }
 }

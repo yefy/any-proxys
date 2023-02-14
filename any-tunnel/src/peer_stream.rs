@@ -1,7 +1,7 @@
 use super::protopack;
-#[cfg(not(feature = "anytunnel-dynamic-pool"))]
+#[cfg(not(feature = "anypool-dynamic-pool"))]
 use super::protopack::DynamicPoolTunnelData;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 use super::protopack::TunnelData;
 use super::protopack::TunnelDynamicPool;
 use super::protopack::TunnelHeaderType;
@@ -10,24 +10,23 @@ use super::server::ServerRecv;
 use super::stream_flow::StreamFlow;
 use super::stream_flow::StreamFlowErr;
 use super::stream_flow::StreamFlowInfo;
-#[cfg(feature = "anytunnel-dynamic-pool")]
-use crate::client::AsyncClient;
+#[cfg(feature = "anypool-dynamic-pool")]
+use crate::client::ClientContext;
+use crate::get_flag;
+use crate::peer_client::PeerStreamToPeerClientTx;
 use crate::protopack::{TunnelClose, TunnelHello};
 use crate::server::{AcceptSenderType, ServerRecvHello};
 use anyhow::anyhow;
 use anyhow::Result;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::get_flag;
-#[cfg(feature = "anytunnel-debug")]
-use crate::DEFAULT_PRINT_NUM;
-
 pub struct PeerStreamKey {
+    pub key: String,
     pub local_addr: SocketAddr,
     pub remote_addr: SocketAddr,
     pub to_peer_stream_tx: async_channel::Sender<PeerStreamRecv>,
@@ -35,28 +34,70 @@ pub struct PeerStreamKey {
 
 pub struct PeerStreamRecvHello {
     pub stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-    pub peer_stream_to_peer_client_tx: async_channel::Sender<TunnelPack>,
+    pub peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
     pub tunnel_hello: Option<TunnelHello>,
     pub min_stream_cache_size: usize,
     pub peer_stream_index: usize,
     pub channel_size: usize,
+    pub peer_stream_tx_pack_id: Arc<AtomicU32>,
+    pub peer_stream_rx_pack_id: Arc<AtomicU32>,
+    pub session_id: Option<String>,
+    pub is_error: Arc<AtomicBool>,
+    pub peer_stream_id: Option<usize>,
 }
 
 pub enum PeerStreamRecv {
     PeerStreamRecvHello(PeerStreamRecvHello),
 }
 
-pub struct PeerStream {
-    is_client: bool,
-    peer_stream_key: Arc<PeerStreamKey>,
-    to_peer_stream_rx: async_channel::Receiver<PeerStreamRecv>,
-    async_client: Option<Arc<AsyncClient>>,
-    close_num: Arc<AtomicUsize>,
-    accept_tx: Option<AcceptSenderType>,
+pub struct PeerStreamOnce {
+    close_num: AtomicUsize,
     tunnel_peer_close: Mutex<Option<TunnelClose>>,
     is_send_close: AtomicBool,
     session_id: Mutex<Option<String>>,
     peer_stream_index: AtomicUsize,
+    peer_stream_id: AtomicUsize,
+    tx_pack_id: AtomicU32,
+    rx_pack_id: AtomicU32,
+}
+
+impl PeerStreamOnce {
+    pub fn new() -> PeerStreamOnce {
+        PeerStreamOnce {
+            close_num: AtomicUsize::new(0),
+            tunnel_peer_close: Mutex::new(None),
+            is_send_close: AtomicBool::new(false),
+            session_id: Mutex::new(None),
+            peer_stream_index: AtomicUsize::new(0),
+            peer_stream_id: AtomicUsize::new(0),
+            tx_pack_id: AtomicU32::new(0),
+            rx_pack_id: AtomicU32::new(0),
+        }
+    }
+
+    pub fn init(&self) {
+        self.close_num.store(0, Ordering::SeqCst);
+        self.tunnel_peer_close.lock().unwrap().take();
+        self.is_send_close.store(false, Ordering::SeqCst);
+        *self.session_id.lock().unwrap() = None;
+        self.peer_stream_index.store(0, Ordering::Relaxed);
+        self.peer_stream_id.store(0, Ordering::Relaxed);
+        self.tx_pack_id.store(0, Ordering::Relaxed);
+        self.rx_pack_id.store(0, Ordering::Relaxed);
+    }
+}
+
+pub struct PeerStreamContext {
+    is_client: bool,
+    client_context: Option<Arc<ClientContext>>,
+    peer_stream_key: Arc<PeerStreamKey>,
+    once: PeerStreamOnce,
+}
+
+pub struct PeerStream {
+    to_peer_stream_rx: async_channel::Receiver<PeerStreamRecv>,
+    accept_tx: Option<AcceptSenderType>,
+    context: Arc<PeerStreamContext>,
 }
 
 impl Drop for PeerStream {
@@ -70,48 +111,49 @@ impl PeerStream {
         is_client: bool,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        async_client: Option<Arc<AsyncClient>>,
+        client_context: Option<Arc<ClientContext>>,
         accept_tx: Option<AcceptSenderType>,
+        key: String,
     ) -> PeerStream {
         let (to_peer_stream_tx, to_peer_stream_rx) = async_channel::unbounded();
         let peer_stream_key = Arc::new(PeerStreamKey {
+            key,
             local_addr,
             remote_addr,
             to_peer_stream_tx,
         });
+
         PeerStream {
-            is_client,
-            peer_stream_key,
             to_peer_stream_rx,
-            async_client,
-            close_num: Arc::new(AtomicUsize::new(0)),
             accept_tx,
-            tunnel_peer_close: Mutex::new(None),
-            is_send_close: AtomicBool::new(false),
-            session_id: Mutex::new(None),
-            peer_stream_index: AtomicUsize::new(0),
+            context: Arc::new(PeerStreamContext {
+                is_client,
+                client_context,
+                peer_stream_key,
+                once: PeerStreamOnce::new(),
+            }),
         }
     }
 
-    pub fn init(&mut self) {
-        self.close_num.store(0, Ordering::SeqCst);
-        self.tunnel_peer_close.lock().unwrap().take();
-        self.is_send_close.store(false, Ordering::SeqCst);
-        *self.session_id.lock().unwrap() = None;
-    }
-
     pub fn peer_stream_key(&self) -> Arc<PeerStreamKey> {
-        self.peer_stream_key.clone()
+        self.context.peer_stream_key.clone()
     }
 
     pub async fn start(mut peer_stream: PeerStream, stream: StreamFlow) -> Result<()> {
-        if peer_stream.is_client {
-            any_base::executor_spawn::_start_and_free(move || async move {
+        if peer_stream.context.is_client {
+            let async_ = Box::pin(async move {
                 peer_stream
                     .do_start(stream)
                     .await
                     .map_err(|e| anyhow!("err:PeerStream::do_start => e:{}", e))
             });
+            if cfg!(feature = "anyruntime-tokio-spawn-local") {
+                any_base::executor_local_spawn::_start_and_free2(
+                    move || async move { async_.await },
+                );
+            } else {
+                any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+            }
         } else {
             let ret: Result<()> = async {
                 peer_stream
@@ -126,99 +168,81 @@ impl PeerStream {
         Ok(())
     }
 
+    pub async fn stream<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin>(
+        &mut self,
+        r: &mut R,
+        w: &mut W,
+        stream_info: Arc<Mutex<StreamFlowInfo>>,
+    ) -> Result<bool> {
+        let ret: Result<(Option<PeerStreamRecv>, bool)> = async {
+            tokio::select! {
+                biased;
+                msg = self.peer_stream_recv() => {
+                    if msg.is_err() {
+                        return Ok((None, true))
+                    }
+                   return Ok((Some(msg?), false));
+                }
+                ret = self.read_tunnel_hello( r) => {
+                    ret?;
+                    return Ok((None, false));
+                }
+                else => {
+                    return Err(anyhow!("err:start_cmd"))?;
+                }
+            }
+        }
+        .await;
+        let (msg, is_close) = ret?;
+        if is_close {
+            return Ok(true);
+        }
+        let msg = match msg {
+            Some(PeerStreamRecv::PeerStreamRecvHello(msg)) => msg,
+            None => return Ok(false),
+        };
+
+        let is_close = self.do_stream(r, w, msg, stream_info).await?;
+        Ok(is_close)
+    }
+
     pub async fn do_start(&mut self, mut stream: StreamFlow) -> Result<()> {
         let stream_info = Arc::new(std::sync::Mutex::new(StreamFlowInfo::new()));
         stream.set_stream_info(Some(stream_info.clone()));
-
-        let (r, w) = tokio::io::split(stream);
-        let mut r = any_base::io::buf_reader::BufReader::new(r);
-        let mut w = any_base::io::buf_writer::BufWriter::new(w);
-
+        let (mut r, mut w) = tokio::io::split(stream);
         loop {
-            let ret: Result<()> = async {
-                #[cfg(feature = "anytunnel-debug")]
-                log::info!(
-                    "flag:{}, peer_stream_index:{} do_start",
-                    get_flag(self.is_client),
-                    self.peer_stream_index.load(Ordering::Relaxed),
-                );
-                self.init();
-                let ret: Result<Option<PeerStreamRecv>> = async {
-                    tokio::select! {
-                        biased;
-                        recv_msg = self.peer_stream_recv() => {
-                           return Ok(Some(recv_msg?));
-                        }
-                        ret = self.read_tunnel_hello(&mut r) => {
-                            ret?;
-                            return Ok(None);
-                        }
-                        else => {
-                            return Err(anyhow!("err:start_cmd"))?;
-                        }
-                    }
-                }
-                .await;
-                let recv_msg = ret?;
-                let recv_msg = match recv_msg {
-                    Some(PeerStreamRecv::PeerStreamRecvHello(recv_msg)) => recv_msg,
-                    None => return Ok(()),
-                };
+            #[cfg(feature = "anydebug")]
+            log::info!(
+                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} do_start",
+                { self.context.once.session_id.lock().unwrap() },
+                get_flag(self.context.is_client),
+                self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                self.context.once.peer_stream_index.load(Ordering::Relaxed),
+            );
 
-                self.peer_stream_index
-                    .store(recv_msg.peer_stream_index, Ordering::Relaxed);
-                #[cfg(feature = "anytunnel-debug")]
-                let min_stream_cache_size = recv_msg.min_stream_cache_size;
-                #[cfg(feature = "anytunnel-debug")]
-                let peer_stream_index = recv_msg.peer_stream_index;
-                #[cfg(feature = "anytunnel-debug")]
-                {
-                    log::info!(
-                        "flag:{}, peer_stream_index:{}, do_stream start min_stream_cache_size:{}",
-                        get_flag(self.is_client),
-                        peer_stream_index,
-                        min_stream_cache_size,
-                    );
-                }
-                self.do_stream(&mut r, &mut w, recv_msg).await?;
-                #[cfg(feature = "anytunnel-debug")]
-                {
-                    log::info!(
-                        "flag:{}, peer_stream_index:{}, do_stream wait min_stream_cache_size:{}",
-                        get_flag(self.is_client),
-                        peer_stream_index,
-                        min_stream_cache_size,
-                    );
-                }
-                Ok(())
-            }
-            .await;
+            self.context.once.init();
+            let ret = self.stream(&mut r, &mut w, stream_info.clone()).await;
             if let Err(e) = ret {
-                #[cfg(feature = "anytunnel-debug")]
-                {
-                    log::info!(
-                        "flag:{}, peer_stream_index:{}, do_stream err min_stream_cache_size:{}",
-                        get_flag(self.is_client),
-                        peer_stream_index,
-                        min_stream_cache_size,
-                    );
-                }
-
                 let err = { stream_info.lock().unwrap().err.clone() };
                 if err as i32 >= StreamFlowErr::WriteTimeout as i32 {
                     return Err(anyhow!("err:do_stream => e:{}", e))?;
                 }
                 return Ok(());
             }
+
+            if ret? {
+                return Ok(());
+            }
         }
     }
+
     pub async fn peer_stream_recv(&self) -> Result<PeerStreamRecv> {
-        let recv_msg = self
+        let msg = self
             .to_peer_stream_rx
             .recv()
             .await
             .map_err(|e| anyhow!("err:to_peer_stream_rx close => err:{}", e))?;
-        Ok(recv_msg)
+        Ok(msg)
     }
 
     pub async fn read_tunnel_hello<R: AsyncRead + std::marker::Unpin>(
@@ -232,29 +256,21 @@ impl PeerStream {
                 continue;
             }
 
-            #[cfg(feature = "anytunnel-debug")]
-            log::info!(
-                "flag:{}, peer_stream_index:{} read_tunnel_hello start ",
-                get_flag(self.is_client),
-                self.peer_stream_index.load(Ordering::Relaxed),
-            );
             let tunnel_hello = protopack::read_tunnel_hello(r).await.map_err(|e| {
                 anyhow!(
-                    "flag:{}, peer_stream_index:{} read_tunnel_hello => err:{}",
-                    get_flag(self.is_client),
-                    self.peer_stream_index.load(Ordering::Relaxed),
+                    "flag:{}, peer_stream_id:{}, peer_stream_index:{} read_tunnel_hello => err:{}",
+                    get_flag(self.context.is_client),
+                    self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                    self.context.once.peer_stream_index.load(Ordering::Relaxed),
                     e
                 )
             })?;
 
-            {
-                *self.session_id.lock().unwrap() = Some(tunnel_hello.session_id.clone());
-            }
             self.accept_tx
                 .as_ref()
                 .unwrap()
                 .send(ServerRecv::ServerRecvHello(ServerRecvHello {
-                    peer_stream_key: self.peer_stream_key.clone(),
+                    peer_stream_key: self.context.peer_stream_key.clone(),
                     tunnel_hello,
                 }))
                 .await
@@ -270,42 +286,79 @@ impl PeerStream {
         &mut self,
         r: &mut R,
         w: &mut W,
-        recv_msg: PeerStreamRecvHello,
-    ) -> Result<()> {
+        msg: PeerStreamRecvHello,
+        stream_info: Arc<Mutex<StreamFlowInfo>>,
+    ) -> Result<bool> {
         let PeerStreamRecvHello {
             stream_to_peer_stream_rx,
             peer_stream_to_peer_client_tx,
             tunnel_hello,
             min_stream_cache_size,
-            peer_stream_index: _,
+            peer_stream_index,
             channel_size,
-        } = recv_msg;
+            peer_stream_tx_pack_id,
+            peer_stream_rx_pack_id,
+            session_id,
+            is_error,
+            peer_stream_id,
+        } = msg;
+
+        let peer_stream_id = if peer_stream_id.is_some() {
+            peer_stream_id.unwrap()
+        } else {
+            0
+        };
+        self.context
+            .once
+            .peer_stream_id
+            .store(peer_stream_id, Ordering::Relaxed);
+        self.context
+            .once
+            .peer_stream_index
+            .store(peer_stream_index, Ordering::Relaxed);
+        *self.context.once.session_id.lock().unwrap() = session_id;
+
+        #[cfg(feature = "anydebug")]
+        {
+            log::info!(
+                    "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} do_stream start ",
+                    self.context.once.session_id.lock().unwrap(),
+                    get_flag(self.context.is_client),
+                    self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                    self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                );
+        }
 
         let ret: Result<()> = async {
-            if self.is_client && tunnel_hello.is_none() {
+            if self.context.is_client && tunnel_hello.is_none() {
                 return Err(anyhow!("err:self.is_client && tunnel_hello.is_none()"));
             }
 
+            let mut peer_stream_read = PeerStreamRead::new(r,
+                                        peer_stream_to_peer_client_tx.clone_and_ref(),
+                                        stream_to_peer_stream_rx.clone(),
+                                        min_stream_cache_size,
+                                        channel_size,
+                                        peer_stream_rx_pack_id,
+                                                       self.context.clone(),
+            );
+            let mut peer_stream_write = PeerStreamWrite::new(
+                w,
+                stream_to_peer_stream_rx.clone(),
+                tunnel_hello,
+                min_stream_cache_size,
+                peer_stream_tx_pack_id,
+                self.context.clone(),
+            );
+
             tokio::select! {
                 biased;
-                ret = self.read_stream(
-                    r,
-                    peer_stream_to_peer_client_tx.clone(),
-                    stream_to_peer_stream_rx.clone(),
-                    min_stream_cache_size,
-                    channel_size,
-                ) => {
-                    ret.map_err(|e| anyhow!("err:read_stream => e:{}", e))?;
+                ret = peer_stream_read.start() => {
+                    ret.map_err(|e| anyhow!("err:read_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))?;
                     Ok(())
                 }
-                ret = self.write_stream(
-                    w,
-                    peer_stream_to_peer_client_tx.clone(),
-                    stream_to_peer_stream_rx.clone(),
-                    tunnel_hello,
-                    min_stream_cache_size
-                ) => {
-                    ret.map_err(|e| anyhow!("err:write_stream => e:{}", e))?;
+                ret = peer_stream_write.start() => {
+                    ret.map_err(|e| anyhow!("err:write_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))?;
                     Ok(())
                 }
                 else => {
@@ -314,388 +367,516 @@ impl PeerStream {
             }
         }
         .await;
+
+        let mut err_num = 0;
+        self.close(stream_to_peer_stream_rx);
         if let Err(e) = ret {
-            self.close(peer_stream_to_peer_client_tx, stream_to_peer_stream_rx);
-            return Err(anyhow!("err:do_stream => e:{}", e));
+            let tx_pack_id = self.context.once.tx_pack_id.load(Ordering::SeqCst);
+            let rx_pack_id = self.context.once.rx_pack_id.load(Ordering::SeqCst);
+            let err = { stream_info.lock().unwrap().err.clone() };
+            if err.clone() as i32 >= StreamFlowErr::WriteTimeout as i32 {
+                err_num = 1;
+                peer_stream_to_peer_client_tx.close();
+                is_error.store(true, Ordering::Relaxed);
+            } else {
+                if tx_pack_id > 0 || rx_pack_id > 0 {
+                    err_num = 2;
+                    peer_stream_to_peer_client_tx.close();
+                    is_error.store(true, Ordering::Relaxed);
+                }
+            }
+            #[cfg(feature = "anyerror")]
+            if err_num > 0 {
+                log::error!(
+                    "err:do_stream err_num:{} => flag:{}, session_id:{:?}, peer_stream_id:{}, peer_stream_index:{}, \
+                        tx_pack_id:{}, rx_pack_id:{}, peer_stream_key.local_addr:{}, \
+                        peer_stream_key.remote_addr:{} min_stream_cache_size:{}, \
+                        e:{}, err:{:?}",
+                    err_num,
+                    get_flag(self.context.is_client),
+                    self.context.once.session_id.lock().unwrap(),
+                    peer_stream_id,
+                    peer_stream_index,
+                    tx_pack_id,
+                    rx_pack_id,
+                    self.context.peer_stream_key.local_addr,
+                    self.context.peer_stream_key.remote_addr,
+                    min_stream_cache_size,
+                    e,
+                    err
+                );
+            }
+
+            return Err(anyhow!(
+                "err:do_stream => flag:{}, session_id:{:?}, min_stream_cache_size:{}, e:{}",
+                get_flag(self.context.is_client),
+                self.context.once.session_id.lock().unwrap(),
+                min_stream_cache_size,
+                e
+            ));
         }
+
         if min_stream_cache_size <= 0 {
-            return Err(anyhow!("err:close"));
+            return Ok(true);
         }
-        Ok(())
+
+        if self.context.client_context.is_some() {
+            self.context
+                .client_context
+                .as_ref()
+                .unwrap()
+                .add_peer_stream_key(
+                    self.context.peer_stream_key.key.clone(),
+                    self.context.peer_stream_key.clone(),
+                    min_stream_cache_size,
+                );
+        }
+
+        Ok(false)
     }
 
-    async fn read_stream<R: AsyncRead + std::marker::Unpin>(
-        &self,
-        mut r: R,
-        peer_stream_to_peer_client_tx: async_channel::Sender<TunnelPack>,
+    fn close(&self, stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>) {
+        log::debug!("stream_to_peer_stream_rx close");
+        stream_to_peer_stream_rx.close();
+    }
+}
+
+struct PeerStreamRead<'a, R: AsyncRead + std::marker::Unpin> {
+    r: &'a mut R,
+    peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
+    _stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
+    _min_stream_cache_size: usize,
+    channel_size: usize,
+    peer_stream_rx_pack_id: Arc<AtomicU32>,
+    context: Arc<PeerStreamContext>,
+}
+
+impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
+    pub fn new(
+        r: &mut R,
+        peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
         _stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-        min_stream_cache_size: usize,
+        _min_stream_cache_size: usize,
         channel_size: usize,
-    ) -> Result<()> {
+        peer_stream_rx_pack_id: Arc<AtomicU32>,
+        context: Arc<PeerStreamContext>,
+    ) -> PeerStreamRead<R> {
+        PeerStreamRead {
+            r,
+            peer_stream_to_peer_client_tx,
+            _stream_to_peer_stream_rx,
+            _min_stream_cache_size,
+            channel_size,
+            peer_stream_rx_pack_id,
+            context,
+        }
+    }
+
+    async fn read_stream(&mut self) -> Result<()> {
         let mut slice = [0u8; protopack::TUNNEL_MAX_HEADER_SIZE];
         let buffer_pool = TunnelDynamicPool {
-            #[cfg(feature = "anytunnel-dynamic-pool")]
-            tunnel_data: DynamicPool::new(8, channel_size * 2, TunnelData::default),
-            #[cfg(not(feature = "anytunnel-dynamic-pool"))]
+            #[cfg(feature = "anypool-dynamic-pool")]
+            tunnel_data: DynamicPool::new(8, self.channel_size * 2, TunnelData::default),
+            #[cfg(not(feature = "anypool-dynamic-pool"))]
             tunnel_data: DynamicPoolTunnelData::new(),
         };
 
-        #[cfg(feature = "anytunnel-debug")]
-        {
-            log::info!(
-                "flag:{}, peer_stream_index:{} read_stream",
-                get_flag(self.is_client),
-                self.peer_stream_index.load(Ordering::Relaxed),
-            );
-        }
-
         //err 直接退出   ok 等待退出
-        let ret: Result<()> = async {
-            loop {
-                //write已經等待退出了
-                if self.close_num.load(Ordering::SeqCst) >= 1 {
-                    if min_stream_cache_size <= 0 {
-                        return Ok(());
-                    }
+        loop {
+            let pack = protopack::read_pack_all(&mut self.r, &mut slice, &buffer_pool).await;
+            if let Err(e) = pack {
+                return Err(anyhow!(
+                    "err:read_pack => flag:{}, e:{}",
+                    get_flag(self.context.is_client),
+                    e
+                ))?;
+            }
+            let pack = pack.unwrap();
+            match &pack {
+                TunnelPack::TunnelHello(value) => {
+                    return Err(anyhow!("err:TunnelHello => TunnelHello:{:?}", value))?;
                 }
-                let pack =  protopack::read_pack_all(&mut r, &mut slice, &buffer_pool).await;
-                if let Err(e) = pack {
-                    return Err(anyhow!("err:read_pack => e:{}", e))?;
-                }
-                let pack = pack.unwrap();
-                match &pack {
-                    TunnelPack::TunnelHello(value) => {
-                        return Err(anyhow!("err:TunnelHello => TunnelHello:{:?}", value))?;
-                    }
-                    TunnelPack::TunnelClose(value) => {
-                        #[cfg(feature = "anytunnel-debug")]
-                        log::info!(
-                            "flag:{}, peer_stream_index:{} peer_stream read TunnelClose local value:{}, value:{}",
-                            get_flag(self.is_client),
-                            self.peer_stream_index.load(Ordering::Relaxed),
-                            get_flag(self.is_client),
+                TunnelPack::TunnelClose(value) => {
+                    #[cfg(feature = "anydebug")]
+                    log::info!(
+                            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read TunnelClose local value:{}, value:{}",
+                            self.context.once.session_id.lock().unwrap(),
+                            get_flag(self.context.is_client),
+                            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                            self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                            get_flag(self.context.is_client),
                             get_flag(value.is_client),
                         );
 
-                        if min_stream_cache_size <= 0 {
-                            return Err(anyhow!(
-                                "err:flag:{} min_stream_cache_size <= 0",
-                                get_flag(self.is_client)
-                            ));
+                    if value.is_client != self.context.is_client {
+                        {
+                            *self.context.once.tunnel_peer_close.lock().unwrap() =
+                                Some(value.clone());
                         }
 
-                        if value.is_client != self.is_client {
-                            {*self.tunnel_peer_close.lock().unwrap() = Some(value.clone());}
-
-                            if !self.is_send_close.load(Ordering::SeqCst) {
-                                #[cfg(feature = "anytunnel-debug")]
-                                {
-                                    log::info!(
-                                        "flag:{}, peer_stream_index:{} peer_stream read value.is_client != self.is_client",
-                                        get_flag(self.is_client),
-                                        self.peer_stream_index.load(Ordering::Relaxed),
-                                    );
-                                }
-                                return Ok(());
+                        if !self.context.once.is_send_close.load(Ordering::SeqCst) {
+                            #[cfg(feature = "anydebug")]
+                            {
+                                log::info!(
+                                            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read value.is_client != self.is_client",
+                                            self.context.once.session_id.lock().unwrap(),
+                                            get_flag(self.context.is_client),
+                                            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                                            self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                                        );
                             }
-
-                            continue;
+                            return Ok(());
                         }
 
-                        #[cfg(feature = "anytunnel-debug")]
-                        log::info!(
-                            "flag:{}, peer_stream_index:{} peer_stream read value.is_client == self.is_client",
-                            get_flag(self.is_client),
-                            self.peer_stream_index.load(Ordering::Relaxed),
+                        continue;
+                    }
+
+                    #[cfg(feature = "anydebug")]
+                    log::info!(
+                            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read value.is_client == self.is_client",
+                            self.context.once.session_id.lock().unwrap(),
+                            get_flag(self.context.is_client),
+                            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                            self.context.once.peer_stream_index.load(Ordering::Relaxed),
                         );
 
-                        return Ok(());
-                    }
-                    TunnelPack::TunnelData(_value) => {
-                        #[cfg(feature = "anytunnel-debug")]
-                        {
-                            if _value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
-                                log::info!(
-                                    "flag:{}, peer_stream_index:{} peer_stream read pack_id:{}",
-                                    get_flag(self.is_client),
-                                    self.peer_stream_index.load(Ordering::Relaxed),
-                                    _value.header.pack_id
-                                );
-                            }
+                    return Ok(());
+                }
+                TunnelPack::TunnelData(_value) => {
+                    self.context
+                        .once
+                        .rx_pack_id
+                        .store(_value.header.pack_id, Ordering::SeqCst);
+                    loop {
+                        let curr = self.peer_stream_rx_pack_id.load(Ordering::SeqCst);
+                        if _value.header.pack_id <= curr {
+                            break;
                         }
-                        let _ = peer_stream_to_peer_client_tx.send(pack).await;
+                        let ret = self.peer_stream_rx_pack_id.compare_exchange(
+                            curr,
+                            _value.header.pack_id,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        );
+                        if ret.is_ok() {
+                            break;
+                        }
                     }
-                    _ => {
-                        let _ = peer_stream_to_peer_client_tx.send(pack).await;
-                    }
+
+                    let _ = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                }
+                _ => {
+                    let _ = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
                 }
             }
         }
-        .await;
-        ret?;
+    }
+    async fn start(&mut self) -> Result<()> {
+        self.read_stream().await?;
 
-        #[cfg(feature = "anytunnel-debug")]
+        #[cfg(feature = "anydebug")]
         log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream read break",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
+            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read break",
+            self.context.once.session_id.lock().unwrap(),
+            get_flag(self.context.is_client),
+            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+            self.context.once.peer_stream_index.load(Ordering::Relaxed),
         );
 
-        self.close_num.fetch_add(1, Ordering::SeqCst);
+        self.context.once.close_num.fetch_add(1, Ordering::SeqCst);
         //等待write close， 让write去关闭
 
-        #[cfg(feature = "anytunnel-debug")]
+        #[cfg(feature = "anydebug")]
         log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream read wait exit",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
+            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read wait exit",
+            self.context.once.session_id.lock().unwrap(),
+            get_flag(self.context.is_client),
+            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+            self.context.once.peer_stream_index.load(Ordering::Relaxed),
         );
         //15秒后强制退出
         tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+        return Err(anyhow!("read close timeout"));
+    }
+}
+
+struct PeerStreamWrite<'a, W: AsyncWrite + std::marker::Unpin> {
+    w: &'a mut W,
+    stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
+    tunnel_hello: Option<TunnelHello>,
+    _min_stream_cache_size: usize,
+    peer_stream_tx_pack_id: Arc<AtomicU32>,
+    context: Arc<PeerStreamContext>,
+}
+
+impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
+    pub fn new(
+        w: &mut W,
+        stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
+        tunnel_hello: Option<TunnelHello>,
+        _min_stream_cache_size: usize,
+        peer_stream_tx_pack_id: Arc<AtomicU32>,
+        context: Arc<PeerStreamContext>,
+    ) -> PeerStreamWrite<W> {
+        PeerStreamWrite {
+            w,
+            stream_to_peer_stream_rx,
+            tunnel_hello,
+            _min_stream_cache_size,
+            peer_stream_tx_pack_id,
+            context,
+        }
+    }
+    pub async fn write_tunnel_hello(&mut self) -> Result<()> {
+        if self.tunnel_hello.is_none() {
+            return Ok(());
+        }
+
+        #[cfg(feature = "anydebug")]
+        {
+            log::info!(
+                        "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream TunnelHello ",
+                        self.context.once.session_id.lock().unwrap(),
+                        get_flag(self.context.is_client),
+                        self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                        self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                    );
+        }
+        let tunnel_hello = self.tunnel_hello.take().unwrap();
+        log::trace!("write_stream tunnel_hello:{:?}", tunnel_hello);
+        {
+            *self.context.once.session_id.lock().unwrap() = Some(tunnel_hello.session_id.clone());
+        }
+        protopack::write_pack(
+            &mut self.w,
+            TunnelHeaderType::TunnelHello,
+            &tunnel_hello,
+            true,
+        )
+        .await
+        .map_err(|e| anyhow!("e:{}", e))?;
         Ok(())
     }
 
-    async fn write_stream<W: AsyncWrite + std::marker::Unpin>(
-        &self,
-        mut w: W,
-        peer_stream_to_peer_client_tx: async_channel::Sender<TunnelPack>,
-        stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-        tunnel_hello: Option<TunnelHello>,
-        min_stream_cache_size: usize,
-    ) -> Result<()> {
-        if tunnel_hello.is_some() {
-            #[cfg(feature = "anytunnel-debug")]
-            {
+    pub async fn write_pack(&mut self) -> Result<Option<()>> {
+        loop {
+            let is_tunnel_peer_close = {
+                self.context
+                    .once
+                    .tunnel_peer_close
+                    .lock()
+                    .unwrap()
+                    .is_some()
+            };
+            if is_tunnel_peer_close {
+                #[cfg(feature = "anydebug")]
                 log::info!(
-                    "flag:{}, peer_stream_index:{} write_stream TunnelHello ",
-                    get_flag(self.is_client),
-                    self.peer_stream_index.load(Ordering::Relaxed),
-                );
-            }
-            let tunnel_hello = tunnel_hello.unwrap();
-            log::trace!("write_stream tunnel_hello:{:?}", tunnel_hello);
-            {
-                *self.session_id.lock().unwrap() = Some(tunnel_hello.session_id.clone());
-            }
-            protopack::write_pack(&mut w, TunnelHeaderType::TunnelHello, &tunnel_hello, true)
-                .await
-                .map_err(|e| anyhow!("e:{}", e))?;
-        }
-
-        #[cfg(feature = "anytunnel-debug")]
-        {
-            log::info!(
-                "flag:{}, peer_stream_index:{} write_stream ",
-                get_flag(self.is_client),
-                self.peer_stream_index.load(Ordering::Relaxed),
-            );
-        }
-
-        let ret: Result<Option<()>> = async {
-            loop {
-                let is_tunnel_peer_close = { self.tunnel_peer_close.lock().unwrap().is_some() };
-                if min_stream_cache_size > 0 && is_tunnel_peer_close {
-                    #[cfg(feature = "anytunnel-debug")]
-                    log::info!(
-                        "flag:{}, peer_stream_index:{} peer_stream tunnel_peer_close",
-                        get_flag(self.is_client),
-                        self.peer_stream_index.load(Ordering::Relaxed),
+                        "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream tunnel_peer_close",
+                        self.context.once.session_id.lock().unwrap(),
+                        get_flag(self.context.is_client),
+                        self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                        self.context.once.peer_stream_index.load(Ordering::Relaxed),
                     );
 
-                    return Ok(None);
+                return Ok(None);
+            }
+
+            let pack = tokio::time::timeout(
+                tokio::time::Duration::from_secs(1),
+                self.stream_to_peer_stream_rx.recv(),
+            )
+            .await;
+
+            if let Err(_) = pack {
+                #[cfg(feature = "anydebug")]
+                {
+                    log::trace!(
+                                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream timeout ",
+                                self.context.once.session_id.lock().unwrap(),
+                                get_flag(self.context.is_client),
+                                self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                                self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                            );
                 }
+                continue;
+            }
 
-                let pack = tokio::time::timeout(
-                    tokio::time::Duration::from_secs(1),
-                    stream_to_peer_stream_rx.recv(),
-                )
-                .await;
-
-                if let Err(_) = pack {
-                    #[cfg(feature = "anytunnel-debug")]
-                    {
-                        log::trace!(
-                            "flag:{}, peer_stream_index:{} write_stream timeout ",
-                            get_flag(self.is_client),
-                            self.peer_stream_index.load(Ordering::Relaxed),
-                        );
-                    }
-                    continue;
-                }
-
-                let pack = pack.unwrap();
-                if let Err(_) = pack {
-                    if min_stream_cache_size > 0 {
-                        if self.tunnel_peer_close.lock().unwrap().is_some() {
-                            return Ok(Some(()));
-                        }
-                        #[cfg(feature = "anytunnel-debug")]
-                        log::info!(
-                            "flag:{}, peer_stream_index:{} peer_stream write TunnelClose",
-                            get_flag(self.is_client),
-                            self.peer_stream_index.load(Ordering::Relaxed),
-                        );
-
-                        self.is_send_close.store(true, Ordering::SeqCst);
-                        protopack::write_pack(
-                            &mut w,
-                            TunnelHeaderType::TunnelClose,
-                            &TunnelClose {
-                                is_client: self.is_client,
-                            },
-                            true,
-                        )
-                        .await
-                        .map_err(|e| anyhow!("e:{}", e))?;
-                        return Ok(None);
-                    }
-
+            let pack = pack.unwrap();
+            if let Err(_) = pack {
+                if self
+                    .context
+                    .once
+                    .tunnel_peer_close
+                    .lock()
+                    .unwrap()
+                    .is_some()
+                {
                     return Ok(Some(()));
                 }
-
-                let pack = pack.unwrap();
-                match &pack {
-                    TunnelPack::TunnelHello(value) => {
-                        log::trace!("write_stream TunnelHello:{:?}", value);
-                        return Err(anyhow!("err: write_stream TunnelHello:{:?}", value));
-                    }
-                    TunnelPack::TunnelClose(value) => {
-                        log::trace!("write_stream TunnelClose:{:?}", value);
-                        return Err(anyhow!("err: write_stream TunnelClose:{:?}", value));
-                    }
-                    TunnelPack::TunnelData(value) => {
-                        log::trace!(
-                            "write_stream TunnelData:{:?}, data len:{}",
-                            value.header,
-                            value.datas.len()
-                        );
-                        #[cfg(feature = "anytunnel-debug")]
-                        {
-                            if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
-                                log::info!(
-                                    "flag:{}, peer_stream_index:{} peer_stream write pack_id:{}",
-                                    get_flag(self.is_client),
-                                    self.peer_stream_index.load(Ordering::Relaxed),
-                                    value.header.pack_id
-                                );
-                            }
-                        }
-                        protopack::write_tunnel_data(&mut w, value)
-                            .await
-                            .map_err(|e| anyhow!("e:{}", e))?;
-                    }
-                    TunnelPack::TunnelAddConnect(value) => {
-                        log::trace!("write_stream TunnelAddConnect:{:?}", value);
-                        protopack::write_pack(
-                            &mut w,
-                            TunnelHeaderType::TunnelAddConnect,
-                            value,
-                            true,
-                        )
-                        .await
-                        .map_err(|e| anyhow!("e:{}", e))?;
-                    }
-                    TunnelPack::TunnelMaxConnect(value) => {
-                        log::trace!("write_stream TunnelMaxConnect:{:?}", value);
-                        protopack::write_pack(
-                            &mut w,
-                            TunnelHeaderType::TunnelMaxConnect,
-                            value,
-                            true,
-                        )
-                        .await
-                        .map_err(|e| anyhow!("e:{}", e))?;
-                    }
-                };
-            }
-        }
-        .await;
-        let _ = ret?;
-
-        #[cfg(feature = "anytunnel-debug")]
-        log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream write break",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
-        );
-
-        #[cfg(feature = "anytunnel-debug")]
-        log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream write start exit",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
-        );
-
-        self.close_num.fetch_add(1, Ordering::SeqCst);
-        loop {
-            if min_stream_cache_size > 0 {
-                let tunnel_peer_close = { self.tunnel_peer_close.lock().unwrap().take() };
-                if tunnel_peer_close.is_some() {
-                    #[cfg(feature = "anytunnel-debug")]
-                    log::info!(
-                        "flag:{}, peer_stream_index:{} peer_stream write TunnelClose take from read",
-                        get_flag(self.is_client),
-                        self.peer_stream_index.load(Ordering::Relaxed),
+                #[cfg(feature = "anydebug")]
+                log::info!(
+                        "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write TunnelClose",
+                        self.context.once.session_id.lock().unwrap(),
+                        get_flag(self.context.is_client),
+                        self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                        self.context.once.peer_stream_index.load(Ordering::Relaxed),
                     );
-                    let tunnel_peer_close = tunnel_peer_close.unwrap();
+
+                self.context
+                    .once
+                    .is_send_close
+                    .store(true, Ordering::SeqCst);
+                protopack::write_pack(
+                    &mut self.w,
+                    TunnelHeaderType::TunnelClose,
+                    &TunnelClose {
+                        is_client: self.context.is_client,
+                    },
+                    true,
+                )
+                .await
+                .map_err(|e| anyhow!("e:{}", e))?;
+                return Ok(None);
+            }
+
+            let pack = pack.unwrap();
+            match &pack {
+                TunnelPack::TunnelHello(value) => {
+                    log::trace!("write_stream TunnelHello:{:?}", value);
+                    return Err(anyhow!("err: write_stream TunnelHello:{:?}", value));
+                }
+                TunnelPack::TunnelClose(value) => {
+                    log::trace!("write_stream TunnelClose:{:?}", value);
+                    return Err(anyhow!("err: write_stream TunnelClose:{:?}", value));
+                }
+                TunnelPack::TunnelData(value) => {
+                    log::trace!(
+                        "write_stream TunnelData:{:?}, data len:{}",
+                        value.header,
+                        value.datas.len()
+                    );
+
+                    self.context
+                        .once
+                        .tx_pack_id
+                        .store(value.header.pack_id, Ordering::SeqCst);
+                    loop {
+                        let curr = self.peer_stream_tx_pack_id.load(Ordering::SeqCst);
+                        if value.header.pack_id <= curr {
+                            break;
+                        }
+                        let ret = self.peer_stream_tx_pack_id.compare_exchange(
+                            curr,
+                            value.header.pack_id,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        );
+                        if ret.is_ok() {
+                            break;
+                        }
+                    }
+                    protopack::write_tunnel_data(&mut self.w, value)
+                        .await
+                        .map_err(|e| anyhow!("e:{}", e))?;
+                }
+                TunnelPack::TunnelAddConnect(value) => {
+                    log::trace!("write_stream TunnelAddConnect:{:?}", value);
                     protopack::write_pack(
-                        &mut w,
-                        TunnelHeaderType::TunnelClose,
-                        &tunnel_peer_close,
+                        &mut self.w,
+                        TunnelHeaderType::TunnelAddConnect,
+                        value,
                         true,
                     )
                     .await
                     .map_err(|e| anyhow!("e:{}", e))?;
                 }
+                TunnelPack::TunnelMaxConnect(value) => {
+                    log::trace!("write_stream TunnelMaxConnect:{:?}", value);
+                    protopack::write_pack(
+                        &mut self.w,
+                        TunnelHeaderType::TunnelMaxConnect,
+                        value,
+                        true,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("e:{}", e))?;
+                }
+            };
+        }
+    }
+
+    pub async fn start(&mut self) -> Result<()> {
+        self.write_tunnel_hello().await?;
+
+        #[cfg(feature = "anydebug")]
+        {
+            log::info!(
+                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream ",
+                self.context.once.session_id.lock().unwrap(),
+                get_flag(self.context.is_client),
+                self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                self.context.once.peer_stream_index.load(Ordering::Relaxed),
+            );
+        }
+
+        self.write_pack().await?;
+
+        #[cfg(feature = "anydebug")]
+        log::info!(
+                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write start exit",
+                self.context.once.session_id.lock().unwrap(),
+                get_flag(self.context.is_client),
+                self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                self.context.once.peer_stream_index.load(Ordering::Relaxed),
+            );
+
+        self.context.once.close_num.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let tunnel_peer_close = { self.context.once.tunnel_peer_close.lock().unwrap().take() };
+            if tunnel_peer_close.is_some() {
+                #[cfg(feature = "anydebug")]
+                log::info!(
+                        "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write TunnelClose take from read",
+                        self.context.once.session_id.lock().unwrap(),
+                        get_flag(self.context.is_client),
+                        self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                        self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                    );
+                let tunnel_peer_close = tunnel_peer_close.unwrap();
+                protopack::write_pack(
+                    &mut self.w,
+                    TunnelHeaderType::TunnelClose,
+                    &tunnel_peer_close,
+                    true,
+                )
+                .await
+                .map_err(|e| anyhow!("e:{}", e))?;
             }
 
-            if self.close_num.load(Ordering::SeqCst) >= 2 {
+            if self.context.once.close_num.load(Ordering::SeqCst) >= 2 {
                 break;
             }
 
-            #[cfg(feature = "anytunnel-debug")]
+            #[cfg(feature = "anydebug")]
             log::info!(
-                "flag:{}, peer_stream_index:{} peer_stream write sleep",
-                get_flag(self.is_client),
-                self.peer_stream_index.load(Ordering::Relaxed),
-            );
+                    "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write sleep",
+                    self.context.once.session_id.lock().unwrap(),
+                    get_flag(self.context.is_client),
+                    self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                    self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                );
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         }
-        self.close(peer_stream_to_peer_client_tx, stream_to_peer_stream_rx);
 
-        if min_stream_cache_size > 0 && self.async_client.is_some() {
-            self.async_client.as_ref().unwrap().add_peer_stream_key(
-                self.peer_stream_key.remote_addr.to_string(),
-                self.peer_stream_key.clone(),
-                min_stream_cache_size,
-            );
-        }
-
-        #[cfg(feature = "anytunnel-debug")]
+        #[cfg(feature = "anydebug")]
         log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream write end exit",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
-        );
+                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write end exit",
+                self.context.once.session_id.lock().unwrap(),
+                get_flag(self.context.is_client),
+                self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                self.context.once.peer_stream_index.load(Ordering::Relaxed),
+            );
 
         Ok(())
-    }
-
-    fn close(
-        &self,
-        peer_stream_to_peer_client_tx: async_channel::Sender<TunnelPack>,
-        stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-    ) {
-        #[cfg(feature = "anytunnel-debug")]
-        log::info!(
-            "flag:{}, peer_stream_index:{} peer_stream close",
-            get_flag(self.is_client),
-            self.peer_stream_index.load(Ordering::Relaxed),
-        );
-
-        log::debug!("stream_to_peer_stream_rx close");
-        stream_to_peer_stream_rx.close();
-        log::debug!("peer_stream_to_peer_client_tx close");
-        peer_stream_to_peer_client_tx.close();
     }
 }

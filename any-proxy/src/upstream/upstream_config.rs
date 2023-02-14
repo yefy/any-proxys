@@ -274,13 +274,15 @@ impl UpstreamConfig {
                 if tcp_config.is_none() {
                     return Err(anyhow!("err:tcp.tcp={}", tcp_str));
                 }
+                let connect = Box::new(tcp_connect::Connect::new(
+                    host,
+                    addr.clone(),
+                    tcp_config.unwrap(),
+                ));
+
                 (
                     tcp.heartbeat.clone(),
-                    Rc::new(Box::new(tcp_connect::Connect::new(
-                        host,
-                        addr.clone(),
-                        tcp_config.unwrap(),
-                    )?)),
+                    Rc::new(connect),
                     tcp.is_proxy_protocol_hello,
                     tcp.weight,
                 )
@@ -292,16 +294,16 @@ impl UpstreamConfig {
                     return Err(anyhow!("err:quic.quic={}", quic_str));
                 }
                 let endpoints = endpoints_map.get(&quic_str).cloned().unwrap();
-
+                let connect = Box::new(quic_connect::Connect::new(
+                    host,
+                    addr.clone(),
+                    quic.ssl_domain.clone(),
+                    endpoints,
+                    quic_config.unwrap(),
+                ));
                 (
                     quic.heartbeat.clone(),
-                    Rc::new(Box::new(quic_connect::Connect::new(
-                        host,
-                        addr.clone(),
-                        quic.ssl_domain.clone(),
-                        endpoints,
-                        quic_config.unwrap(),
-                    )?)),
+                    Rc::new(connect),
                     quic.is_proxy_protocol_hello,
                     quic.weight,
                 )
@@ -313,20 +315,20 @@ impl UpstreamConfig {
                     if tcp_config.is_none() {
                         return Err(anyhow!("err:tcp.tcp={}", tcp_str));
                     }
-
+                    let connect = Box::new(tunnel_connect::Connect::new(
+                        tunnel_clients.client.clone(),
+                        Box::new(tunnel_connect::PeerStreamConnectTcp::new(
+                            host,
+                            addr.clone(),
+                            tcp_config.unwrap(),
+                            tcp.tunnel.max_stream_size,
+                            tcp.tunnel.min_stream_cache_size,
+                            tcp.tunnel.channel_size,
+                        )),
+                    ));
                     (
                         tcp.heartbeat.clone(),
-                        Rc::new(Box::new(tunnel_connect::Connect::new(
-                            tunnel_clients.client.clone(),
-                            Box::new(tunnel_connect::PeerStreamConnectTcp::new(
-                                host,
-                                addr.clone(),
-                                tcp_config.unwrap(),
-                                tcp.tunnel.max_stream_size,
-                                tcp.tunnel.min_stream_cache_size,
-                                tcp.tunnel.channel_size,
-                            )),
-                        )?)),
+                        Rc::new(connect),
                         tcp.is_proxy_protocol_hello,
                         tcp.weight,
                     )
@@ -338,22 +340,22 @@ impl UpstreamConfig {
                         return Err(anyhow!("err:quic.quic={}", quic_str));
                     }
                     let endpoints = endpoints_map.get(&quic_str).cloned().unwrap();
-
+                    let connect = Box::new(tunnel_connect::Connect::new(
+                        tunnel_clients.client.clone(),
+                        Box::new(tunnel_connect::PeerStreamConnectQuic::new(
+                            host,
+                            addr.clone(),
+                            quic.ssl_domain.clone(),
+                            endpoints,
+                            quic.tunnel.max_stream_size,
+                            quic.tunnel.min_stream_cache_size,
+                            quic.tunnel.channel_size,
+                            quic_config.unwrap(),
+                        )),
+                    ));
                     (
                         quic.heartbeat.clone(),
-                        Rc::new(Box::new(tunnel_connect::Connect::new(
-                            tunnel_clients.client.clone(),
-                            Box::new(tunnel_connect::PeerStreamConnectQuic::new(
-                                host,
-                                addr.clone(),
-                                quic.ssl_domain.clone(),
-                                endpoints,
-                                quic.tunnel.max_stream_size,
-                                quic.tunnel.min_stream_cache_size,
-                                quic.tunnel.channel_size,
-                                quic_config.unwrap(),
-                            )),
-                        )?)),
+                        Rc::new(connect),
                         quic.is_proxy_protocol_hello,
                         quic.weight,
                     )
@@ -366,17 +368,17 @@ impl UpstreamConfig {
                     if tcp_config.is_none() {
                         return Err(anyhow!("err:tcp.tcp={}", tcp_str));
                     }
-
+                    let connect = Box::new(tunnel2_connect::Connect::new(
+                        tunnel_clients.client2.clone(),
+                        Box::new(tunnel2_connect::PeerStreamConnectTcp::new(
+                            host,
+                            addr.clone(),
+                            tcp_config.unwrap(),
+                        )),
+                    ));
                     (
                         tcp.heartbeat.clone(),
-                        Rc::new(Box::new(tunnel2_connect::Connect::new(
-                            tunnel_clients.client2.clone(),
-                            Box::new(tunnel2_connect::PeerStreamConnectTcp::new(
-                                host,
-                                addr.clone(),
-                                tcp_config.unwrap(),
-                            )),
-                        )?)),
+                        Rc::new(connect),
                         tcp.is_proxy_protocol_hello,
                         tcp.weight,
                     )
@@ -388,19 +390,19 @@ impl UpstreamConfig {
                         return Err(anyhow!("err:quic.quic={}", quic_str));
                     }
                     let endpoints = endpoints_map.get(&quic_str).cloned().unwrap();
-
+                    let connect = Box::new(tunnel2_connect::Connect::new(
+                        tunnel_clients.client2.clone(),
+                        Box::new(tunnel2_connect::PeerStreamConnectQuic::new(
+                            host,
+                            addr.clone(),
+                            quic.ssl_domain.clone(),
+                            endpoints,
+                            quic_config.unwrap(),
+                        )),
+                    ));
                     (
                         quic.heartbeat.clone(),
-                        Rc::new(Box::new(tunnel2_connect::Connect::new(
-                            tunnel_clients.client2.clone(),
-                            Box::new(tunnel2_connect::PeerStreamConnectQuic::new(
-                                host,
-                                addr.clone(),
-                                quic.ssl_domain.clone(),
-                                endpoints,
-                                quic_config.unwrap(),
-                            )),
-                        )?)),
+                        Rc::new(connect),
                         quic.is_proxy_protocol_hello,
                         quic.weight,
                     )

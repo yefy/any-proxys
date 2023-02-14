@@ -162,6 +162,9 @@ fn default_max_open_file_limit() -> u64 {
 fn default_debug_is_open_ebpf_log() -> bool {
     false
 }
+fn default_worker_threads_blocking() -> usize {
+    5
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,6 +186,8 @@ pub struct CommonConfig {
     pub memlock_rlimit: MemlockRlimit,
     #[serde(default = "default_debug_is_open_ebpf_log")]
     pub debug_is_open_ebpf_log: bool,
+    #[serde(default = "default_worker_threads_blocking")]
+    pub worker_threads_blocking: usize,
 }
 
 fn default_tunnel2_worker_thread() -> usize {
@@ -349,7 +354,7 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
+    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
 }
 
 fn default_access_log_stdout() -> bool {

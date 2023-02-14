@@ -97,7 +97,7 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    executor_local_spawn::_block_on(move |executor_local_spawn| async move {
+    executor_local_spawn::_block_on(1, move |executor_local_spawn| async move {
         async_main(executor_local_spawn).await
     })
     .map_err(|e| anyhow!("err:anyproxy block_on => e:{}", e))?;

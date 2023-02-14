@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 
 #[async_trait]
 pub trait PeerStreamConnect: Send + Sync {
-    async fn connect(&self, _: &SocketAddr) -> Result<(StreamFlow, SocketAddr, SocketAddr)>;
+    async fn connect(&self) -> Result<(StreamFlow, SocketAddr, SocketAddr)>;
     fn connect_addr(&self) -> Result<SocketAddr>; //这个是域名获取到的ip地址
     fn address(&self) -> String; //地址或域名  配上文件上的
     fn protocol4(&self) -> Protocol4; //tcp 或 udp  四层协议
@@ -19,6 +19,7 @@ pub trait PeerStreamConnect: Send + Sync {
     fn channel_size(&self) -> usize;
     fn stream_send_timeout(&self) -> usize;
     fn stream_recv_timeout(&self) -> usize;
+    fn key(&self) -> Result<String>;
 }
 
 pub struct PeerStreamConnectTcp {
@@ -46,17 +47,15 @@ impl PeerStreamConnectTcp {
 
 #[async_trait]
 impl PeerStreamConnect for PeerStreamConnectTcp {
-    async fn connect(
-        &self,
-        connect_addr: &SocketAddr,
-    ) -> Result<(StreamFlow, SocketAddr, SocketAddr)> {
-        let stream = TcpStream::connect(connect_addr)
+    async fn connect(&self) -> Result<(StreamFlow, SocketAddr, SocketAddr)> {
+        let stream = TcpStream::connect(self.connect_addr()?)
             .await
             .map_err(|e| anyhow!("err:TcpStream::connect => e:{}", e))?;
         let local_addr = stream.local_addr()?;
         let remote_addr = stream.peer_addr()?;
+        let (r, w) = tokio::io::split(stream);
         Ok((
-            StreamFlow::new(0, Box::new(stream)),
+            StreamFlow::new(0, Box::new(r), Box::new(w)),
             local_addr,
             remote_addr,
         ))
@@ -93,5 +92,8 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
     }
     fn stream_recv_timeout(&self) -> usize {
         10
+    }
+    fn key(&self) -> Result<String> {
+        Ok(format!("{}{}", self.protocol7(), self.connect_addr()?))
     }
 }

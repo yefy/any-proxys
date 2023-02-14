@@ -21,7 +21,7 @@ pub struct Tunnel {
 impl Tunnel {
     pub async fn start() -> Tunnel {
         let (tx, mut rx) = mpsc::channel::<PeerClient>(10);
-        tokio::spawn(async move {
+        let async_ = async move {
             log::info!("tunnel2 start");
             let (shutdown_tx, _) = broadcast::channel::<()>(100);
             loop {
@@ -33,27 +33,42 @@ impl Tunnel {
                 }
                 let mut peer_client = peer_client.unwrap();
                 let mut shutdown_rx = shutdown_tx.subscribe();
-                tokio::spawn(async move {
-                    let ret: Result<()> = async {
-                        tokio::select! {
-                            biased;
-                            ret = peer_client.start_cmd() => {
-                                ret?;
-                                return Ok(());
-                            }
-                            _ = shutdown_rx.recv() => {
-                                return Ok(());
-                            }
-                            else => {
-                                return Err(anyhow!("err:start_cmd"))?;
-                            }
+                let async_ = Box::pin(async move {
+                    tokio::select! {
+                        biased;
+                        ret = peer_client.start_cmd() => {
+                            ret?;
+                            return Ok(());
+                        }
+                        _ = shutdown_rx.recv() => {
+                            return Ok(());
+                        }
+                        else => {
+                            return Err(anyhow!("err:start_cmd"))?;
                         }
                     }
-                    .await;
-                    ret.unwrap_or_else(|e| log::error!("err:peer_client.start => e:{}", e));
                 });
+
+                if cfg!(feature = "anyruntime-tokio-spawn-local") {
+                    any_base::executor_local_spawn::_start_and_free2(move || async move {
+                        async_.await
+                    });
+                } else {
+                    any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+                }
             }
-        });
+        };
+        if cfg!(feature = "anyruntime-tokio-spawn-local") {
+            any_base::executor_local_spawn::_start_and_free2(move || async move {
+                async_.await;
+                Ok(())
+            });
+        } else {
+            any_base::executor_spawn::_start_and_free(move || async move {
+                async_.await;
+                Ok(())
+            });
+        }
         Tunnel {
             tx,
             peer_client_sender_map: Arc::new(Mutex::new(HashMap::new())),
@@ -80,25 +95,31 @@ impl Tunnel {
                         }
                         let mut peer_client = peer_client.unwrap();
                         let mut shutdown_rx = shutdown_tx.subscribe();
-                        tokio::spawn(async move {
-                            let ret: Result<()> = async {
-                                tokio::select! {
-                                    biased;
-                                    ret = peer_client.start_cmd() => {
-                                        ret?;
-                                        return Ok(());
-                                    }
-                                    _ = shutdown_rx.recv() => {
-                                        return Ok(());
-                                    }
-                                    else => {
-                                        return Err(anyhow!("err:start_cmd"))?;
-                                    }
+                        let async_ = Box::pin(async move {
+                            tokio::select! {
+                                biased;
+                                ret = peer_client.start_cmd() => {
+                                    ret?;
+                                    return Ok(());
+                                }
+                                _ = shutdown_rx.recv() => {
+                                    return Ok(());
+                                }
+                                else => {
+                                    return Err(anyhow!("err:start_cmd"))?;
                                 }
                             }
-                            .await;
-                            ret.unwrap_or_else(|e| log::error!("err:peer_client.start => e:{}", e));
                         });
+
+                        if cfg!(feature = "anyruntime-tokio-spawn-local") {
+                            any_base::executor_local_spawn::_start_and_free2(move || async move {
+                                async_.await
+                            });
+                        } else {
+                            any_base::executor_spawn::_start_and_free(move || async move {
+                                async_.await
+                            });
+                        }
                     }
                 });
         });

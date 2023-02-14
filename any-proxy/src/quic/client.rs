@@ -1,5 +1,4 @@
 use crate::stream::client;
-use crate::stream::stream_any;
 use crate::stream::stream_flow;
 use crate::Protocol7;
 use anyhow::anyhow;
@@ -30,12 +29,12 @@ impl Client {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl client::Client for Client {
     async fn connect(
         &self,
         info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> Result<Box<dyn client::Connection>> {
+    ) -> Result<Box<dyn client::Connection + Send>> {
         let local_addr = self
             .endpoint
             .local_addr()
@@ -45,7 +44,7 @@ impl client::Client for Client {
             let connect = self
                 .endpoint
                 .connect(self.addr.clone(), self.ssl_domain.as_str())
-                .map_err(|e| anyhow!("err:endpoint.connect => e:{}", e))?;
+                .map_err(|e| anyhow!("err:endpoint.connect => addr:{}, e:{}", self.addr, e))?;
             match tokio::time::timeout(self.timeout, connect).await {
                 Ok(ret) => match ret {
                     Err(e) => {
@@ -61,7 +60,11 @@ impl client::Client for Client {
                 },
                 Err(_) => {
                     stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                    Err(anyhow!("err:client.connect timeout"))
+                    Err(anyhow!(
+                        "err:client.connect timeout =>  addr:{}, ssl_domain:{}",
+                        self.addr,
+                        self.ssl_domain,
+                    ))
                 }
             }
         }
@@ -111,7 +114,7 @@ impl Connection {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl client::Connection for Connection {
     async fn stream(
         &self,
@@ -136,12 +139,15 @@ impl client::Connection for Connection {
                 },
                 Err(_) => {
                     stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                    Err(anyhow!("err:client.stream timeout"))
+                    Err(anyhow!(
+                        "err:client.stream timeout => addr:{}, ssl_domain:{}",
+                        self.addr,
+                        self.ssl_domain
+                    ))
                 }
             }
         }
         .await;
-
         match ret {
             Err(e) => {
                 if info.is_some() {
@@ -149,11 +155,8 @@ impl client::Connection for Connection {
                 }
                 Err(e)
             }
-            Ok(quic_stream) => {
-                let stream = stream_flow::StreamFlow::new(
-                    0,
-                    Box::new(stream_any::StreamAny::Quic(quic_stream)),
-                );
+            Ok((w, r)) => {
+                let stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }
         }

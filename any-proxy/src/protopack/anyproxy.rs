@@ -104,7 +104,7 @@ pub async fn read_heartbeat_rollback<R: AsyncRead + Unpin>(
     if anyproxy.is_none() {
         return Ok(None);
     }
-    let anyproxy = anyproxy.unwrap();
+    let (anyproxy, _) = anyproxy.unwrap();
     match anyproxy {
         AnyproxyPack::Heartbeat(heartbeat) => return Ok(Some(heartbeat)),
         _ => Err(anyhow!("read_heartbeat"))?,
@@ -120,7 +120,7 @@ pub async fn read_heartbeat<R: AsyncRead + Unpin>(
     if anyproxy.is_none() {
         return Ok(None);
     }
-    let anyproxy = anyproxy.unwrap();
+    let (anyproxy, _) = anyproxy.unwrap();
     match anyproxy {
         AnyproxyPack::Heartbeat(heartbeat) => return Ok(Some(heartbeat)),
         _ => Err(anyhow!("read_heartbeat"))?,
@@ -136,7 +136,7 @@ pub async fn read_heartbeat_r<R: AsyncRead + Unpin>(
     if anyproxy.is_none() {
         return Ok(None);
     }
-    let anyproxy = anyproxy.unwrap();
+    let (anyproxy, _) = anyproxy.unwrap();
     match anyproxy {
         AnyproxyPack::HeartbeatR(heartbeat_r) => return Ok(Some(heartbeat_r)),
         _ => Err(anyhow!("read_heartbeatR"))?,
@@ -145,16 +145,16 @@ pub async fn read_heartbeat_r<R: AsyncRead + Unpin>(
 
 pub async fn read_hello<R: AsyncRead + Unpin>(
     buf_reader: &mut BufReader<R>,
-) -> Result<Option<AnyproxyHello>> {
+) -> Result<Option<(AnyproxyHello, usize)>> {
     let anyproxy = read_pack_rollback(buf_reader, Some(AnyproxyHeaderType::Hello))
         .await
         .map_err(|e| anyhow!("err:read_pack_rollback => e:{}", e))?;
     if anyproxy.is_none() {
         return Ok(None);
     }
-    let anyproxy = anyproxy.unwrap();
+    let (anyproxy, pack_size) = anyproxy.unwrap();
     match anyproxy {
-        AnyproxyPack::Hello(hello) => return Ok(Some(hello)),
+        AnyproxyPack::Hello(hello) => return Ok(Some((hello, pack_size))),
         _ => Err(anyhow!("read_hello"))?,
     }
 }
@@ -163,10 +163,11 @@ pub async fn write_pack<T: ?Sized, W: AsyncWrite + Unpin>(
     buf_writer: &mut W,
     typ: AnyproxyHeaderType,
     value: &T,
-) -> Result<()>
+) -> Result<usize>
 where
     T: ser::Serialize,
 {
+    let mut pack_size = 0;
     let slice = toml::to_vec(value).map_err(|e| anyhow!("err:toml::to_vec => e:{}", e))?;
     let header_slice = toml::to_vec(&AnyproxyHeader {
         header_type: typ as u8,
@@ -176,29 +177,33 @@ where
         .write(ANYPROXY_FLAG.as_bytes())
         .await
         .map_err(|e| anyhow!("err:buf_writer.write => e:{}", e))?;
+    pack_size += ANYPROXY_FLAG.as_bytes().len();
     buf_writer
         .write_u16(header_slice.len() as u16)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_u16 => e:{}", e))?;
+    pack_size += 2;
     buf_writer
         .write(&header_slice)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write => e:{}", e))?;
+    pack_size += header_slice.len();
     buf_writer
         .write(&slice)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write => e:{}", e))?;
+    pack_size += slice.len();
     buf_writer
         .flush()
         .await
         .map_err(|e| anyhow!("err:buf_writer.flush => e:{}", e))?;
-    Ok(())
+    Ok(pack_size)
 }
 
 pub async fn read_pack_rollback<R: AsyncRead + Unpin>(
     buf_reader: &mut BufReader<R>,
     typ: Option<AnyproxyHeaderType>,
-) -> Result<Option<AnyproxyPack>> {
+) -> Result<Option<(AnyproxyPack, usize)>> {
     buf_reader.start();
     let anyproxy = read_pack(buf_reader, typ)
         .await
@@ -218,13 +223,15 @@ pub async fn read_pack_rollback<R: AsyncRead + Unpin>(
 pub async fn read_pack<R: AsyncRead + Unpin>(
     buf_reader: &mut R,
     typ: Option<AnyproxyHeaderType>,
-) -> Result<Option<AnyproxyPack>> {
+) -> Result<Option<(AnyproxyPack, usize)>> {
+    let mut pack_size = 0;
     let mut slice = [0u8; ANYPROXY_MAX_HEADER_SIZE];
     let flag_slice = &mut slice[..ANYPROXY_FLAG.len() as usize];
     buf_reader
         .read_exact(flag_slice)
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
+    pack_size += flag_slice.len();
     let flag_str = String::from_utf8_lossy(flag_slice);
     if ANYPROXY_FLAG != &flag_str {
         return Ok(None);
@@ -234,6 +241,7 @@ pub async fn read_pack<R: AsyncRead + Unpin>(
         .read_u16()
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_u16 => e:{}", e))?;
+    pack_size += 2;
     if header_size as usize > ANYPROXY_MAX_HEADER_SIZE || header_size <= 0 {
         return Err(anyhow!(
             "err:header_size > ANYPROXY_MAX_HEADER_SIZE => header_size:{}",
@@ -246,6 +254,7 @@ pub async fn read_pack<R: AsyncRead + Unpin>(
         .read_exact(header_slice)
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
+    pack_size += header_slice.len();
     let header: AnyproxyHeader =
         toml::from_slice(header_slice).map_err(|e| anyhow!("err:AnyproxyPack header=> e:{}", e))?;
 
@@ -270,22 +279,22 @@ pub async fn read_pack<R: AsyncRead + Unpin>(
         .read_exact(body_slice)
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
-
+    pack_size += body_slice.len();
     match header_type {
         AnyproxyHeaderType::Hello => {
             let value: AnyproxyHello =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:AnyproxyPack=> e:{}", e))?;
-            Ok(Some(AnyproxyPack::Hello(value)))
+            Ok(Some((AnyproxyPack::Hello(value), pack_size)))
         }
         AnyproxyHeaderType::Heartbeat => {
             let value: AnyproxyHeartbeat =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:AnyproxyPack=> e:{}", e))?;
-            Ok(Some(AnyproxyPack::Heartbeat(value)))
+            Ok(Some((AnyproxyPack::Heartbeat(value), pack_size)))
         }
         AnyproxyHeaderType::HeartbeatR => {
             let value: AnyproxyHeartbeatR =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:AnyproxyPack=> e:{}", e))?;
-            Ok(Some(AnyproxyPack::HeartbeatR(value)))
+            Ok(Some((AnyproxyPack::HeartbeatR(value), pack_size)))
         }
     }
 }

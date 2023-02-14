@@ -18,10 +18,11 @@ pub struct ConnectInfo {
     pub channel_size: Option<usize>,
 }
 
-#[async_trait(?Send)]
-pub trait Connect {
+#[async_trait]
+pub trait Connect: Send + Sync {
     async fn connect(
         &self,
+        request_id: Option<String>,
         info: &mut Option<&mut stream_flow::StreamFlowInfo>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)>;
 }

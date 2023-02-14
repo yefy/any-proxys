@@ -15,8 +15,8 @@ pub type StreamFlowRead = tokio::io::ReadHalf<StreamFlow>;
 pub type StreamFlowWrite = tokio::io::WriteHalf<StreamFlow>;
 
 //+ Sync
-pub trait AsyncReadAsyncWrite: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadAsyncWrite for T {}
+// pub trait AsyncReadAsyncWrite: AsyncRead + AsyncWrite + Send + Unpin {}
+// impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadAsyncWrite for T {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamFlowErr {
@@ -57,8 +57,8 @@ pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
     info: Option<Arc<Mutex<StreamFlowInfo>>>,
-    r: tokio::io::ReadHalf<Box<dyn AsyncReadAsyncWrite>>,
-    w: tokio::io::WriteHalf<Box<dyn AsyncReadAsyncWrite>>,
+    r: Box<dyn AsyncRead + Send + Unpin>,
+    w: Box<dyn AsyncWrite + Send + Unpin>,
     fd: i32,
 }
 
@@ -66,9 +66,32 @@ impl StreamFlow {
     pub fn split(self) -> (StreamFlowRead, StreamFlowWrite) {
         tokio::io::split(self)
     }
+    pub fn split_stream(
+        self,
+    ) -> (
+        tokio::time::Duration,
+        tokio::time::Duration,
+        Option<Arc<Mutex<StreamFlowInfo>>>,
+        Box<dyn AsyncRead + Send + Unpin>,
+        Box<dyn AsyncWrite + Send + Unpin>,
+        i32,
+    ) {
+        let StreamFlow {
+            read_timeout,
+            write_timeout,
+            info,
+            r,
+            w,
+            fd,
+        } = self;
+        return (read_timeout, write_timeout, info, r, w, fd);
+    }
 
-    pub fn new(fd: i32, stream: Box<dyn AsyncReadAsyncWrite>) -> StreamFlow {
-        let (r, w) = tokio::io::split(stream);
+    pub fn new(
+        fd: i32,
+        r: Box<dyn AsyncRead + Send + Unpin>,
+        w: Box<dyn AsyncWrite + Send + Unpin>,
+    ) -> StreamFlow {
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             write_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
@@ -100,8 +123,9 @@ impl StreamFlow {
 
     pub fn set_stream_info(&mut self, mut info: Option<Arc<Mutex<StreamFlowInfo>>>) {
         if info.is_some() {
-            info.as_mut().unwrap().lock().unwrap().write_timeout = self.get_write_timeout();
-            info.as_mut().unwrap().lock().unwrap().read_timeout = self.get_read_timeout();
+            let mut info = info.as_mut().unwrap().lock().unwrap();
+            info.write_timeout = self.get_write_timeout();
+            info.read_timeout = self.get_read_timeout();
         }
         self.info = info;
     }
@@ -189,6 +213,11 @@ impl StreamFlow {
                     return Err(anyhow!("err:read_flow reset"));
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
+                    stream_err = StreamFlowErr::ReadClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:read_flow close"));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted => {
                     stream_err = StreamFlowErr::ReadClose;
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:read_flow close"));
@@ -311,6 +340,11 @@ impl StreamFlow {
                     return Err(anyhow!("err:write_flow reset"));
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::NotConnected => {
+                    stream_err = StreamFlowErr::WriteClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:write_flow close"));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted => {
                     stream_err = StreamFlowErr::WriteClose;
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:write_flow close"));

@@ -37,6 +37,8 @@ pub async fn do_start(
         tokio::select! {
             biased;
             _ret = start_stream.do_start(stream_info.clone(), client_buf_reader) => {
+                let _ret = _ret.map_err(|e| anyhow!("err:do_start => request_id:{}, e:{}",
+                    stream_info.borrow().request_id, e));
                 return Some(_ret);
             }
             _ret = read_timeout(
@@ -122,7 +124,6 @@ pub async fn do_start(
             .map_err(|e| anyhow!("err:StreamStream::access_log => e:{}", e))?;
         }
     }
-
     if ret.is_some() {
         log::debug!("ret:{:?}", ret.as_ref().unwrap());
     }
@@ -144,11 +145,80 @@ pub async fn stream_info_parse(
     stream_info: &mut StreamInfo,
 ) -> Result<bool> {
     let mut is_close = false;
-    if stream_info.err_status == ErrStatus::Ok {
-        let mut client_stream_flow_info = stream_info.client_stream_flow_info.lock().unwrap();
-        let mut upstream_stream_flow_info = stream_info.upstream_stream_flow_info.lock().unwrap();
+    let mut client_stream_flow_info = stream_info.client_stream_flow_info.lock().unwrap();
+    let mut upstream_stream_flow_info = stream_info.upstream_stream_flow_info.lock().unwrap();
 
+    #[cfg(feature = "anyerror")]
+    let mut is_error = false;
+    #[cfg(feature = "anyerror")]
+    {
+        if client_stream_flow_info.read == 0
+            || client_stream_flow_info.write == 0
+            || upstream_stream_flow_info.read == 0
+            || upstream_stream_flow_info.write == 0
+        {
+            is_error = true;
+        } else {
+            let tunnel_hello_size = stream_info.protocol_hello_size as i64;
+            let ups_write = if tunnel_hello_size > 0 {
+                if upstream_stream_flow_info.write >= tunnel_hello_size
+                    && upstream_stream_flow_info.write > client_stream_flow_info.read
+                {
+                    upstream_stream_flow_info.write - tunnel_hello_size
+                } else {
+                    upstream_stream_flow_info.write
+                }
+            } else {
+                upstream_stream_flow_info.write
+            };
+
+            let tunnel_hello_size = stream_info.client_protocol_hello_size as i64;
+            let client_read = if tunnel_hello_size > 0 {
+                if client_stream_flow_info.read >= tunnel_hello_size
+                    && client_stream_flow_info.read > upstream_stream_flow_info.write
+                {
+                    client_stream_flow_info.read - tunnel_hello_size
+                } else {
+                    client_stream_flow_info.read
+                }
+            } else {
+                client_stream_flow_info.read
+            };
+
+            if client_read != ups_write {
+                is_error = true;
+            }
+
+            if client_stream_flow_info.write != upstream_stream_flow_info.read {
+                is_error = true;
+            }
+        }
+
+        if stream_info.is_discard_timeout || stream_info.is_discard_flow {
+            is_error = false;
+        }
+
+        if is_error {
+            log::error!(
+                "session_id:{}, client_stream_flow_info.read:{} , upstream_stream_flow_info.write:{}, \
+                client_stream_flow_info.write:{} , upstream_stream_flow_info.read:{}, \
+                   protocol_hello_size:{}, client_protocol_hello_size:{}",
+                stream_info.request_id,
+                client_stream_flow_info.read,
+                upstream_stream_flow_info.write,
+                client_stream_flow_info.write,
+                upstream_stream_flow_info.read,
+                stream_info.protocol_hello_size,
+                stream_info.client_protocol_hello_size,
+            )
+        }
+    }
+
+    if stream_info.err_status == ErrStatus::Ok
+        || stream_info.err_status == ErrStatus::ClientProtoErr
+    {
         if stream_timeout.timeout_num.load(Ordering::Relaxed) >= 4 {
+            stream_info.is_timeout_exit = true;
             let client_read_timeout_millis = stream_timeout
                 .client_read_timeout_millis
                 .load(Ordering::Relaxed);
@@ -271,6 +341,11 @@ pub async fn stream_info_parse(
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteErr {
             stream_info.err_status_str = Some(stream_info::UPS_CONN_ERR.to_string());
         }
+    }
+
+    #[cfg(feature = "anyerror")]
+    if is_error {
+        is_close = false;
     }
 
     Ok(is_close)

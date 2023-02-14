@@ -74,14 +74,17 @@ impl<T> RoundAsyncChannel<T> {
         self.is_close.load(Ordering::Relaxed)
     }
 
-    pub fn channel(&mut self, buffer: usize) -> async_channel::Receiver<T> {
+    pub fn channel(&mut self, buffer: usize) -> anyhow::Result<async_channel::Receiver<T>> {
+        if self.is_close() {
+            return Err(anyhow::anyhow!("self.is_close()"));
+        }
         let (tx, rx) = if buffer <= 0 {
             async_channel::unbounded()
         } else {
             async_channel::bounded(buffer)
         };
         self.senders.push(tx);
-        rx
+        Ok(rx)
     }
 
     pub fn add_sender(&mut self, tx: async_channel::Sender<T>) {

@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use anyhow::Result;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPoolItem;
 use dynamic_pool::DynamicReset;
 use serde::ser;
@@ -48,6 +48,7 @@ pub struct TunnelHello {
     pub session_id: String,
     pub min_stream_cache_size: usize,
     pub channel_size: usize,
+    pub client_peer_stream_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -56,18 +57,18 @@ pub struct TunnelDataHeader {
     pub pack_size: u32,
 }
 
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 pub type DynamicTunnelData = DynamicPoolItem<TunnelData>;
 
-#[cfg(not(feature = "anytunnel-dynamic-pool"))]
+#[cfg(not(feature = "anypool-dynamic-pool"))]
 pub type DynamicTunnelData = TunnelData;
 
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 pub type DynamicPoolTunnelData = DynamicPool<TunnelData>;
 
-#[cfg(not(feature = "anytunnel-dynamic-pool"))]
+#[cfg(not(feature = "anypool-dynamic-pool"))]
 pub struct DynamicPoolTunnelData {}
-#[cfg(not(feature = "anytunnel-dynamic-pool"))]
+#[cfg(not(feature = "anypool-dynamic-pool"))]
 impl DynamicPoolTunnelData {
     pub fn new() -> DynamicPoolTunnelData {
         DynamicPoolTunnelData {}

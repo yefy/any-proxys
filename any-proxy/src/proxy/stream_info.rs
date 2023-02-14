@@ -122,6 +122,7 @@ pub struct StreamInfo {
     pub debug_is_open_print: bool,
     pub request_id: String,
     pub protocol_hello: std::sync::Arc<std::sync::Mutex<Option<AnyproxyHello>>>,
+    pub protocol_hello_size: usize,
     pub err_status: ErrStatus,
     pub err_status_str: Option<String>,
     pub client_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
@@ -141,6 +142,8 @@ pub struct StreamInfo {
     pub is_break_stream_write: bool,
     pub close_num: usize,
     pub write_max_block_time_ms: u128,
+    pub client_protocol_hello_size: usize,
+    pub is_timeout_exit: bool,
 }
 
 impl StreamInfo {
@@ -157,6 +160,7 @@ impl StreamInfo {
             debug_is_open_print: false,
             request_id: "".to_string(),
             protocol_hello: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            protocol_hello_size: 0,
             err_status: ErrStatus::ClientProtoErr,
             err_status_str: None,
             client_stream_flow_info: std::sync::Arc::new(std::sync::Mutex::new(
@@ -180,6 +184,8 @@ impl StreamInfo {
             is_break_stream_write: false,
             close_num: 0,
             write_max_block_time_ms: 0,
+            client_protocol_hello_size: 0,
+            is_timeout_exit: false,
         }
     }
 

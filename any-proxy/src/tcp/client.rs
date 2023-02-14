@@ -33,12 +33,12 @@ impl Client {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl client::Client for Client {
     async fn connect(
         &self,
         info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> Result<Box<dyn client::Connection>> {
+    ) -> Result<Box<dyn client::Connection + Send>> {
         let stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
         if info.is_some() {
             info.as_mut().unwrap().err = stream_err;
@@ -71,7 +71,7 @@ impl Connection {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl client::Connection for Connection {
     async fn stream(
         &self,
@@ -84,20 +84,25 @@ impl client::Connection for Connection {
                     Ok(stream) => Ok(stream),
                     Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
                         stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                        Err(anyhow!("err:client.stream timeout"))
+                        Err(anyhow!("err:client.stream timeout => addr:{}", self.addr))
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
                         stream_err = stream_flow::StreamFlowErr::WriteErr;
-                        Err(anyhow!("err:client.stream reset"))
+                        Err(anyhow!("err:client.stream reset => addr:{}", self.addr))
                     }
                     Err(e) => {
                         stream_err = stream_flow::StreamFlowErr::WriteErr;
-                        Err(anyhow!("err:client.stream => kind:{:?}, e:{}", e.kind(), e))
+                        Err(anyhow!(
+                            "err:client.stream => addr:{}, kind:{:?}, e:{}",
+                            self.addr,
+                            e.kind(),
+                            e
+                        ))
                     }
                 },
                 Err(_) => {
                     stream_err = stream_flow::StreamFlowErr::WriteTimeout;
-                    Err(anyhow!("err:client.stream timeout"))
+                    Err(anyhow!("err:client.stream timeout => addr:{}", self.addr))
                 }
             }
         }
@@ -122,8 +127,8 @@ impl client::Connection for Connection {
                 let fd = tcp_stream.as_raw_fd();
                 #[cfg(not(unix))]
                 let fd = 0;
-
-                let stream = stream_flow::StreamFlow::new(fd, Box::new(tcp_stream));
+                let (r, w) = tokio::io::split(tcp_stream);
+                let stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
                 Ok((Protocol7::Tcp, stream, local_addr, remote_addr))
             }
         }

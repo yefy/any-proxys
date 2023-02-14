@@ -135,9 +135,6 @@ impl Future for WaitGroupFuture<'_> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let waker = cx.waker().clone();
-        *self.inner.waker.lock().unwrap() = Some(waker);
-
         let count = self.inner.count.load(Ordering::Relaxed);
         if count < 0 {
             return Poll::Ready(Err(anyhow!("err:count < 0 => count:{}", count)));
@@ -157,7 +154,11 @@ impl Future for WaitGroupFuture<'_> {
                 self.inner.complete.store(true, Ordering::SeqCst);
                 Poll::Ready(Ok(()))
             }
-            _ => Poll::Pending,
+            _ => {
+                let waker = cx.waker().clone();
+                *self.inner.waker.lock().unwrap() = Some(waker);
+                Poll::Pending
+            }
         }
     }
 }

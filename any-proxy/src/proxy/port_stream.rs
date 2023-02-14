@@ -112,25 +112,34 @@ impl proxy::Stream for PortStream {
         stream_info.borrow_mut().debug_is_open_print = config_ctx.fast_conf.debug_is_open_print;
         stream_info.borrow_mut().add_work_time("tunnel_stream");
 
-        let (is_tunnel, client_buf_reader) = TunnelStream::tunnel_stream(
+        let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
             self.server_stream_info.clone(),
             client_buf_reader,
             stream_info.clone(),
+            self.executors.clone(),
         )
         .await
         .map_err(|e| anyhow!("err:tunnel_stream => e:{}", e))?;
 
-        if is_tunnel {
+        if client_buf_reader.is_none() {
             return Ok(());
         }
         let client_buf_reader = client_buf_reader.unwrap();
 
         stream_info.borrow_mut().add_work_time("heartbeat");
 
-        let (mut client_buf_reader, stream_info) =
-            HeartbeatStream::heartbeat_stream(client_buf_reader, stream_info).await?;
+        let ret = HeartbeatStream::heartbeat_stream(
+            client_buf_reader,
+            stream_info,
+            self.executors.clone(),
+        )
+        .await?;
+        if ret.is_none() {
+            return Ok(());
+        }
+        let (mut client_buf_reader, stream_info) = ret.unwrap();
 
         stream_info.borrow_mut().add_work_time("hello");
 
@@ -145,7 +154,8 @@ impl proxy::Stream for PortStream {
                 .await
                 .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
             match hello {
-                Some(mut hello) => {
+                Some((mut hello, hello_pack_size)) => {
+                    stream_info.borrow_mut().client_protocol_hello_size = hello_pack_size;
                     log::debug!("hello:{:?}", hello);
                     //优先使用hello的值
                     stream_info.borrow_mut().remote_domain = Some(hello.domain.clone());
@@ -165,9 +175,12 @@ impl proxy::Stream for PortStream {
                     let hello = protopack::anyproxy::AnyproxyHello {
                         version: protopack::anyproxy::ANYPROXY_VERSION.to_string(),
                         request_id: format!(
-                            "{}_{}",
+                            "{:?}_{}_{}_{}_{}",
+                            stream_info.borrow().server_stream_info.local_addr,
+                            stream_info.borrow().server_stream_info.remote_addr,
+                            unsafe { libc::getpid() },
                             self.session_id.fetch_add(1, Ordering::Relaxed),
-                            Local::now().timestamp()
+                            Local::now().timestamp_millis()
                         ),
                         client_addr: stream_info.borrow().server_stream_info.remote_addr.clone(),
                         domain: stream_info.borrow().local_domain.clone().unwrap(),
@@ -178,10 +191,17 @@ impl proxy::Stream for PortStream {
                 }
             }
         };
+
         {
             stream_info.borrow_mut().request_id = hello.request_id.clone();
             *stream_info.borrow().protocol_hello.lock().unwrap() = Some(hello);
         }
+
+        log::debug!(
+            "connect_and_stream request_id:{}, server_stream_info:{:?}",
+            stream_info.borrow().request_id,
+            self.server_stream_info
+        );
 
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];

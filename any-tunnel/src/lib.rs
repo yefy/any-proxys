@@ -10,9 +10,6 @@ pub mod stream;
 use crate::protopack::DynamicTunnelData;
 pub use any_base::stream_flow;
 
-#[cfg(feature = "anytunnel-debug")]
-pub const DEFAULT_PRINT_NUM: u32 = 10000;
-
 pub type PeerClientToStreamSender = async_channel::Sender<DynamicTunnelData>;
 pub type PeerClientToStreamReceiver = async_channel::Receiver<DynamicTunnelData>;
 

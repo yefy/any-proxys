@@ -34,7 +34,7 @@ pub struct TunnelClients {
     client2: client2::Client,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Protocol7 {
     Tcp,
     Quic,

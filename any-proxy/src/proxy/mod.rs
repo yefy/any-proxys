@@ -58,6 +58,7 @@ pub struct StreamCacheBuffer {
     pub seek: u64,
     pub file_fd: i32,
     pub read_size: u64,
+    pub min_size: usize,
 }
 
 impl Default for StreamCacheBuffer {
@@ -74,18 +75,21 @@ impl DynamicReset for StreamCacheBuffer {
 
 impl StreamCacheBuffer {
     fn new() -> Self {
+        let min_size = StreamCacheBuffer::min_size();
         StreamCacheBuffer {
-            datas: Vec::with_capacity(
-                default_config::PAGE_SIZE.load(Ordering::Relaxed)
-                    * *default_config::MIN_CACHE_BUFFER_NUM,
-            ),
+            datas: Vec::with_capacity(min_size),
             start: 0,
             size: 0,
             is_cache: false,
             seek: 0,
             file_fd: 0,
             read_size: 0,
+            min_size,
         }
+    }
+
+    pub fn min_size() -> usize {
+        default_config::PAGE_SIZE.load(Ordering::Relaxed) * *default_config::MIN_CACHE_BUFFER_NUM
     }
 
     pub fn reset(&mut self) {
@@ -96,12 +100,12 @@ impl StreamCacheBuffer {
         self.seek = 0;
         self.file_fd = 0;
         self.read_size = 0;
+        //self.min_size
     }
 
     fn resize(&mut self, data_size: Option<usize>) {
         let data_size = if data_size.is_none() {
-            default_config::PAGE_SIZE.load(Ordering::Relaxed)
-                * *default_config::MIN_CACHE_BUFFER_NUM
+            self.min_size
         } else {
             data_size.unwrap()
         };
@@ -129,6 +133,8 @@ pub struct StreamStreamContext {
     pub min_cache_buffer_size: usize,
     pub min_read_buffer_size: usize,
     pub min_cache_file_size: usize,
+    pub total_read_size: u64,
+    pub total_write_size: u64,
 }
 
 #[derive(Clone)]

@@ -15,6 +15,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use tokio::sync::broadcast;
 
+#[derive(Debug)]
 pub struct ServerStreamInfo {
     pub protocol7: Protocol7,
     pub remote_addr: SocketAddr,
@@ -46,21 +47,11 @@ pub trait Connection {
 pub async fn accept<A: Listener + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
     shutdown_rx2: &mut broadcast::Receiver<()>,
-    listenner: &mut Box<A>,
-    listenner2: &mut Box<A>,
-    listenner3: &mut Box<A>,
+    listen: &mut Box<A>,
 ) -> Result<(Option<(Box<dyn Connection>, bool)>, bool)> {
     tokio::select! {
         biased;
-        connection = listenner.accept() => {
-            let connection = connection?;
-            return Ok((Some(connection), false));
-        }
-        connection = listenner2.accept() => {
-            let connection = connection?;
-            return Ok((Some(connection), false));
-        }
-        connection = listenner3.accept() => {
+        connection = listen.accept() => {
             let connection = connection?;
             return Ok((Some(connection), false));
         }
@@ -103,13 +94,43 @@ pub async fn stream<C: Connection + ?Sized>(
     }
 }
 
-pub async fn listen<S, F>(
-    executors: ExecutorsLocal,
+pub async fn get_listens(
     tunnel_listen: any_tunnel_server::Listener,
     tunnel2_listen: any_tunnel2_server::Listener,
-    shutdown_timeout: u64,
     listen_server: Rc<Box<dyn Server>>,
+) -> Result<Vec<Box<dyn Listener>>> {
+    let mut listens = Vec::with_capacity(5);
+    let tunnel_listen: Box<dyn Listener> = Box::new(tunnel_server::Listener::new(
+        listen_server.protocol7().to_tunnel_protocol7()?,
+        tunnel_listen,
+        listen_server.stream_send_timeout(),
+        listen_server.stream_recv_timeout(),
+    )?);
+
+    let tunnel2_listen: Box<dyn Listener> = Box::new(tunnel2_server::Listener::new(
+        listen_server.protocol7().to_tunnel2_protocol7()?,
+        tunnel2_listen,
+        listen_server.stream_send_timeout(),
+        listen_server.stream_recv_timeout(),
+    )?);
+
+    let listen = listen_server
+        .listen()
+        .await
+        .map_err(|e| anyhow!("err:listen_server.listen => e:{}", e))?;
+
+    listens.push(tunnel_listen);
+    listens.push(tunnel2_listen);
+    listens.push(listen);
+    return Ok(listens);
+}
+
+pub async fn listen<S, F>(
+    executors: ExecutorsLocal,
+    shutdown_timeout: u64,
     listen_shutdown_tx: broadcast::Sender<()>,
+    listen_server: Rc<Box<dyn Server>>,
+    mut listen: Box<dyn Listener>,
     service: S,
 ) -> Result<()>
 where
@@ -128,40 +149,19 @@ where
         listen_server.protocol7().to_string(),
         local_addr
     );
-
-    let mut tunnel_listen: Box<dyn Listener> = Box::new(tunnel_server::Listener::new(
-        listen_server.protocol7().to_tunnel_protocol7()?,
-        tunnel_listen,
-        listen_server.stream_send_timeout(),
-        listen_server.stream_recv_timeout(),
-    )?);
-
-    let mut tunnel2_listen: Box<dyn Listener> = Box::new(tunnel2_server::Listener::new(
-        listen_server.protocol7().to_tunnel2_protocol7()?,
-        tunnel2_listen,
-        listen_server.stream_send_timeout(),
-        listen_server.stream_recv_timeout(),
-    )?);
-
     let mut accept_shutdown_thread_tx = executors.shutdown_thread_tx.subscribe();
     let mut accept_listen_shutdown_tx = listen_shutdown_tx.subscribe();
-    let mut listen = listen_server
-        .listen()
-        .await
-        .map_err(|e| anyhow!("err:listen_server.listen => e:{}", e))?;
     let is_fast_shutdown = loop {
         let (accept, is_fast_shutdown) = accept(
             &mut accept_shutdown_thread_tx,
             &mut accept_listen_shutdown_tx,
             &mut listen,
-            &mut tunnel_listen,
-            &mut tunnel2_listen,
         )
         .await
         .map_err(|e| anyhow!("err:accept => e:{}", e))?;
         if accept.is_none() {
             if is_fast_shutdown {
-                executor_local_spawn.send(is_fast_shutdown)
+                executor_local_spawn.send("listen send", is_fast_shutdown)
             }
             break is_fast_shutdown;
         }
@@ -223,7 +223,7 @@ where
     };
 
     executor_local_spawn
-        .stop(is_fast_shutdown, shutdown_timeout)
+        .stop("listen stop", is_fast_shutdown, shutdown_timeout)
         .await;
     log::debug!(
         "close listen thread_id:{:?}, Protocol7{}, listen_addr:{}",

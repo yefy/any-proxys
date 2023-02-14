@@ -1,21 +1,22 @@
 use super::protopack::DynamicTunnelData;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+#[cfg(feature = "anypool-dynamic-pool")]
 use super::protopack::TunnelData;
 use super::protopack::TunnelPack;
 use super::round_async_channel::RoundAsyncChannel;
+#[cfg(feature = "anydebug")]
+use crate::get_flag;
 use crate::protopack::DynamicPoolTunnelData;
-#[cfg(feature = "anytunnel-dynamic-pool")]
+use crate::PeerClientToStreamReceiver;
+use awaitgroup::WorkerInner;
+#[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-
-use crate::PeerClientToStreamReceiver;
-#[cfg(feature = "anytunnel-debug")]
-use crate::DEFAULT_PRINT_NUM;
 
 struct StreamBuf {
     tunnel_data: DynamicTunnelData,
@@ -60,8 +61,6 @@ pub struct Stream {
             >,
         >,
     >,
-    stream_rx_pack_id: u32,
-
     stream_tx: Option<Arc<Mutex<RoundAsyncChannel<TunnelPack>>>>,
     stream_tx_data_size: usize,
     stream_tx_buffer_pool: DynamicPoolTunnelData,
@@ -73,7 +72,10 @@ pub struct Stream {
             >,
         >,
     >,
-    stream_tx_pack_id: u32,
+    _session_id: String,
+    stream_tx_pack_id: Arc<AtomicU32>,
+    stream_rx_pack_id: Arc<AtomicU32>,
+    worker_inner: Option<WorkerInner>,
 }
 
 impl Stream {
@@ -83,11 +85,15 @@ impl Stream {
         stream_tx: Arc<Mutex<RoundAsyncChannel<TunnelPack>>>,
         _max_stream_size: usize,
         _channel_size: usize,
+        _session_id: String,
+        stream_tx_pack_id: Arc<AtomicU32>,
+        stream_rx_pack_id: Arc<AtomicU32>,
+        worker_inner: WorkerInner,
     ) -> Stream {
-        #[cfg(feature = "anytunnel-dynamic-pool")]
+        #[cfg(feature = "anypool-dynamic-pool")]
         let stream_tx_buffer_pool =
             DynamicPool::new(8, _max_stream_size * _channel_size * 2, TunnelData::default);
-        #[cfg(not(feature = "anytunnel-dynamic-pool"))]
+        #[cfg(not(feature = "anypool-dynamic-pool"))]
         let stream_tx_buffer_pool = DynamicPoolTunnelData::new();
         Stream {
             is_client,
@@ -96,19 +102,24 @@ impl Stream {
             stream_rx_future: None,
             stream_tx_future: None,
             stream_tx_data_size: 0,
-            stream_tx_pack_id: 0,
-            stream_rx_pack_id: 0,
             stream_tx: Some(stream_tx),
             stream_tx_buffer_pool,
+            _session_id,
+            stream_tx_pack_id,
+            stream_rx_pack_id,
+            worker_inner: Some(worker_inner),
         }
     }
 
     fn add_write_pack_id(&mut self) -> u32 {
-        self.stream_tx_pack_id += 1;
-        self.stream_tx_pack_id
+        self.stream_tx_pack_id.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub fn close(&mut self) {
+        if self.worker_inner.is_some() {
+            let worker_inner = self.worker_inner.take().unwrap();
+            worker_inner.done();
+        }
         self.write_close();
         self.read_close();
     }
@@ -127,15 +138,13 @@ impl Stream {
             log::debug!("stream read_close");
             let stream_rx = stream_rx.unwrap();
             stream_rx.close();
-            #[cfg(feature = "anytunnel-debug")]
+
+            #[cfg(feature = "anydebug")]
             log::info!(
-                "flag:{} stream stream_tx_pack_id:{}, stream_rx_pack_id:{}",
+                "flag:{} session_id:{} stream read_close",
                 get_flag(self.is_client),
-                self.stream_tx_pack_id,
-                self.stream_rx_pack_id
+                self._session_id
             );
-            #[cfg(feature = "anytunnel-debug")]
-            log::info!("flag:{} stream read_close", get_flag(self.is_client));
         }
     }
 
@@ -146,8 +155,13 @@ impl Stream {
             let stream_tx = stream_tx.unwrap();
             let stream_tx = &mut *stream_tx.lock().unwrap();
             stream_tx.close();
-            #[cfg(feature = "anytunnel-debug")]
-            log::info!("flag:{} stream write_close", get_flag(self.is_client));
+
+            #[cfg(feature = "anydebug")]
+            log::info!(
+                "flag:{} session_id:{} stream write_close",
+                get_flag(self.is_client),
+                self._session_id
+            );
         }
     }
 
@@ -184,7 +198,7 @@ impl tokio::io::AsyncRead for Stream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         if self.is_read_close() {
-            log::error!("err:is_read_close");
+            //log::error!("err:is_read_close");
             return Poll::Ready(Ok(()));
         }
 
@@ -203,23 +217,13 @@ impl tokio::io::AsyncRead for Stream {
         let ret = stream_rx_future.as_mut().poll(_cx);
         match ret {
             Poll::Ready(Err(_)) => {
-                self.read_close();
+                self.close();
                 return Poll::Ready(Ok(()));
             }
             Poll::Ready(Ok(tunnel_data)) => {
-                self.stream_rx_pack_id = tunnel_data.header.pack_id;
+                self.stream_rx_pack_id
+                    .store(tunnel_data.header.pack_id, Ordering::SeqCst);
                 log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                #[cfg(feature = "anytunnel-debug")]
-                {
-                    if self.stream_rx_pack_id % DEFAULT_PRINT_NUM == 0 {
-                        log::info!(
-                            "flag:{} stream read pack_id:{}",
-                            get_flag(self.is_client),
-                            self.stream_rx_pack_id
-                        );
-                    }
-                }
-
                 self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
 
                 let _ = self.read_buf(buf);
@@ -241,7 +245,7 @@ impl tokio::io::AsyncWrite for Stream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         if self.is_write_close() {
-            log::error!("err:is_write_close");
+            //log::error!("err:is_write_close");
             return Poll::Ready(Ok(0));
         }
 
@@ -251,16 +255,6 @@ impl tokio::io::AsyncWrite for Stream {
             self.stream_tx_data_size = buf.len();
 
             let stream_tx_pack_id = self.add_write_pack_id();
-            #[cfg(feature = "anytunnel-debug")]
-            {
-                if stream_tx_pack_id % DEFAULT_PRINT_NUM == 0 {
-                    log::info!(
-                        "flag:{} stream write pack_id:{}",
-                        get_flag(self.is_client),
-                        stream_tx_pack_id
-                    );
-                }
-            }
 
             let mut tunnel_data = self.stream_tx_buffer_pool.take();
             tunnel_data.datas.extend_from_slice(buf);
@@ -285,7 +279,7 @@ impl tokio::io::AsyncWrite for Stream {
         let ret = stream_tx_future.as_mut().poll(_cx);
         match ret {
             Poll::Ready(Err(_)) => {
-                self.write_close();
+                self.close();
                 return Poll::Ready(Ok(0));
             }
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(self.stream_tx_data_size)),
@@ -308,7 +302,7 @@ impl tokio::io::AsyncWrite for Stream {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.write_close();
+        self.close();
         Poll::Ready(Ok(()))
     }
 }
