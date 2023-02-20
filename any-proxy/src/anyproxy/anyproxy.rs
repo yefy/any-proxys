@@ -241,13 +241,21 @@ impl Anyproxy {
                                 new_anyproxy_group.group_version(),
                                 e
                             );
-                            self.async_anyproxy_group_stop(new_anyproxy_group, false)
-                                .await;
+                            self.async_anyproxy_group_stop(
+                                new_anyproxy_group,
+                                false,
+                                shutdown_timeout,
+                            )
+                            .await;
                             continue;
                         }
 
-                        self.async_anyproxy_group_stop(anyproxy_group.take().unwrap(), false)
-                            .await;
+                        self.async_anyproxy_group_stop(
+                            anyproxy_group.take().unwrap(),
+                            false,
+                            shutdown_timeout,
+                        )
+                        .await;
                         anyproxy_group = Some(new_anyproxy_group);
                     }
                 }

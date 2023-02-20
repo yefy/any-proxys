@@ -18,7 +18,7 @@ impl AsyncWait {
     }
 
     pub fn waker(&self) {
-        let waker = self.waker.lock().unwrap().take();
+        let waker = { self.waker.lock().unwrap().take() };
         if waker.is_some() {
             waker.unwrap().wake();
         }
@@ -28,7 +28,9 @@ impl AsyncWait {
 impl Future for AsyncWait {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        *self.waker.lock().unwrap() = Some(cx.waker().clone());
+        {
+            *self.waker.lock().unwrap() = Some(cx.waker().clone());
+        }
         Poll::Pending
     }
 }

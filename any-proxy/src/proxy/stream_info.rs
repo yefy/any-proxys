@@ -121,7 +121,7 @@ pub struct StreamInfo {
     pub session_time: f32,
     pub debug_is_open_print: bool,
     pub request_id: String,
-    pub protocol_hello: std::sync::Arc<std::sync::Mutex<Option<AnyproxyHello>>>,
+    pub protocol_hello: std::sync::Arc<std::sync::Mutex<Option<Arc<AnyproxyHello>>>>,
     pub protocol_hello_size: usize,
     pub err_status: ErrStatus,
     pub err_status_str: Option<String>,

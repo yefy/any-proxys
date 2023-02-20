@@ -153,8 +153,10 @@ impl Stream {
         if stream_tx.is_some() {
             log::debug!("stream write_close");
             let stream_tx = stream_tx.unwrap();
-            let stream_tx = &mut *stream_tx.lock().unwrap();
-            stream_tx.close();
+            {
+                let stream_tx = &mut *stream_tx.lock().unwrap();
+                stream_tx.close();
+            }
 
             #[cfg(feature = "anydebug")]
             log::info!(

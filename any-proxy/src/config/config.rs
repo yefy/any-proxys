@@ -223,7 +223,7 @@ impl Config {
                 return Err(anyhow!("err:dir nil => file_full_path:{}", file_full_path));
             }
             let dir = dir.unwrap().to_string_lossy().to_string();
-            let dir = default_config::ANYPROXY_CONF_PATH.lock().unwrap().clone() + dir.as_str();
+            let dir = { default_config::ANYPROXY_CONF_PATH.lock().unwrap().clone() + dir.as_str() };
 
             let file_names = Config::get_dir_file_info(&dir)
                 .map_err(|e| anyhow!("err:Config::get_dir_file_info => e:{}", e))?;

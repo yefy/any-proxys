@@ -168,11 +168,19 @@ impl StreamStream {
         };
 
         if is_proxy_protocol_hello {
-            let protocol_hello = stream_info.borrow().protocol_hello.clone();
+            let hello = {
+                stream_info
+                    .borrow()
+                    .protocol_hello
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap()
+            };
             stream_info.borrow_mut().protocol_hello_size = protopack::anyproxy::write_pack(
                 &mut upstream_stream,
                 protopack::anyproxy::AnyproxyHeaderType::Hello,
-                protocol_hello.lock().unwrap().as_ref().unwrap(),
+                &*hello,
             )
             .await
             .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
@@ -901,6 +909,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                 }
                 self.write_buffer(ret, buffer, &mut ssc).await?;
             } else {
+                self.check_sleep().await;
                 if self.read_err.is_some() && self.read_buffer.is_some() {
                     let buffer = self.read_buffer.take().unwrap();
                     if buffer.read_size <= 0 {
@@ -908,25 +917,32 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> StreamStreamCacheOrFile<R, W> 
                     } else {
                         self.write_buffer(Ok(0), buffer, &mut ssc).await?;
                     }
-                } else {
-                    self.check_sleep().await;
                 }
             }
-            if self.stream_info.borrow().debug_is_open_print {
+
+            #[cfg(feature = "anydebug")]
+            {
                 let stream_info = self.stream_info.borrow();
                 log::info!(
-                    "{}---{:?}---{}:write file stream_cache_size:{}, tmp_file_size:{}, \
-                    read_err.is_none:{}, write_err.is_none:{}, is_read_empty:{}, is_write_empty:{}",
-                    stream_info.request_id,
-                    stream_info.server_stream_info.local_addr,
-                    StreamStream::get_flag(self.is_client),
-                    ssc.stream_cache_size,
-                    ssc.tmp_file_size,
-                    self.read_err.is_none(),
-                    self.write_err.is_none(),
-                    self.is_read_empty(),
-                    self.is_write_empty(),
-                );
+                        "{}---{:?}---{}:read file stream_cache_size:{}, tmp_file_size:{}, \
+                                read_err.is_none:{}, write_err.is_none:{}, is_read_empty:{}, \
+                                is_write_empty:{}, is_sendfile_close:{}, max_stream_cache_size:{}, max_tmp_file_size:{}, \
+                                total_read_size:{}, total_write_size:{}",
+                        stream_info.request_id,
+                        stream_info.server_stream_info.local_addr,
+                        StreamStream::get_flag(self.is_client),
+                        ssc.stream_cache_size,
+                        ssc.tmp_file_size,
+                        self.read_err.is_none(),
+                        self.write_err.is_none(),
+                        self.is_read_empty(),
+                        self.is_write_empty(),
+                        self.is_sendfile_close(),
+                        ssc.max_stream_cache_size,
+                        ssc.max_tmp_file_size,
+                        ssc.total_read_size,
+                        ssc.total_write_size,
+                    );
             }
 
             self.stream_status = self.write(&mut ssc).await?;

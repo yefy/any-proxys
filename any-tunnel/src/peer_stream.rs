@@ -77,9 +77,13 @@ impl PeerStreamOnce {
 
     pub fn init(&self) {
         self.close_num.store(0, Ordering::SeqCst);
-        self.tunnel_peer_close.lock().unwrap().take();
+        {
+            self.tunnel_peer_close.lock().unwrap().take();
+        }
         self.is_send_close.store(false, Ordering::SeqCst);
-        *self.session_id.lock().unwrap() = None;
+        {
+            *self.session_id.lock().unwrap() = None;
+        }
         self.peer_stream_index.store(0, Ordering::Relaxed);
         self.peer_stream_id.store(0, Ordering::Relaxed);
         self.tx_pack_id.store(0, Ordering::Relaxed);
@@ -316,13 +320,15 @@ impl PeerStream {
             .once
             .peer_stream_index
             .store(peer_stream_index, Ordering::Relaxed);
-        *self.context.once.session_id.lock().unwrap() = session_id;
+        {
+            *self.context.once.session_id.lock().unwrap() = session_id
+        };
 
         #[cfg(feature = "anydebug")]
         {
             log::info!(
                     "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} do_stream start ",
-                    self.context.once.session_id.lock().unwrap(),
+                {self.context.once.session_id.lock().unwrap()},
                     get_flag(self.context.is_client),
                     self.context.once.peer_stream_id.load(Ordering::Relaxed),
                     self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -368,33 +374,33 @@ impl PeerStream {
         }
         .await;
 
-        let mut err_num = 0;
+        let mut _err_num = 0;
         self.close(stream_to_peer_stream_rx);
         if let Err(e) = ret {
             let tx_pack_id = self.context.once.tx_pack_id.load(Ordering::SeqCst);
             let rx_pack_id = self.context.once.rx_pack_id.load(Ordering::SeqCst);
             let err = { stream_info.lock().unwrap().err.clone() };
             if err.clone() as i32 >= StreamFlowErr::WriteTimeout as i32 {
-                err_num = 1;
+                _err_num = 1;
                 peer_stream_to_peer_client_tx.close();
                 is_error.store(true, Ordering::Relaxed);
             } else {
                 if tx_pack_id > 0 || rx_pack_id > 0 {
-                    err_num = 2;
+                    _err_num = 2;
                     peer_stream_to_peer_client_tx.close();
                     is_error.store(true, Ordering::Relaxed);
                 }
             }
             #[cfg(feature = "anyerror")]
-            if err_num > 0 {
+            if _err_num > 0 {
                 log::error!(
                     "err:do_stream err_num:{} => flag:{}, session_id:{:?}, peer_stream_id:{}, peer_stream_index:{}, \
                         tx_pack_id:{}, rx_pack_id:{}, peer_stream_key.local_addr:{}, \
                         peer_stream_key.remote_addr:{} min_stream_cache_size:{}, \
                         e:{}, err:{:?}",
-                    err_num,
+                    _err_num,
                     get_flag(self.context.is_client),
-                    self.context.once.session_id.lock().unwrap(),
+                    {self.context.once.session_id.lock().unwrap()},
                     peer_stream_id,
                     peer_stream_index,
                     tx_pack_id,
@@ -410,7 +416,7 @@ impl PeerStream {
             return Err(anyhow!(
                 "err:do_stream => flag:{}, session_id:{:?}, min_stream_cache_size:{}, e:{}",
                 get_flag(self.context.is_client),
-                self.context.once.session_id.lock().unwrap(),
+                { self.context.once.session_id.lock().unwrap() },
                 min_stream_cache_size,
                 e
             ));
@@ -473,6 +479,15 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
     }
 
     async fn read_stream(&mut self) -> Result<()> {
+        #[cfg(feature = "anydebug")]
+        log::info!(
+            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read_stream",
+            {self.context.once.session_id.lock().unwrap()},
+            get_flag(self.context.is_client),
+            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+            self.context.once.peer_stream_index.load(Ordering::Relaxed),
+        );
+
         let mut slice = [0u8; protopack::TUNNEL_MAX_HEADER_SIZE];
         let buffer_pool = TunnelDynamicPool {
             #[cfg(feature = "anypool-dynamic-pool")]
@@ -500,7 +515,7 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
                     #[cfg(feature = "anydebug")]
                     log::info!(
                             "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read TunnelClose local value:{}, value:{}",
-                            self.context.once.session_id.lock().unwrap(),
+                        {self.context.once.session_id.lock().unwrap()},
                             get_flag(self.context.is_client),
                             self.context.once.peer_stream_id.load(Ordering::Relaxed),
                             self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -510,8 +525,29 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
 
                     if value.is_client != self.context.is_client {
                         {
-                            *self.context.once.tunnel_peer_close.lock().unwrap() =
-                                Some(value.clone());
+                            #[cfg(feature = "anydebug")]
+                            {
+                                if self
+                                    .context
+                                    .once
+                                    .tunnel_peer_close
+                                    .lock()
+                                    .unwrap()
+                                    .is_some()
+                                {
+                                    log::info!(
+                                            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read tunnel_peer_close is_some",
+                                            {self.context.once.session_id.lock().unwrap()},
+                                            get_flag(self.context.is_client),
+                                            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                                            self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                                        );
+                                }
+                            }
+                            {
+                                *self.context.once.tunnel_peer_close.lock().unwrap() =
+                                    Some(value.clone())
+                            };
                         }
 
                         if !self.context.once.is_send_close.load(Ordering::SeqCst) {
@@ -519,7 +555,7 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
                             {
                                 log::info!(
                                             "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read value.is_client != self.is_client",
-                                            self.context.once.session_id.lock().unwrap(),
+                                    { self.context.once.session_id.lock().unwrap()},
                                             get_flag(self.context.is_client),
                                             self.context.once.peer_stream_id.load(Ordering::Relaxed),
                                             self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -534,7 +570,7 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
                     #[cfg(feature = "anydebug")]
                     log::info!(
                             "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read value.is_client == self.is_client",
-                            self.context.once.session_id.lock().unwrap(),
+                        {self.context.once.session_id.lock().unwrap()},
                             get_flag(self.context.is_client),
                             self.context.once.peer_stream_id.load(Ordering::Relaxed),
                             self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -563,10 +599,16 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
                         }
                     }
 
-                    let _ = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    let ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    if let Err(e) = ret {
+                        log::error!("err:peer_stream_to_peer_client_tx send => e:{}", e);
+                    }
                 }
                 _ => {
-                    let _ = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    let ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    if let Err(e) = ret {
+                        log::error!("err:peer_stream_to_peer_client_tx send => e:{}", e);
+                    }
                 }
             }
         }
@@ -577,7 +619,7 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
         #[cfg(feature = "anydebug")]
         log::info!(
             "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read break",
-            self.context.once.session_id.lock().unwrap(),
+            {self.context.once.session_id.lock().unwrap()},
             get_flag(self.context.is_client),
             self.context.once.peer_stream_id.load(Ordering::Relaxed),
             self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -589,13 +631,13 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
         #[cfg(feature = "anydebug")]
         log::info!(
             "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream read wait exit",
-            self.context.once.session_id.lock().unwrap(),
+            { self.context.once.session_id.lock().unwrap()},
             get_flag(self.context.is_client),
             self.context.once.peer_stream_id.load(Ordering::Relaxed),
             self.context.once.peer_stream_index.load(Ordering::Relaxed),
         );
-        //15秒后强制退出
-        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+        //120秒后强制退出
+        tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
         return Err(anyhow!("read close timeout"));
     }
 }
@@ -636,7 +678,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
         {
             log::info!(
                         "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream TunnelHello ",
-                        self.context.once.session_id.lock().unwrap(),
+                {self.context.once.session_id.lock().unwrap()},
                         get_flag(self.context.is_client),
                         self.context.once.peer_stream_id.load(Ordering::Relaxed),
                         self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -672,7 +714,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                 #[cfg(feature = "anydebug")]
                 log::info!(
                         "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream tunnel_peer_close",
-                        self.context.once.session_id.lock().unwrap(),
+                    { self.context.once.session_id.lock().unwrap()},
                         get_flag(self.context.is_client),
                         self.context.once.peer_stream_id.load(Ordering::Relaxed),
                         self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -692,7 +734,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                 {
                     log::trace!(
                                 "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream timeout ",
-                                self.context.once.session_id.lock().unwrap(),
+                        {self.context.once.session_id.lock().unwrap()},
                                 get_flag(self.context.is_client),
                                 self.context.once.peer_stream_id.load(Ordering::Relaxed),
                                 self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -716,7 +758,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                 #[cfg(feature = "anydebug")]
                 log::info!(
                         "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write TunnelClose",
-                        self.context.once.session_id.lock().unwrap(),
+                    {self.context.once.session_id.lock().unwrap()},
                         get_flag(self.context.is_client),
                         self.context.once.peer_stream_id.load(Ordering::Relaxed),
                         self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -812,7 +854,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
         {
             log::info!(
                 "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream ",
-                self.context.once.session_id.lock().unwrap(),
+                { self.context.once.session_id.lock().unwrap() },
                 get_flag(self.context.is_client),
                 self.context.once.peer_stream_id.load(Ordering::Relaxed),
                 self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -824,20 +866,21 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
         #[cfg(feature = "anydebug")]
         log::info!(
                 "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write start exit",
-                self.context.once.session_id.lock().unwrap(),
+                {self.context.once.session_id.lock().unwrap()},
                 get_flag(self.context.is_client),
                 self.context.once.peer_stream_id.load(Ordering::Relaxed),
                 self.context.once.peer_stream_index.load(Ordering::Relaxed),
             );
 
         self.context.once.close_num.fetch_add(1, Ordering::SeqCst);
+        let mut wait_num = 0;
         loop {
             let tunnel_peer_close = { self.context.once.tunnel_peer_close.lock().unwrap().take() };
             if tunnel_peer_close.is_some() {
                 #[cfg(feature = "anydebug")]
                 log::info!(
                         "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write TunnelClose take from read",
-                        self.context.once.session_id.lock().unwrap(),
+                    {self.context.once.session_id.lock().unwrap()},
                         get_flag(self.context.is_client),
                         self.context.once.peer_stream_id.load(Ordering::Relaxed),
                         self.context.once.peer_stream_index.load(Ordering::Relaxed),
@@ -860,18 +903,22 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
             #[cfg(feature = "anydebug")]
             log::info!(
                     "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write sleep",
-                    self.context.once.session_id.lock().unwrap(),
+                {self.context.once.session_id.lock().unwrap()},
                     get_flag(self.context.is_client),
                     self.context.once.peer_stream_id.load(Ordering::Relaxed),
                     self.context.once.peer_stream_index.load(Ordering::Relaxed),
                 );
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            wait_num += 1;
+            if wait_num > 400 {
+                return Err(anyhow!("err:peer_stream write wait stop"));
+            }
         }
 
         #[cfg(feature = "anydebug")]
         log::info!(
                 "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} peer_stream write end exit",
-                self.context.once.session_id.lock().unwrap(),
+                {self.context.once.session_id.lock().unwrap()},
                 get_flag(self.context.is_client),
                 self.context.once.peer_stream_id.load(Ordering::Relaxed),
                 self.context.once.peer_stream_index.load(Ordering::Relaxed),

@@ -189,7 +189,7 @@ impl UpstreamConfig {
                     }
                 };
                 let mut addrs =
-                    util::util::lookup_hosts(tokio::time::Duration::from_secs(10), &address)
+                    util::util::lookup_hosts(tokio::time::Duration::from_secs(30), &address)
                         .await
                         .map_err(|e| anyhow!("err:lookup_host => address:{} e:{}", address, e))?;
                 addrs.sort_by(|a, b| a.partial_cmp(b).unwrap());

@@ -192,9 +192,9 @@ impl proxy::Stream for PortStream {
             }
         };
 
+        stream_info.borrow_mut().request_id = hello.request_id.clone();
         {
-            stream_info.borrow_mut().request_id = hello.request_id.clone();
-            *stream_info.borrow().protocol_hello.lock().unwrap() = Some(hello);
+            *stream_info.borrow().protocol_hello.lock().unwrap() = Some(Arc::new(hello));
         }
 
         log::debug!(

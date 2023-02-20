@@ -51,8 +51,10 @@ impl SendFile {
 
                     if c_err == libc::EINPROGRESS {
                         if self.info.is_some() {
-                            self.info.as_ref().unwrap().lock().unwrap().err =
-                                StreamFlowErr::WriteClose;
+                            {
+                                self.info.as_ref().unwrap().lock().unwrap().err =
+                                    StreamFlowErr::WriteClose;
+                            }
                         }
                         stream_err = StreamFlowErr::Init;
                         kind = io::ErrorKind::WouldBlock;
@@ -85,7 +87,9 @@ impl SendFile {
         match ret {
             Err(e) => {
                 if self.info.is_some() && stream_err != StreamFlowErr::Init {
-                    self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
+                    {
+                        self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
+                    }
                 }
                 //log::error!("write kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
@@ -93,7 +97,9 @@ impl SendFile {
             Ok(size) => {
                 log::trace!("sendfile write size:{:?}", size);
                 if self.info.is_some() {
-                    self.info.as_ref().unwrap().lock().unwrap().write += size as i64;
+                    {
+                        self.info.as_ref().unwrap().lock().unwrap().write += size as i64;
+                    }
                 }
                 Ok(size)
             }

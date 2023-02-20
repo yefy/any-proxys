@@ -184,7 +184,7 @@ impl PeerClient {
             log::info!("del PEER_CLIENT_NUM:{}", num);
             log::info!(
                 "session_id:{:?}, flag:{}, peer_stream_index:{}, peer_client close",
-                self.context.session_id.lock().unwrap(),
+                { self.context.session_id.lock().unwrap() },
                 get_flag(self.context.is_client),
                 self.peer_stream_index.load(Ordering::Relaxed),
             );
@@ -231,7 +231,7 @@ impl PeerClient {
                 stream_tx_pack_id:{}, stream_rx_pack_id:{}, \
            peer_stream_tx_pack_id:{}, peer_stream_rx_pack_id:{}, \
             peer_client_order_pack_id:{},  peer_client_max_pack_id:{}",
-                    self.context.session_id.lock().unwrap().as_ref().unwrap(),
+                    { self.context.session_id.lock().unwrap().as_ref().unwrap() },
                     get_flag(self.context.is_client),
                     stream_tx_pack_id,
                     stream_rx_pack_id,
@@ -344,7 +344,8 @@ impl PeerClient {
 
             if self.context.peer_stream_connect.is_none() {
                 if !self.context.is_peer_stream_max.load(Ordering::Relaxed) {
-                    if self.context.round_async_channel.lock().unwrap().is_close() {
+                    let is_close = { self.context.round_async_channel.lock().unwrap().is_close() };
+                    if is_close {
                         continue;
                     }
                     //TunnelAddConnect
@@ -357,14 +358,16 @@ impl PeerClient {
                         )
                     };
 
-                    //这里不加锁，队列永远都是full的， 不知道哪里有问题
-                    let mut lock = lock.lock().await;
-                    let _ = sender
-                        .send(TunnelPack::TunnelAddConnect(TunnelAddConnect {
-                            peer_stream_size: 0,
-                        }))
-                        .await;
-                    *lock = true;
+                    {
+                        //这里不加锁，队列永远都是full的， 不知道哪里有问题
+                        let mut lock = lock.lock().await;
+                        let _ = sender
+                            .send(TunnelPack::TunnelAddConnect(TunnelAddConnect {
+                                peer_stream_size: 0,
+                            }))
+                            .await;
+                        *lock = true;
+                    }
                 }
                 continue;
             }
@@ -374,7 +377,8 @@ impl PeerClient {
             if self.context.peer_stream_size() >= peer_max_stream_size {
                 continue;
             }
-            if self.context.round_async_channel.lock().unwrap().is_close() {
+            let is_close = { self.context.round_async_channel.lock().unwrap().is_close() };
+            if is_close {
                 continue;
             }
 
@@ -801,7 +805,7 @@ impl PeerClientToStream {
                 use crate::get_flag;
                 log::info!(
                     "session_id:{}, flag:{} is_close = true, write all pack id",
-                    self.context.session_id.lock().unwrap().as_ref().unwrap(),
+                    { self.context.session_id.lock().unwrap().as_ref().unwrap() },
                     get_flag(self.context.is_client),
                 )
             }

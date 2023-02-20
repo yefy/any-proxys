@@ -139,14 +139,15 @@ impl Future for WaitGroupFuture<'_> {
         if count < 0 {
             return Poll::Ready(Err(anyhow!("err:count < 0 => count:{}", count)));
         }
-
-        let error = &mut *self.inner.error.lock().unwrap();
-        if error.is_some() {
-            return Poll::Ready(Err(anyhow!(
-                "err:error => count:{}, err:{}",
-                count,
-                error.take().unwrap()
-            )));
+        {
+            let error = &mut *self.inner.error.lock().unwrap();
+            if error.is_some() {
+                return Poll::Ready(Err(anyhow!(
+                    "err:error => count:{}, err:{}",
+                    count,
+                    error.take().unwrap()
+                )));
+            }
         }
 
         match count {
@@ -156,7 +157,9 @@ impl Future for WaitGroupFuture<'_> {
             }
             _ => {
                 let waker = cx.waker().clone();
-                *self.inner.waker.lock().unwrap() = Some(waker);
+                {
+                    *self.inner.waker.lock().unwrap() = Some(waker)
+                };
                 Poll::Pending
             }
         }
@@ -179,20 +182,23 @@ impl Future for WaitGroupErrorFuture<'_> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker = cx.waker().clone();
-        *self.inner.waker.lock().unwrap() = Some(waker);
+        {
+            *self.inner.waker.lock().unwrap() = Some(waker);
+        }
 
         let count = self.inner.count.load(Ordering::Relaxed);
         if count < 0 {
             return Poll::Ready(Err(anyhow!("err:count < 0 => count:{}", count)));
         }
-
-        let error = &mut *self.inner.error.lock().unwrap();
-        if error.is_some() {
-            return Poll::Ready(Err(anyhow!(
-                "err:error => count:{}, err:{}",
-                count,
-                error.take().unwrap()
-            )));
+        {
+            let error = &mut *self.inner.error.lock().unwrap();
+            if error.is_some() {
+                return Poll::Ready(Err(anyhow!(
+                    "err:error => count:{}, err:{}",
+                    count,
+                    error.take().unwrap()
+                )));
+            }
         }
 
         if count == self.count as i32 {
@@ -243,7 +249,7 @@ impl Worker {
         }
 
         self.inner.count.fetch_add(1, Ordering::Relaxed);
-        if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+        if let Some(waker) = { self.inner.waker.lock().unwrap().take() } {
             waker.wake();
         }
         WorkerInner {
@@ -256,8 +262,10 @@ impl Worker {
     }
 
     pub fn error(&self, err: anyhow::Error) {
-        *self.inner.error.lock().unwrap() = Some(err);
-        if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+        {
+            *self.inner.error.lock().unwrap() = Some(err);
+        }
+        if let Some(waker) = { self.inner.waker.lock().unwrap().take() } {
             waker.wake();
         }
     }
@@ -289,15 +297,17 @@ impl WorkerInner {
         }
         // We are the last worker
         if count == 1 {
-            if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+            if let Some(waker) = { self.inner.waker.lock().unwrap().take() } {
                 waker.wake();
             }
         }
     }
 
     pub fn error(&self, err: anyhow::Error) {
-        *self.inner.error.lock().unwrap() = Some(err);
-        if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+        {
+            *self.inner.error.lock().unwrap() = Some(err);
+        }
+        if let Some(waker) = { self.inner.waker.lock().unwrap().take() } {
             waker.wake();
         }
     }
