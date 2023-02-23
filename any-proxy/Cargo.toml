@@ -17,7 +17,7 @@ path = "examples/single_threaded.rs"
 #run --no-default-features --features "anyproxy-rustls anyproxy-ebpf"
 [features]
 #default = ["anyproxy-openssl"]
-default = ["anydebug-error", "anyproxy-rustls"]
+default = ["anyproxy-rustls"]
 #使用openssl加密
 anyproxy-openssl = ["openssl-sys", "openssl", "tokio-openssl"]
 #使用rustls加密
@@ -64,8 +64,8 @@ incremental = false
 any-base = {path = "../any-base"}
 anyhow = {path = "../anyhow"}
 awaitgroup = {path = "../awaitgroup"}
-any-tunnel = {path = "../any-tunnel", features = ["anydebug-error", "anypool-dynamic-pool", "anyruntime-tokio-spawn-local"], default-features = false}
-any-tunnel2 = {path = "../any-tunnel2", features = ["anydebug-error", "anyack", "anyruntime-tokio-spawn-local"], default-features = false}
+any-tunnel = {path = "../any-tunnel", features = ["anypool-dynamic-pool", "anyruntime-tokio-spawn-local"], default-features = false}
+any-tunnel2 = {path = "../any-tunnel2", features = ["anyack", "anyruntime-tokio-spawn-local"], default-features = false}
 async_executors = {path = "../async_executors", features = ["tokio_ct", "tokio_io", "tokio_timer"], default-features = false}
 #quinn = {path = "../quinn-0.8.5"}
 quinn = "0.9.3"

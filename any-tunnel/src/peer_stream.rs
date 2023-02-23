@@ -599,14 +599,16 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
                         }
                     }
 
-                    let ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
-                    if let Err(e) = ret {
+                    let _ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    #[cfg(feature = "anyerror")]
+                    if let Err(e) = _ret {
                         log::error!("err:peer_stream_to_peer_client_tx send => e:{}", e);
                     }
                 }
                 _ => {
-                    let ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
-                    if let Err(e) = ret {
+                    let _ret = self.peer_stream_to_peer_client_tx.tx.send(pack).await;
+                    #[cfg(feature = "anyerror")]
+                    if let Err(e) = _ret {
                         log::error!("err:peer_stream_to_peer_client_tx send => e:{}", e);
                     }
                 }
