@@ -116,52 +116,58 @@ impl PortServer {
         let tmp_file_id = self.tmp_file_id.clone();
         let port_config_listen_map = self.port_config_listen_map.clone();
         let listen_shutdown_tx = self.listen_shutdown_tx.clone();
-        executor_local_spawn._start(move |executors| async move {
-            server::listen(
-                executors,
-                shutdown_timeout,
-                listen_shutdown_tx,
-                listen_server,
-                listen,
-                move |stream, server_stream_info, executors| async move {
-                    let port_config_listen = {
-                        let port_config_listen_map_borrow = port_config_listen_map.borrow_mut();
-                        let port_listen = port_config_listen_map_borrow.get(&key);
-                        if port_listen.is_none() {
-                            log::error!(
+        executor_local_spawn._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |executors| async move {
+                server::listen(
+                    #[cfg(feature = "anyspawn-count")]
+                    format!("{}:{}", file!(), line!()),
+                    executors,
+                    shutdown_timeout,
+                    listen_shutdown_tx,
+                    listen_server,
+                    listen,
+                    move |stream, server_stream_info, executors| async move {
+                        let port_config_listen = {
+                            let port_config_listen_map_borrow = port_config_listen_map.borrow_mut();
+                            let port_listen = port_config_listen_map_borrow.get(&key);
+                            if port_listen.is_none() {
+                                log::error!(
                                 "err:port_config_listen_map => key:{} invalid, group_version:{}",
                                 key,
                                 executors.group_version
                             );
-                            return Ok(());
-                        }
-                        let port_listen = port_listen.unwrap();
-                        let port_config_listen = port_listen.port_config_listen.clone();
-                        port_config_listen
-                    };
+                                return Ok(());
+                            }
+                            let port_listen = port_listen.unwrap();
+                            let port_config_listen = port_listen.port_config_listen.clone();
+                            port_config_listen
+                        };
 
-                    let port_stream = port_stream::PortStream::new(
-                        executors,
-                        server_stream_info,
-                        tunnel_publish,
-                        tunnel2_publish,
-                        port_config_listen,
-                        tmp_file_id,
-                        #[cfg(feature = "anyproxy-ebpf")]
-                        ebpf_add_sock_hash,
-                        session_id,
-                    )
-                    .map_err(|e| anyhow!("err:PortStream::new => e:{}", e))?;
-                    port_stream
-                        .start(stream)
-                        .await
-                        .map_err(|e| anyhow!("err:port_stream.start => e:{}", e))?;
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|e| anyhow!("err:server::listen => e:{}", e))
-        });
+                        let port_stream = port_stream::PortStream::new(
+                            executors,
+                            server_stream_info,
+                            tunnel_publish,
+                            tunnel2_publish,
+                            port_config_listen,
+                            tmp_file_id,
+                            #[cfg(feature = "anyproxy-ebpf")]
+                            ebpf_add_sock_hash,
+                            session_id,
+                        )
+                        .map_err(|e| anyhow!("err:PortStream::new => e:{}", e))?;
+                        port_stream
+                            .start(stream)
+                            .await
+                            .map_err(|e| anyhow!("err:port_stream.start => e:{}", e))?;
+                        Ok(())
+                    },
+                )
+                .await
+                .map_err(|e| anyhow!("err:server::listen => e:{}", e))
+            },
+        );
         Ok(())
     }
 }

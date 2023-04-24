@@ -1,8 +1,11 @@
+pub mod access_log;
 pub mod domain;
 pub mod domain_config;
+pub mod domain_context;
 pub mod domain_server;
 pub mod domain_stream;
 pub mod heartbeat_stream;
+pub mod http_proxy;
 pub mod port;
 pub mod port_config;
 pub mod port_server;
@@ -12,13 +15,23 @@ pub mod sendfile;
 pub mod stream_info;
 pub mod stream_start;
 pub mod stream_stream;
+pub mod stream_stream_cache_or_file;
+pub mod stream_stream_memory;
 pub mod stream_var;
 pub mod tunnel_stream;
+pub mod util;
+pub mod websocket_proxy;
 
 use crate::config::config_toml;
+use crate::config::config_toml::{ServerConfig, ServerConfigType};
+use crate::proxy::http_proxy::http_context::HttpContext;
+use crate::proxy::stream_info::StreamInfo;
+use crate::stream::server::ServerStreamInfo;
 use crate::upstream::UpstreamData;
 use crate::util::default_config;
+use any_base::executor_local_spawn::ExecutorsLocal;
 use dynamic_pool::{DynamicPoolItem, DynamicReset};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -38,6 +51,16 @@ pub struct StreamConfigContext {
     pub is_proxy_protocol_hello: Option<bool>,
     pub ups_data: Arc<Mutex<UpstreamData>>,
     pub stream_var: Rc<stream_var::StreamVar>,
+    pub server: Option<ServerConfig>,
+}
+
+impl StreamConfigContext {
+    pub fn server_type(&self) -> ServerConfigType {
+        if self.server.is_none() {
+            return ServerConfigType::Nil;
+        }
+        self.server.as_ref().unwrap().server_type()
+    }
 }
 
 pub enum StreamCache {
@@ -51,7 +74,7 @@ pub struct StreamCacheFile {
 }
 
 pub struct StreamCacheBuffer {
-    pub datas: Vec<u8>,
+    data: Vec<u8>,
     pub start: u64,
     pub size: u64,
     pub is_cache: bool,
@@ -59,6 +82,7 @@ pub struct StreamCacheBuffer {
     pub file_fd: i32,
     pub read_size: u64,
     pub min_size: usize,
+    msg: Option<Vec<u8>>,
 }
 
 impl Default for StreamCacheBuffer {
@@ -77,7 +101,7 @@ impl StreamCacheBuffer {
     fn new() -> Self {
         let min_size = StreamCacheBuffer::min_size();
         StreamCacheBuffer {
-            datas: Vec::with_capacity(min_size),
+            data: Vec::with_capacity(min_size),
             start: 0,
             size: 0,
             is_cache: false,
@@ -85,7 +109,26 @@ impl StreamCacheBuffer {
             file_fd: 0,
             read_size: 0,
             min_size,
+            msg: None,
         }
+    }
+
+    pub fn data_raw(&mut self) -> &mut Vec<u8> {
+        return &mut self.data;
+    }
+
+    pub fn data(&mut self, start: usize, end: usize) -> &mut [u8] {
+        if self.msg.is_some() {
+            return &mut self.msg.as_mut().unwrap()[start..end];
+        }
+        return &mut self.data.as_mut_slice()[start..end];
+    }
+
+    pub fn msg(&mut self, start: usize, end: usize) -> Vec<u8> {
+        if self.msg.is_some() {
+            return self.msg.take().unwrap();
+        }
+        return self.data.as_slice()[start..end].to_vec();
     }
 
     pub fn min_size() -> usize {
@@ -93,7 +136,7 @@ impl StreamCacheBuffer {
     }
 
     pub fn reset(&mut self) {
-        unsafe { self.datas.set_len(0) };
+        unsafe { self.data.set_len(0) };
         self.start = 0;
         self.size = 0;
         self.is_cache = false;
@@ -101,6 +144,7 @@ impl StreamCacheBuffer {
         self.file_fd = 0;
         self.read_size = 0;
         //self.min_size
+        self.msg = None;
     }
 
     fn resize(&mut self, data_size: Option<usize>) {
@@ -110,21 +154,21 @@ impl StreamCacheBuffer {
             data_size.unwrap()
         };
 
-        if self.datas.len() < data_size {
-            self.datas.resize(data_size, 0);
+        if self.data.len() < data_size {
+            self.data.resize(data_size, 0);
         } else {
-            unsafe { self.datas.set_len(data_size) };
+            unsafe { self.data.set_len(data_size) };
         }
         self.size = data_size as u64;
     }
 }
 
 pub struct StreamStreamContext {
-    pub stream_cache_size: u64,
-    pub tmp_file_size: u64,
-    pub limit_rate_after: u64,
+    pub stream_cache_size: i64,
+    pub tmp_file_size: i64,
+    pub limit_rate_after: i64,
     pub max_limit_rate: u64,
-    pub curr_limit_rate: Arc<AtomicU64>,
+    pub curr_limit_rate: Arc<AtomicI64>,
     pub max_stream_cache_size: u64,
     pub max_tmp_file_size: u64,
     pub is_tmp_file_io_page: bool,
@@ -142,7 +186,7 @@ pub struct StreamLimit {
     pub tmp_file_size: u64,
     pub limit_rate_after: u64,
     pub max_limit_rate: u64,
-    pub curr_limit_rate: Arc<AtomicU64>,
+    pub curr_limit_rate: Arc<AtomicI64>,
 }
 impl StreamLimit {
     pub fn new(tmp_file_size: u64, limit_rate_after: u64, limit_rate: u64) -> StreamLimit {
@@ -150,7 +194,7 @@ impl StreamLimit {
             tmp_file_size,
             limit_rate_after,
             max_limit_rate: limit_rate,
-            curr_limit_rate: Arc::new(AtomicU64::new(limit_rate)),
+            curr_limit_rate: Arc::new(AtomicI64::new(limit_rate as i64)),
         }
     }
 }
@@ -174,4 +218,15 @@ impl StreamTimeout {
             ups_write_timeout_millis: Arc::new(AtomicI64::new(0)),
         }
     }
+}
+
+#[derive(Clone)]
+pub struct ServerArg {
+    executors: ExecutorsLocal,
+    stream_info: Rc<RefCell<StreamInfo>>,
+    domain_config_listen: Rc<domain_config::DomainConfigListen>,
+    server_stream_info: Arc<ServerStreamInfo>,
+    session_id: Arc<AtomicU64>,
+    http_context: Rc<HttpContext>,
+    tmp_file_id: Rc<RefCell<u64>>,
 }

@@ -63,6 +63,7 @@ impl TunnelStream {
                             Box::new(w),
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
+                            server_stream_info.domain.clone(),
                         ) => {
                             ret.map_err(|e| anyhow!("err:self.tunnel_publish.push_peer_stream => e:{}", e))?;
                             return Ok(());

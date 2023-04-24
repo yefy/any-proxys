@@ -7,6 +7,7 @@ use super::round_async_channel::RoundAsyncChannel;
 use crate::get_flag;
 use crate::protopack::DynamicPoolTunnelData;
 use crate::PeerClientToStreamReceiver;
+use any_base::io::async_write_msg::AsyncWriteBuf;
 use awaitgroup::WorkerInner;
 #[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
@@ -45,6 +46,22 @@ impl StreamBuf {
         let pos = self.pos;
         self.pos = end;
         &self.tunnel_data.datas.as_slice()[pos..end]
+    }
+
+    #[inline]
+    fn take(self) -> Option<Vec<u8>> {
+        let StreamBuf { tunnel_data, pos } = self;
+        let tunnel_data = tunnel_data.detach();
+        let TunnelData { header: _, datas } = tunnel_data;
+        if pos <= 0 {
+            return Some(datas);
+        }
+
+        if pos >= datas.len() {
+            return None;
+        }
+
+        Some(datas[pos..].to_vec())
     }
 }
 
@@ -185,11 +202,133 @@ impl Stream {
             false
         }
     }
+
+    fn read_buf_take(&mut self) -> Option<Vec<u8>> {
+        if self.stream_rx_buf.is_some() {
+            let cache_buf = self.stream_rx_buf.take().unwrap();
+            cache_buf.take()
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for Stream {
     fn drop(&mut self) {
         self.close()
+    }
+}
+
+impl any_base::io::async_stream::AsyncStream for Stream {
+    fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
+    }
+}
+
+impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_read_msg(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+        if self.is_read_close() {
+            //log::error!("err:is_read_close");
+            return Poll::Ready(Ok(Vec::new()));
+        }
+
+        log::trace!("skip waning is_client:{}", self.is_client);
+        let datas = self.read_buf_take();
+        if datas.is_some() {
+            return Poll::Ready(Ok(datas.unwrap()));
+        }
+
+        let mut stream_rx_future = if self.stream_rx_future.is_some() {
+            self.stream_rx_future.take().unwrap()
+        } else {
+            let stream_rx = self.stream_rx.clone().unwrap();
+            Box::pin(async move { stream_rx.recv().await })
+        };
+
+        let ret = stream_rx_future.as_mut().poll(_cx);
+        match ret {
+            Poll::Ready(Err(_)) => {
+                self.close();
+                return Poll::Ready(Ok(Vec::new()));
+            }
+            Poll::Ready(Ok(tunnel_data)) => {
+                self.stream_rx_pack_id
+                    .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
+
+                let datas = self.read_buf_take();
+                return Poll::Ready(Ok(datas.unwrap()));
+            }
+            Poll::Pending => {
+                //Pending的时候保存起来
+                self.stream_rx_future = Some(stream_rx_future);
+                return Poll::Pending;
+            }
+        }
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
+    }
+}
+
+impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
+    fn poll_write_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        if self.is_write_close() {
+            //log::error!("err:is_write_close");
+            return Poll::Ready(Ok(0));
+        }
+
+        let mut stream_tx_future = if self.stream_tx_future.is_some() {
+            self.stream_tx_future.take().unwrap()
+        } else {
+            self.stream_tx_data_size = buf.len();
+
+            let stream_tx_pack_id = self.add_write_pack_id();
+
+            let mut tunnel_data = self.stream_tx_buffer_pool.take();
+
+            let _ = core::mem::replace(&mut tunnel_data.datas, buf.data());
+            tunnel_data.header.pack_id = stream_tx_pack_id;
+            tunnel_data.header.pack_size = tunnel_data.datas.len() as u32;
+            log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
+
+            let (sender, lock) = {
+                let stream_tx = self.stream_tx.as_ref().unwrap().lock().unwrap();
+
+                (stream_tx.round_sender_clone(), stream_tx.get_lock())
+            };
+
+            Box::pin(async move {
+                let mut lock = lock.lock().await;
+                let ret = sender.send(TunnelPack::TunnelData(tunnel_data)).await;
+                *lock = true;
+                ret
+            })
+        };
+
+        let ret = stream_tx_future.as_mut().poll(_cx);
+        match ret {
+            Poll::Ready(Err(_)) => {
+                self.close();
+                return Poll::Ready(Ok(0));
+            }
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(self.stream_tx_data_size)),
+            Poll::Pending => {
+                //Pending的时候保存起来
+                self.stream_tx_future = Some(stream_tx_future);
+                return Poll::Pending;
+            }
+        }
+    }
+
+    fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
     }
 }
 

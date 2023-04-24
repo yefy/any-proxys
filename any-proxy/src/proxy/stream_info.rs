@@ -4,7 +4,7 @@ use crate::protopack::anyproxy::AnyproxyHello;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
-use std::cell::RefCell;
+use crate::Protocol77;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -53,6 +53,7 @@ pub trait ErrStatus200 {
     fn read_timeout(&self) -> String;
     fn write_err(&self) -> String;
     fn read_err(&self) -> String;
+    fn is_ups_err(&self) -> bool;
 }
 
 pub struct ErrStatusClient {}
@@ -81,6 +82,9 @@ impl ErrStatus200 for ErrStatusClient {
     }
     fn read_err(&self) -> String {
         CLI_READ_ERR.to_string()
+    }
+    fn is_ups_err(&self) -> bool {
+        false
     }
 }
 
@@ -111,6 +115,9 @@ impl ErrStatus200 for ErrStatusUpstream {
     fn read_err(&self) -> String {
         UPS_READ_ERR.to_string()
     }
+    fn is_ups_err(&self) -> bool {
+        true
+    }
 }
 
 pub struct StreamInfo {
@@ -126,7 +133,7 @@ pub struct StreamInfo {
     pub err_status: ErrStatus,
     pub err_status_str: Option<String>,
     pub client_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
-    pub upstream_connect_flow_info: Rc<RefCell<StreamFlowInfo>>,
+    pub upstream_connect_flow_info: std::sync::Arc<tokio::sync::Mutex<StreamFlowInfo>>,
     pub upstream_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
     pub stream_work_times: Vec<(String, f32)>,
     pub stream_work_time: Option<Instant>,
@@ -137,13 +144,16 @@ pub struct StreamInfo {
     pub stream_config_context: Option<Rc<StreamConfigContext>>,
     pub is_discard_timeout: bool,
     pub buffer_cache: Option<String>,
-    pub upstream_connect_info: Option<ConnectInfo>,
+    pub upstream_connect_info: Option<Rc<ConnectInfo>>,
     pub debug_is_open_stream_work_times: bool,
     pub is_break_stream_write: bool,
     pub close_num: usize,
     pub write_max_block_time_ms: u128,
     pub client_protocol_hello_size: usize,
     pub is_timeout_exit: bool,
+    pub total_read_size: u64,
+    pub total_write_size: u64,
+    pub protocol77: Option<Protocol77>,
 }
 
 impl StreamInfo {
@@ -166,7 +176,9 @@ impl StreamInfo {
             client_stream_flow_info: std::sync::Arc::new(std::sync::Mutex::new(
                 StreamFlowInfo::new(),
             )),
-            upstream_connect_flow_info: Rc::new(RefCell::new(StreamFlowInfo::new())),
+            upstream_connect_flow_info: std::sync::Arc::new(tokio::sync::Mutex::new(
+                StreamFlowInfo::new(),
+            )),
             upstream_stream_flow_info: std::sync::Arc::new(std::sync::Mutex::new(
                 StreamFlowInfo::new(),
             )),
@@ -186,6 +198,9 @@ impl StreamInfo {
             write_max_block_time_ms: 0,
             client_protocol_hello_size: 0,
             is_timeout_exit: false,
+            total_read_size: 0,
+            total_write_size: 0,
+            protocol77: None,
         }
     }
 

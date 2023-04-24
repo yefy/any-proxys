@@ -7,7 +7,7 @@ edition = "2021"
 
 
 [features]
-default = ["anypool-dynamic-pool", "anyruntime-tokio-spawn-local"]
+default = ["anypool-dynamic-pool", "anyruntime-tokio-spawn"]
 anydebug-error = ["anydebug", "anyerror"]
 anydebug = []
 anyerror = []

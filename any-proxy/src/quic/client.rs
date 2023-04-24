@@ -1,3 +1,4 @@
+use crate::quic::stream::Stream;
 use crate::stream::client;
 use crate::stream::stream_flow;
 use crate::Protocol7;
@@ -156,6 +157,8 @@ impl client::Connection for Connection {
                 Err(e)
             }
             Ok((w, r)) => {
+                let stream = Stream::new(r, w);
+                let (r, w) = any_base::io::split::split(stream);
                 let stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }

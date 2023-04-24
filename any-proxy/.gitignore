@@ -1,5 +1,9 @@
 # IntelliJ project files
 .idea/*
+test
+test/*
+ab.exe
+ab.log
 
 # visual studio code files
 .vscode

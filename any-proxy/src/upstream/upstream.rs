@@ -60,8 +60,10 @@ impl Upstream {
 
         for (_, ups_data) in self.upstream_data_map.iter() {
             let ups_data = ups_data.clone();
-            self.executor_local_spawn
-                ._start(move |executors| async move {
+            self.executor_local_spawn._start(
+                #[cfg(feature = "anyspawn-count")]
+                format!("{}:{}", file!(), line!()),
+                move |executors| async move {
                     let server = UpstreamServer::new(executors, ups_data)
                         .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
                     server
@@ -69,7 +71,8 @@ impl Upstream {
                         .await
                         .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
                     Ok(())
-                });
+                },
+            );
         }
         Ok(())
     }
@@ -105,7 +108,10 @@ impl Upstream {
         shutdown_timeout: u64,
         ups_version: i32,
     ) -> Result<()> {
-        log::info!("upstream stop version:{}", ups_version);
+        scopeguard::defer! {
+            log::info!("end upstream stop version:{}", ups_version);
+        }
+        log::info!("start upstream stop version:{}", ups_version);
         self.executor_local_spawn
             .stop(flag, is_fast_shutdown, shutdown_timeout)
             .await;

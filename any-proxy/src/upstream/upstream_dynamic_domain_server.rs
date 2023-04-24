@@ -19,16 +19,20 @@ impl UpstreamDynamicDomainServer {
         ups_data: Arc<Mutex<UpstreamData>>,
         index: usize,
     ) {
-        executors._start(move |executors| async move {
-            let dynamic_domain_server =
-                UpstreamDynamicDomainServer::new(executors, ups_data, index)
-                    .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
-            dynamic_domain_server
-                .start()
-                .await
-                .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
-            Ok(())
-        });
+        executors._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |executors| async move {
+                let dynamic_domain_server =
+                    UpstreamDynamicDomainServer::new(executors, ups_data, index)
+                        .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
+                dynamic_domain_server
+                    .start()
+                    .await
+                    .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
+                Ok(())
+            },
+        );
     }
     pub fn new(
         executors: ExecutorsLocal,

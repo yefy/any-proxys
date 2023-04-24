@@ -2,6 +2,7 @@ use super::util;
 use crate::config::config_toml::TcpConfig as Config;
 use crate::stream::client;
 use crate::stream::stream_flow;
+use crate::tcp::stream::Stream;
 use crate::Protocol7;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -127,7 +128,8 @@ impl client::Connection for Connection {
                 let fd = tcp_stream.as_raw_fd();
                 #[cfg(not(unix))]
                 let fd = 0;
-                let (r, w) = tokio::io::split(tcp_stream);
+                let stream = Stream::new(tcp_stream);
+                let (r, w) = any_base::io::split::split(stream);
                 let stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
                 Ok((Protocol7::Tcp, stream, local_addr, remote_addr))
             }

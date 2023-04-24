@@ -95,7 +95,7 @@ impl Client {
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
         let connect_addr = peer_stream_connect
-            .connect_addr()
+            .addr()
             .await
             .map_err(|e| anyhow!("err:peer_stream_connect.connect_addr => e:{}", e))?;
         let proto = peer_stream_connect.protocol4().await;

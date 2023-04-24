@@ -290,6 +290,19 @@ impl Config {
         // 支持配置二级include
         let contents = Config::parse_include(&contents)
             .map_err(|e| anyhow!("err:Config::parse_include => e:{}", e))?;
+        // 支持配置三级include
+        let contents = Config::parse_include(&contents)
+            .map_err(|e| anyhow!("err:Config::parse_include => e:{}", e))?;
+
+        // 最终生成的原始配置文件
+        fs::write(
+            default_config::ANYPROXY_CONF_LOG_RAW_PATH
+                .lock()
+                .unwrap()
+                .as_str(),
+            contents.as_str(),
+        )
+        .map_err(|e| anyhow!("err:ANYPROXY_CONF_LOG_RAW_PATH => e:{}", e))?;
 
         // 配置解析成toml格式，提供给toml解析
         let contents = Config::parse(&contents, &config_parse::CONFIG_VARS)

@@ -1,26 +1,26 @@
+use super::access_log::AccessLog;
 use super::proxy;
-use super::stream_info;
 use super::stream_var;
 use super::StreamConfigContext;
 use crate::config::config_toml;
-use crate::config::config_toml::DomainListen;
 use crate::config::config_toml::Listen;
 use crate::config::config_toml::SSL;
+use crate::config::config_toml::{DomainListen, DomainListenType, ServerConfigType};
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
+use crate::quic;
 use crate::quic::server as quic_server;
-use crate::stream::server::{Server, ServerStreamInfo};
+use crate::ssl::server as ssl_server;
+use crate::stream::server::Server;
 use crate::tcp::server as tcp_server;
 use crate::upstream::upstream;
 use crate::util;
 use crate::TunnelClients;
-use crate::{quic, Protocol7};
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::rc::Rc;
 #[cfg(feature = "anyproxy-ebpf")]
 use std::sync::Arc;
@@ -36,12 +36,13 @@ pub struct DomainConfigListen {
     pub listen_server: Rc<Box<dyn Server>>,
     pub domain_config_context_map: HashMap<i32, Rc<DomainConfigContext>>,
     pub domain_index: Rc<util::domain_index::DomainIndex>,
-    quic_sni: Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>>,
+    pub sni: Option<util::Sni>,
+    pub server_type: ServerConfigType,
 }
 
 #[derive(Clone)]
 pub struct DomainConfigListenMerge {
-    pub key_type: DomainConfigKeyType,
+    pub listen_type: DomainListenType,
     pub common: Option<config_toml::CommonConfig>,
     pub stream: Option<config_toml::StreamConfig>,
     pub tcp_config: Option<config_toml::TcpConfig>,
@@ -49,13 +50,7 @@ pub struct DomainConfigListenMerge {
     pub listen_addr: Option<SocketAddr>,
     pub listens: Vec<Listen>,
     pub domain_config_contexts: Vec<Rc<DomainConfigContext>>,
-}
-
-#[derive(Clone)]
-pub enum DomainConfigKeyType {
-    Tcp = 0,
-    Udp = 1,
-    Quic = 2,
+    pub server_type: ServerConfigType,
 }
 
 pub struct DomainConfig {}
@@ -63,15 +58,6 @@ pub struct DomainConfig {}
 impl DomainConfig {
     pub fn new() -> Result<DomainConfig> {
         Ok(DomainConfig {})
-    }
-    pub fn tcp_key_from_addr(addr: &str) -> Result<String> {
-        Ok("tcp".to_string() + &util::util::addr(addr)?.port().to_string())
-    }
-    pub fn udp_key_from_addr(addr: &str) -> Result<String> {
-        Ok("udp".to_string() + &util::util::addr(addr)?.port().to_string())
-    }
-    pub fn quic_key_from_addr(addr: &str) -> Result<String> {
-        Ok("quic".to_string() + &util::util::addr(addr)?.port().to_string())
     }
 
     pub async fn parse_config(
@@ -81,109 +67,14 @@ impl DomainConfig {
         _tunnel_clients: TunnelClients,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
     ) -> Result<HashMap<String, DomainConfigListen>> {
-        let mut access_map = HashMap::new();
         let mut key_map = HashMap::new();
         let mut domain_config_listen_map = HashMap::new();
         let mut domain_config_listen_merge_map = HashMap::new();
 
-        let quic = config._domain.as_ref().unwrap().quic.as_ref().unwrap();
-        let quic_config = ups.quic_config(quic);
-        if quic_config.is_none() {
-            return Err(anyhow!("err: quic_str => quic:{}", quic));
-        }
-
         for domain_server_config in config._domain.as_ref().unwrap()._server.iter() {
-            let stream_var = stream_var::StreamVar::new();
-            let stream_info_test = stream_info::StreamInfo::new(
-                std::sync::Arc::new(ServerStreamInfo {
-                    protocol7: Protocol7::Tcp,
-                    remote_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
-                    local_addr: Some(SocketAddr::from(([127, 0, 0, 1], 18080))),
-                    domain: None,
-                }),
-                false,
-            );
-            let access_context = if domain_server_config.access.is_some() {
-                let mut access_context = Vec::new();
-                for access in domain_server_config.access.as_ref().unwrap() {
-                    let ret: Result<util::var::Var> = async {
-                        let access_format_vars =
-                            util::var::Var::new(&access.access_format, Some("-"))
-                                .map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
-                        let mut access_format_vars_test = util::var::Var::copy(&access_format_vars)
-                            .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
-                        access_format_vars_test.for_each(|var| {
-                            let var_name = util::var::Var::var_name(var);
-                            let value = stream_var
-                                .find(var_name, &stream_info_test)
-                                .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
-                            Ok(value)
-                        })?;
-                        let _ = access_format_vars_test
-                            .join()
-                            .map_err(|e| anyhow!("err:access_format_vars_test.join => e:{}", e))?;
-                        Ok(access_format_vars)
-                    }
-                    .await;
-                    let access_format_vars = ret.map_err(|e| {
-                        anyhow!(
-                            "err:access_format => access_format:{}, e:{}",
-                            access.access_format,
-                            e
-                        )
-                    })?;
+            let access_context =
+                AccessLog::parse_config_access_log(&domain_server_config.access).await?;
 
-                    let ret: Result<()> = async {
-                        {
-                            //就是创建下文件 啥都不干
-                            let _ = std::fs::OpenOptions::new()
-                                .append(true)
-                                .create(true)
-                                .open(&access.access_log_file);
-                        }
-                        let path = Path::new(&access.access_log_file);
-                        let canonicalize = path
-                            .canonicalize()
-                            .map_err(|e| anyhow!("err:path.canonicalize() => e:{}", e))?;
-                        let path = canonicalize
-                            .to_str()
-                            .ok_or(anyhow!("err:{}", access.access_log_file))?
-                            .to_string();
-                        let access_log_file = match access_map.get(&path).cloned() {
-                            Some(access_log_file) => access_log_file,
-                            None => {
-                                let access_log_file = std::fs::OpenOptions::new()
-                                    .append(true)
-                                    .create(true)
-                                    .open(&access.access_log_file)
-                                    .map_err(|e| {
-                                        anyhow!("err::open {} => e:{}", access.access_log_file, e)
-                                    })?;
-                                let access_log_file = std::sync::Arc::new(access_log_file);
-                                access_map.insert(path, access_log_file.clone());
-                                access_log_file
-                            }
-                        };
-
-                        access_context.push(proxy::AccessContext {
-                            access_format_vars,
-                            access_log_file,
-                        });
-                        Ok(())
-                    }
-                    .await;
-                    ret.map_err(|e| {
-                        anyhow!(
-                            "err:access_log_file => access_log_file:{}, e:{}",
-                            access.access_log_file,
-                            e
-                        )
-                    })?;
-                }
-                Some(access_context)
-            } else {
-                None
-            };
             let upstream_data = ups.upstream_data(&domain_server_config.proxy_pass_upstream);
             if upstream_data.is_none() {
                 return Err(anyhow!(
@@ -200,9 +91,10 @@ impl DomainConfig {
             }
             let tcp_config = tcp_config.unwrap();
 
-            let quic_config = ups.quic_config(&quic);
+            let quic_str = domain_server_config.quic.clone().take().unwrap();
+            let quic_config = ups.quic_config(&quic_str);
             if quic_config.is_none() {
-                return Err(anyhow!("err:ups.quic => quic:{}", quic));
+                return Err(anyhow!("err:ups.quic => quic_str:{}", quic_str));
             }
             let quic_config = quic_config.unwrap();
 
@@ -220,21 +112,21 @@ impl DomainConfig {
                 is_proxy_protocol_hello: domain_server_config.is_proxy_protocol_hello,
                 ups_data: upstream_data.unwrap(),
                 stream_var: Rc::new(stream_var::StreamVar::new()),
+                server: domain_server_config.server.clone(),
             });
             let domain_config_context = Rc::new(DomainConfigContext {
                 stream_config_context: stream_config_context.clone(),
             });
 
             for listen in domain_server_config.listen.as_ref().unwrap().iter() {
+                let listen_type = listen.listen_type();
                 match listen {
                     DomainListen::Tcp(listen) => {
                         let ret: Result<()> = async {
-                            let addrs = util::util::str_addrs(&listen.address)
-                                .map_err(|e| anyhow!("err:util::str_addrs => e:{}", e))?;
-                            let sock_addrs = util::util::addrs(&addrs)
+                            let sock_addrs = util::util::str_to_socket_addrs(&listen.address)
                                 .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;
-                            for (index, addr) in addrs.iter().enumerate() {
-                                let key = DomainConfig::tcp_key_from_addr(addr).map_err(|e| {
+                            for addr in sock_addrs.iter() {
+                                let key = util::util::tcp_key_from_addr(addr).map_err(|e| {
                                     anyhow!("err:DomainConfig::tcp_key_from_addr => e:{}", e)
                                 })?;
                                 if domain_config_listen_merge_map.get(&key).is_none() {
@@ -249,10 +141,13 @@ impl DomainConfig {
                                             stream: None,
                                             tcp_config: None,
                                             quic_config: None,
-                                            key_type: DomainConfigKeyType::Tcp,
+                                            listen_type,
                                             listen_addr: None,
                                             listens: Vec::new(),
                                             domain_config_contexts: Vec::new(),
+                                            server_type: domain_config_context
+                                                .stream_config_context
+                                                .server_type(),
                                         },
                                     );
                                 }
@@ -260,7 +155,7 @@ impl DomainConfig {
                                 let mut values =
                                     domain_config_listen_merge_map.get_mut(&key).unwrap();
                                 let listen = config_toml::Listen {
-                                    address: addr.clone(),
+                                    address: addr.to_string(),
                                     ssl: None,
                                 };
 
@@ -271,10 +166,86 @@ impl DomainConfig {
                                     values.quic_config = Some(stream_config_context.quic.clone());
                                 }
                                 values.listens.push(listen);
-                                values.listen_addr = Some(sock_addrs[index]);
+                                values.listen_addr = Some(addr.clone());
                                 values
                                     .domain_config_contexts
                                     .push(domain_config_context.clone());
+
+                                if values.server_type
+                                    != domain_config_context.stream_config_context.server_type()
+                                {
+                                    return Err(anyhow!("err:listen => addr:{}", addr));
+                                }
+                            }
+                            Ok(())
+                        }
+                        .await;
+                        ret.map_err(|e| {
+                            anyhow!("err:address => address:{}, e:{}", listen.address, e)
+                        })?;
+                    }
+                    DomainListen::Ssl(listen) => {
+                        let ret: Result<()> = async {
+                            let sock_addrs = util::util::str_to_socket_addrs(&listen.address)
+                                .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;
+                            for addr in sock_addrs.iter() {
+                                let key = util::util::tcp_key_from_addr(addr).map_err(|e| {
+                                    anyhow!("err:DomainConfig::tcp_key_from_addr => e:{}", e)
+                                })?;
+                                if domain_config_listen_merge_map.get(&key).is_none() {
+                                    if key_map.get(&key).is_some() {
+                                        return Err(anyhow!("err:key is exist => key:{}", key));
+                                    }
+                                    key_map.insert(key.clone(), true);
+                                    domain_config_listen_merge_map.insert(
+                                        key.clone(),
+                                        DomainConfigListenMerge {
+                                            common: None,
+                                            stream: None,
+                                            tcp_config: None,
+                                            quic_config: None,
+                                            listen_type,
+                                            listen_addr: None,
+                                            listens: Vec::new(),
+                                            domain_config_contexts: Vec::new(),
+                                            server_type: domain_config_context
+                                                .stream_config_context
+                                                .server_type(),
+                                        },
+                                    );
+                                }
+
+                                let mut values =
+                                    domain_config_listen_merge_map.get_mut(&key).unwrap();
+
+                                let ssl = SSL {
+                                    ssl_domain: domain_server_config.domain.clone(),
+                                    cert: listen.ssl.cert.clone(),
+                                    key: listen.ssl.key.clone(),
+                                    tls: listen.ssl.tls.clone(),
+                                };
+                                let listen = config_toml::Listen {
+                                    address: addr.to_string(),
+                                    ssl: Some(ssl),
+                                };
+
+                                values.common = Some(stream_config_context.common.clone());
+                                values.stream = Some(stream_config_context.stream.clone());
+                                if values.tcp_config.is_none() {
+                                    values.tcp_config = Some(stream_config_context.tcp.clone());
+                                    values.quic_config = Some(stream_config_context.quic.clone());
+                                }
+                                values.listens.push(listen);
+                                values.listen_addr = Some(addr.clone());
+                                values
+                                    .domain_config_contexts
+                                    .push(domain_config_context.clone());
+
+                                if values.server_type
+                                    != domain_config_context.stream_config_context.server_type()
+                                {
+                                    return Err(anyhow!("err:listen => addr:{}", addr));
+                                }
                             }
                             Ok(())
                         }
@@ -285,17 +256,14 @@ impl DomainConfig {
                     }
                     DomainListen::Quic(listen) => {
                         let ret: Result<()> = async {
-                            let addrs = util::util::str_addrs(&listen.address)
-                                .map_err(|e| anyhow!("err:util::str_addrs => e:{}", e))?;
-                            let sock_addrs = util::util::addrs(&addrs)
+                            let sock_addrs = util::util::str_to_socket_addrs(&listen.address)
                                 .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;
-                            for (index, addr) in addrs.iter().enumerate() {
-                                let udp_key =
-                                    DomainConfig::udp_key_from_addr(addr).map_err(|e| {
-                                        anyhow!("err:DomainConfig::udp_key_from_addr => e:{}", e)
-                                    })?;
+                            for addr in sock_addrs.iter() {
+                                let udp_key = util::util::udp_key_from_addr(addr).map_err(|e| {
+                                    anyhow!("err:DomainConfig::udp_key_from_addr => e:{}", e)
+                                })?;
                                 let quic_key =
-                                    DomainConfig::quic_key_from_addr(addr).map_err(|e| {
+                                    util::util::quic_key_from_addr(addr).map_err(|e| {
                                         anyhow!("err:DomainConfig::quic_key_from_addr => e:{}", e)
                                     })?;
                                 if domain_config_listen_merge_map.get(&quic_key).is_none() {
@@ -313,10 +281,13 @@ impl DomainConfig {
                                             stream: None,
                                             tcp_config: None,
                                             quic_config: None,
-                                            key_type: DomainConfigKeyType::Quic,
+                                            listen_type,
                                             listen_addr: None,
                                             listens: Vec::new(),
                                             domain_config_contexts: Vec::new(),
+                                            server_type: domain_config_context
+                                                .stream_config_context
+                                                .server_type(),
                                         },
                                     );
                                 }
@@ -331,7 +302,7 @@ impl DomainConfig {
                                     tls: listen.ssl.tls.clone(),
                                 };
                                 let listen = config_toml::Listen {
-                                    address: addr.clone(),
+                                    address: addr.to_string(),
                                     ssl: Some(ssl),
                                 };
 
@@ -341,11 +312,17 @@ impl DomainConfig {
                                     values.tcp_config = Some(stream_config_context.tcp.clone());
                                     values.quic_config = Some(stream_config_context.quic.clone());
                                 }
-                                values.listen_addr = Some(sock_addrs[index]);
+                                values.listen_addr = Some(addr.clone());
                                 values.listens.push(listen);
                                 values
                                     .domain_config_contexts
                                     .push(domain_config_context.clone());
+
+                                if values.server_type
+                                    != domain_config_context.stream_config_context.server_type()
+                                {
+                                    return Err(anyhow!("err:listen => addr:{}", addr));
+                                }
                             }
                             Ok(())
                         }
@@ -359,8 +336,8 @@ impl DomainConfig {
         }
 
         for (key, value) in domain_config_listen_merge_map.iter_mut() {
-            match &value.key_type {
-                &DomainConfigKeyType::Tcp => {
+            match &value.listen_type {
+                &DomainListenType::Tcp => {
                     let mut domain_config_context_map = HashMap::new();
                     let mut index_map = HashMap::new();
                     let mut index = 0;
@@ -408,14 +385,12 @@ impl DomainConfig {
                             listen_server,
                             domain_config_context_map,
                             domain_index,
-                            quic_sni: None,
+                            sni: None,
+                            server_type: value.server_type,
                         },
                     );
                 }
-                &DomainConfigKeyType::Udp => {
-                    continue;
-                }
-                &DomainConfigKeyType::Quic => {
+                &DomainListenType::Ssl => {
                     let mut domain_config_context_map = HashMap::new();
                     let mut index_map = HashMap::new();
                     let mut index = 0;
@@ -459,7 +434,74 @@ impl DomainConfig {
                             anyhow!("err:domain => index_map:{:?}, e:{}", index_map, e)
                         })?,
                     );
-                    let sni = std::sync::Arc::new(quic::util::sni(&value.listens)?);
+                    let sni = quic::util::sni(&value.listens)?;
+
+                    let listen_server: Rc<Box<dyn Server>> =
+                        Rc::new(Box::new(ssl_server::Server::new(
+                            value.listen_addr.clone().unwrap(),
+                            value.common.as_ref().unwrap().reuseport,
+                            value.tcp_config.clone().unwrap(),
+                            sni.clone(),
+                        )?));
+
+                    domain_config_listen_map.insert(
+                        key.clone(),
+                        DomainConfigListen {
+                            common: value.common.clone().unwrap(),
+                            stream: value.stream.clone().unwrap(),
+                            listen_server,
+                            domain_config_context_map,
+                            domain_index,
+                            sni: Some(sni),
+                            server_type: value.server_type,
+                        },
+                    );
+                }
+                &DomainListenType::Quic => {
+                    let mut domain_config_context_map = HashMap::new();
+                    let mut index_map = HashMap::new();
+                    let mut index = 0;
+                    for domain_config_context in value.domain_config_contexts.iter() {
+                        index += 1;
+                        index_map.insert(
+                            index,
+                            (
+                                domain_config_context
+                                    .stream_config_context
+                                    .domain
+                                    .clone()
+                                    .unwrap(),
+                                index,
+                            ),
+                        );
+                        domain_config_context_map.insert(index, domain_config_context.clone());
+
+                        let mut index_map_test = HashMap::new();
+                        index_map_test.insert(
+                            index,
+                            (
+                                domain_config_context
+                                    .stream_config_context
+                                    .domain
+                                    .clone()
+                                    .unwrap(),
+                                index,
+                            ),
+                        );
+                        util::domain_index::DomainIndex::new(&index_map_test).map_err(|e| {
+                            anyhow!(
+                                "err:domain => domain:{:?}, e:{}",
+                                domain_config_context.stream_config_context.domain,
+                                e
+                            )
+                        })?;
+                    }
+                    let domain_index = Rc::new(
+                        util::domain_index::DomainIndex::new(&index_map).map_err(|e| {
+                            anyhow!("err:domain => index_map:{:?}, e:{}", index_map, e)
+                        })?,
+                    );
+                    let sni = quic::util::sni(&value.listens)?;
 
                     let listen_server: Rc<Box<dyn Server>> =
                         Rc::new(Box::new(quic_server::Server::new(
@@ -479,7 +521,8 @@ impl DomainConfig {
                             listen_server,
                             domain_config_context_map,
                             domain_index,
-                            quic_sni: Some(sni),
+                            sni: Some(sni),
+                            server_type: value.server_type,
                         },
                     );
                 }
@@ -493,12 +536,10 @@ impl DomainConfig {
         old_domain_config_listen: &DomainConfigListen,
         mut new_domain_config_listen: DomainConfigListen,
     ) -> Result<DomainConfigListen> {
-        if old_domain_config_listen.quic_sni.is_some()
-            && new_domain_config_listen.quic_sni.is_some()
-        {
-            let old_sni = old_domain_config_listen.quic_sni.as_ref().unwrap();
-            old_sni.take_from(new_domain_config_listen.quic_sni.as_ref().unwrap());
-            new_domain_config_listen.quic_sni = Some(old_sni.clone());
+        if old_domain_config_listen.sni.is_some() && new_domain_config_listen.sni.is_some() {
+            let old_sni = old_domain_config_listen.sni.as_ref().unwrap();
+            old_sni.take_from(new_domain_config_listen.sni.as_ref().unwrap());
+            new_domain_config_listen.sni = Some(old_sni.clone());
         }
         Ok(new_domain_config_listen)
     }

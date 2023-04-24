@@ -2,12 +2,12 @@ use crate::stream::connect;
 use crate::upstream::UpstreamData;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn ip_hash(
     ip: &str,
     ups_data: &mut UpstreamData,
-) -> Option<(Option<bool>, Rc<Box<dyn connect::Connect>>)> {
+) -> Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
     if ups_data.ups_heartbeats.len() <= 0 {
         return None;
     }

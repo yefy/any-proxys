@@ -61,6 +61,10 @@ impl StreamVar {
             upstream_min_stream_cache_size,
         );
 
+        var_map.insert("total_read_size", total_read_size);
+
+        var_map.insert("total_write_size", total_write_size);
+
         StreamVar { var_map }
     }
 
@@ -104,21 +108,42 @@ pub fn remote_domain(stream_info: &stream_info::StreamInfo) -> Option<String> {
 }
 
 pub fn local_protocol(stream_info: &stream_info::StreamInfo) -> Option<String> {
-    Some(stream_info.server_stream_info.protocol7.to_string())
+    if stream_info.protocol77.is_none() {
+        Some(stream_info.server_stream_info.protocol7.to_string())
+    } else {
+        Some(format!(
+            "{}_{}",
+            stream_info.protocol77.as_ref().unwrap().to_string(),
+            stream_info.server_stream_info.protocol7.to_string()
+        ))
+    }
 }
 
 pub fn upstream_protocol(stream_info: &stream_info::StreamInfo) -> Option<String> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(
-        stream_info
-            .upstream_connect_info
-            .as_ref()
-            .unwrap()
-            .protocol7
-            .to_string(),
-    )
+    if stream_info.protocol77.is_none() {
+        Some(
+            stream_info
+                .upstream_connect_info
+                .as_ref()
+                .unwrap()
+                .protocol7
+                .to_string(),
+        )
+    } else {
+        Some(format!(
+            "{}_{}",
+            stream_info.protocol77.as_ref().unwrap().to_string(),
+            stream_info
+                .upstream_connect_info
+                .as_ref()
+                .unwrap()
+                .protocol7
+                .to_string()
+        ))
+    }
 }
 
 pub fn local_addr(stream_info: &stream_info::StreamInfo) -> Option<String> {
@@ -493,4 +518,12 @@ pub fn is_timeout_exit(stream_info: &stream_info::StreamInfo) -> Option<String> 
         return None;
     }
     return Some("timeout exit".to_string());
+}
+
+pub fn total_read_size(stream_info: &stream_info::StreamInfo) -> Option<String> {
+    return Some(stream_info.total_read_size.to_string());
+}
+
+pub fn total_write_size(stream_info: &stream_info::StreamInfo) -> Option<String> {
+    return Some(stream_info.total_write_size.to_string());
 }

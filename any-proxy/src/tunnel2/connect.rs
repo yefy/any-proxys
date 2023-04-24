@@ -2,6 +2,7 @@ use crate::config::config_toml::QuicConfig;
 use crate::config::config_toml::TcpConfig;
 use crate::quic::connect as quic_connect;
 use crate::quic::endpoints;
+use crate::ssl::connect as ssl_connect;
 use crate::stream::connect;
 use crate::stream::connect::Connect as stream_connect;
 use crate::stream::connect::ConnectInfo;
@@ -53,11 +54,11 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
             .await
             .connect(None, &mut None)
             .await?;
-        let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
-        let r = any_base::io::buf_reader::BufReader::new(r);
-        let w = any_base::io::buf_writer::BufWriter::new(w);
-        let mut stream = StreamFlow::new(fd, Box::new(r), Box::new(w));
-        stream.set_config(read_timeout, write_timeout, info);
+        //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
+        //let r = any_base::io::buf_reader::BufReader::new(r);
+        //let w = any_base::io::buf_writer::BufWriter::new(w);
+        //let mut stream = StreamFlow::new(fd, Box::new(r), Box::new(w));
+        //stream.set_config(read_timeout, write_timeout, info);
         return Ok((
             stream,
             connect_info.local_addr.clone(),
@@ -101,7 +102,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
 
          */
     }
-    async fn connect_addr(&self) -> Result<SocketAddr> {
+    async fn addr(&self) -> Result<SocketAddr> {
         // let connect_addr = util::lookup_host(self.timeout, &self.address)
         //     .await
         //     .map_err(|e| anyhow!("err:util::lookup_host => e:{}", e))?;
@@ -109,7 +110,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
         Ok(self.address.clone())
     }
 
-    async fn address(&self) -> String {
+    async fn host(&self) -> String {
         self.host.clone()
     }
 
@@ -125,6 +126,127 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
     }
     async fn stream_recv_timeout(&self) -> usize {
         self.tcp_config.tcp_recv_timeout
+    }
+    async fn is_tls(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone)]
+pub struct PeerStreamConnectSsl {
+    host: String,
+    address: SocketAddr, //ip:port, domain:port
+    tcp_config: TcpConfig,
+    ssl_connect: Arc<tokio::sync::Mutex<ssl_connect::Connect>>,
+}
+
+impl PeerStreamConnectSsl {
+    pub fn new(
+        host: String,
+        address: SocketAddr, //ip:port, domain:port
+        ssl_domain: String,
+        tcp_config: TcpConfig,
+    ) -> PeerStreamConnectSsl {
+        let ssl_connect = ssl_connect::Connect::new(
+            host.clone(),
+            address.clone(),
+            ssl_domain,
+            tcp_config.clone(),
+        );
+        let ssl_connect = Arc::new(tokio::sync::Mutex::new(ssl_connect));
+        PeerStreamConnectSsl {
+            host,
+            address,
+            tcp_config,
+            ssl_connect,
+        }
+    }
+}
+
+#[async_trait]
+impl PeerStreamConnect for PeerStreamConnectSsl {
+    async fn connect(&self) -> Result<(StreamFlow, SocketAddr, SocketAddr)> {
+        let (stream, connect_info) = self
+            .ssl_connect
+            .lock()
+            .await
+            .connect(None, &mut None)
+            .await?;
+        //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
+        //let r = any_base::io::buf_reader::BufReader::new(r);
+        //let w = any_base::io::buf_writer::BufWriter::new(w);
+        //let mut stream = StreamFlow::new(fd, Box::new(r), Box::new(w));
+        //stream.set_config(read_timeout, write_timeout, info);
+        return Ok((
+            stream,
+            connect_info.local_addr.clone(),
+            connect_info.remote_addr.clone(),
+        ));
+
+        /*
+        let ret: Result<TcpStream> = async {
+            match tokio::time::timeout(self.timeout, TcpStream::connect(connect_addr)).await {
+                Ok(ret) => match ret {
+                    Ok(stream) => Ok(stream),
+                    Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                        Err(anyhow!("err:client.stream timeout"))
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                        Err(anyhow!("err:client.stream reset"))
+                    }
+                    Err(e) => Err(anyhow!("err:client.stream => kind:{:?}, e:{}", e.kind(), e)),
+                },
+                Err(_) => Err(anyhow!("err:client.stream timeout")),
+            }
+        }
+        .await;
+
+        match ret {
+            Err(e) => Err(e),
+            Ok(tcp_stream) => {
+                tcp_util::set_stream(&tcp_stream, &self.tcp_config);
+                let local_addr = tcp_stream.local_addr()?;
+                let remote_addr = tcp_stream.peer_addr()?;
+                let (r, w) = tokio::io::split(tcp_stream);
+                let r = any_base::io::buf_reader::BufReader::new(r);
+                let w = any_base::io::buf_writer::BufWriter::new(w);
+                Ok((
+                    StreamFlow::new(0, Box::new(r), Box::new(w)),
+                    local_addr,
+                    remote_addr,
+                ))
+            }
+        }
+
+         */
+    }
+    async fn addr(&self) -> Result<SocketAddr> {
+        // let connect_addr = util::lookup_host(self.timeout, &self.address)
+        //     .await
+        //     .map_err(|e| anyhow!("err:util::lookup_host => e:{}", e))?;
+        // Ok(connect_addr)
+        Ok(self.address.clone())
+    }
+
+    async fn host(&self) -> String {
+        self.host.clone()
+    }
+
+    async fn protocol4(&self) -> Protocol4 {
+        Protocol4::TCP
+    }
+
+    async fn protocol7(&self) -> String {
+        Protocol7::Tunnel2Tcp.to_string()
+    }
+    async fn stream_send_timeout(&self) -> usize {
+        self.tcp_config.tcp_send_timeout
+    }
+    async fn stream_recv_timeout(&self) -> usize {
+        self.tcp_config.tcp_recv_timeout
+    }
+    async fn is_tls(&self) -> bool {
+        true
     }
 }
 
@@ -174,11 +296,11 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
             .await
             .connect(None, &mut None)
             .await?;
-        let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
-        let r = any_base::io::buf_reader::BufReader::new(r);
-        let w = any_base::io::buf_writer::BufWriter::new(w);
-        let mut stream = StreamFlow::new(fd, Box::new(r), Box::new(w));
-        stream.set_config(read_timeout, write_timeout, info);
+        //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
+        //let r = any_base::io::buf_reader::BufReader::new(r);
+        //let w = any_base::io::buf_writer::BufWriter::new(w);
+        //let mut stream = StreamFlow::new(fd, Box::new(r), Box::new(w));
+        //stream.set_config(read_timeout, write_timeout, info);
         return Ok((
             stream,
             connect_info.local_addr.clone(),
@@ -234,7 +356,7 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
 
          */
     }
-    async fn connect_addr(&self) -> Result<SocketAddr> {
+    async fn addr(&self) -> Result<SocketAddr> {
         // let connect_addr = util::lookup_host(self.timeout, &self.address)
         //     .await
         //     .map_err(|e| anyhow!("err:util::lookup_host => e:{}", e))?;
@@ -242,7 +364,7 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
         Ok(self.address.clone())
     }
 
-    async fn address(&self) -> String {
+    async fn host(&self) -> String {
         self.host.clone()
     }
 
@@ -258,6 +380,9 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
     }
     async fn stream_recv_timeout(&self) -> usize {
         self.quic_config.quic_recv_buffer_size
+    }
+    async fn is_tls(&self) -> bool {
+        true
     }
 }
 
@@ -295,7 +420,7 @@ impl connect::Connect for Connect {
 
         let (stream, local_addr, remote_addr) = connect?;
         let elapsed = start_time.elapsed().as_secs_f32();
-        let (r, w) = tokio::io::split(stream);
+        let (r, w) = any_base::io::split::split(stream);
         let mut stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
         let read_timeout =
             tokio::time::Duration::from_secs(self.connect.stream_recv_timeout().await as u64);
@@ -306,8 +431,8 @@ impl connect::Connect for Connect {
         Ok((
             stream,
             ConnectInfo {
-                protocol7: Protocol7::from_string(self.connect.protocol7().await)?,
-                domain: self.connect.address().await,
+                protocol7: Protocol7::from_string(&self.connect.protocol7().await)?,
+                domain: self.connect.host().await,
                 elapsed,
                 local_addr,
                 remote_addr,
@@ -317,5 +442,22 @@ impl connect::Connect for Connect {
                 channel_size: None,
             },
         ))
+    }
+
+    async fn addr(&self) -> Result<SocketAddr> {
+        self.connect.addr().await
+    }
+
+    async fn host(&self) -> Result<String> {
+        Ok(self.connect.host().await)
+    }
+    async fn is_tls(&self) -> bool {
+        self.connect.is_tls().await
+    }
+    async fn protocol7(&self) -> String {
+        self.connect.protocol7().await
+    }
+    async fn domain(&self) -> String {
+        self.connect.host().await
     }
 }

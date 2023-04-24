@@ -1,5 +1,5 @@
 # any-tunnel
-any-tunnel 建立在tcp，quic，srt等可靠协议之上
+any-tunnel 建立在tcp、ssl、quic、srt等可靠协议之上
 
 # 原理
 1、没开启链接缓冲池  

@@ -64,6 +64,7 @@ impl PortStream {
             debug_print_access_log_time,
             debug_print_stream_flow_time,
             debug_is_open_stream_work_times,
+            stream_so_singer_time,
         ) = {
             let stream_conf = &self
                 .port_config_listen
@@ -75,14 +76,16 @@ impl PortStream {
                 stream_conf.debug_print_access_log_time,
                 stream_conf.debug_print_stream_flow_time,
                 stream_conf.debug_is_open_stream_work_times,
+                stream_conf.stream_so_singer_time,
             )
         };
         let stream_info = StreamInfo::new(
             self.server_stream_info.clone(),
             debug_is_open_stream_work_times,
         );
+        let stream_info = Rc::new(RefCell::new(stream_info));
 
-        stream.set_stream_info(Some(stream_info.client_stream_flow_info.clone()));
+        stream.set_stream_info(Some(stream_info.borrow().client_stream_flow_info.clone()));
         let shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
 
         stream_start::do_start(
@@ -92,6 +95,7 @@ impl PortStream {
             shutdown_thread_rx,
             debug_print_access_log_time,
             debug_print_stream_flow_time,
+            stream_so_singer_time,
         )
         .await
     }
@@ -102,14 +106,17 @@ impl proxy::Stream for PortStream {
     async fn do_start(
         &mut self,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        stream: stream_flow::StreamFlow,
     ) -> Result<()> {
-        let config_ctx = &self
+        let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
+        let stream_config_context = self
             .port_config_listen
             .port_config_context
-            .stream_config_context;
-        stream_info.borrow_mut().stream_config_context = Some(config_ctx.clone());
-        stream_info.borrow_mut().debug_is_open_print = config_ctx.fast_conf.debug_is_open_print;
+            .stream_config_context
+            .clone();
+        stream_info.borrow_mut().stream_config_context = Some(stream_config_context.clone());
+        stream_info.borrow_mut().debug_is_open_print =
+            stream_config_context.fast_conf.debug_is_open_print;
         stream_info.borrow_mut().add_work_time("tunnel_stream");
 
         let client_buf_reader = TunnelStream::tunnel_stream(
@@ -149,7 +156,7 @@ impl proxy::Stream for PortStream {
             stream_info.borrow_mut().ssl_domain = self.server_stream_info.domain.clone();
             stream_info.borrow_mut().remote_domain = self.server_stream_info.domain.clone();
             //优先使用本地配置值
-            stream_info.borrow_mut().local_domain = config_ctx.domain.clone();
+            stream_info.borrow_mut().local_domain = stream_config_context.domain.clone();
             let hello = protopack::anyproxy::read_hello(&mut client_buf_reader)
                 .await
                 .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
@@ -206,7 +213,7 @@ impl proxy::Stream for PortStream {
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
         StreamStream::connect_and_stream(
-            config_ctx.clone(),
+            stream_config_context,
             stream_info,
             client_buffer,
             client_stream,

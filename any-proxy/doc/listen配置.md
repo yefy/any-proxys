@@ -1,30 +1,30 @@
 #port模式
 ````
 [[_server]]
-    domain = "www.yefyyun.cn"
+    domain = "www.example.cn"
     [[listen]]
         type = "tcp"
-        address = "0.0.0.0:[11135~11135]"
+        address = "0.0.0.0:11135"
     [[listen]]
         type = "quic"
-        address = "0.0.0.0:[11135~11135]"
-        ssl = {key = "./cert/www.yefyyun.cn.key", cert = "./cert/www.yefyyun.cn.pem", ssl_domain = "www.yefyyun.cn"}
+        address = "0.0.0.0:[11135~11139]"
+        ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem", ssl_domain = "www.example.cn"}
 
 #domain模式
 [[_server]]
-    domain = "www.yefyyun.cn $$(...).i4.cn"
+    domain = "www.example.cn $$(...).i4.cn"
     [[listen]]
         type = "tcp"
-        address = "0.0.0.0:[11152~11152]"
+        address = "0.0.0.0:11152"
     [[listen]]
         type = "quic"
-        address = "0.0.0.0:[11152~11152]"
-        ssl = {key = "./cert/www.yefyyun.cn.key", cert = "./cert/www.yefyyun.cn.pem"}
+        address = "0.0.0.0:[11152~11159]"
+        ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem"}
 ````
 
 #启动监听
 ````
-port模式：配置中的domain可以为空， 索引需要多配置 ssl_domain = "www.yefyyun.cn" 启动时设置域名和证书， 提供给quic协议获取域名后获取证书
+port模式：配置中的domain可以为空， 索引需要多配置 ssl_domain = "www.example.cn" 启动时设置域名和证书， 提供给quic协议获取域名后获取证书
 domain模式：配置中domain支持完整域名和泛域名， 启动时设置域名和证书， 提供给quic协议或ssl获取域名后获取证书
 
 protocol hello 在客户端链接后才可能有这个域名无法使用

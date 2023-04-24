@@ -2,6 +2,7 @@ use super::util as quic_util;
 use crate::config::config_toml::QuicConfig as Config;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
+use crate::quic::stream::Stream;
 use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
@@ -18,7 +19,7 @@ pub struct Server {
     config: Arc<Config>,
     reuseport: bool,
     addr: SocketAddr,
-    sni_rustls_map: RefCell<Arc<util::rustls::ResolvesServerCertUsingSNI>>,
+    sni: RefCell<util::Sni>,
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
 }
@@ -28,14 +29,14 @@ impl Server {
         addr: SocketAddr,
         reuseport: bool,
         config: Config,
-        sni_rustls_map: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>,
+        sni: util::Sni,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
     ) -> Result<Server> {
         Ok(Server {
             config: std::sync::Arc::new(config),
             reuseport,
             addr,
-            sni_rustls_map: RefCell::new(sni_rustls_map),
+            sni: RefCell::new(sni),
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_add_sock_hash,
         })
@@ -55,7 +56,7 @@ impl server::Server for Server {
             &self.config,
             self.reuseport,
             &self.addr,
-            self.sni_rustls_map.borrow().clone(),
+            self.sni.borrow().clone(),
             #[cfg(feature = "anyproxy-ebpf")]
             &self.ebpf_add_sock_hash,
         )
@@ -71,15 +72,19 @@ impl server::Server for Server {
     fn listen_addr(&self) -> Result<SocketAddr> {
         Ok(self.addr.clone())
     }
-    fn sni(&self) -> Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>> {
-        Some(self.sni_rustls_map.borrow().clone())
+    fn sni(&self) -> Option<util::Sni> {
+        Some(self.sni.borrow().clone())
     }
-    fn set_sni(&self, sni: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>) {
-        *self.sni_rustls_map.borrow_mut() = sni;
+    fn set_sni(&self, sni: util::Sni) {
+        *self.sni.borrow_mut() = sni;
     }
 
     fn protocol7(&self) -> Protocol7 {
         Protocol7::Quic
+    }
+
+    fn is_tls(&self) -> bool {
+        true
     }
 }
 
@@ -210,6 +215,14 @@ impl server::Connection for Connection {
                 // );
                 return Ok(None);
             }
+            Err(quinn::ConnectionError::TimedOut) => {
+                // log::error!(
+                //     "bi_streams.next TimedOut listen_addr:{}, remote_addr:{}",
+                //     self.listen_addr,
+                //     self.remote_addr
+                // );
+                return Ok(None);
+            }
             Err(e) => {
                 // log::error!(
                 //     "err:bi_streams connection => listen_addr:{}, remote_addr:{}, e:{:?}",
@@ -225,6 +238,8 @@ impl server::Connection for Connection {
                 ));
             }
             Ok((w, r)) => {
+                let stream = Stream::new(r, w);
+                let (r, w) = any_base::io::split::split(stream);
                 let mut stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
                 let read_timeout =
                     tokio::time::Duration::from_secs(self.config.quic_recv_timeout as u64);
@@ -238,6 +253,7 @@ impl server::Connection for Connection {
                         remote_addr: self.remote_addr.clone(),
                         local_addr: None,
                         domain: Some(self.domain.clone()),
+                        is_tls: true,
                     },
                 )));
             }

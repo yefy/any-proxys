@@ -13,49 +13,7 @@ host 127.0.0.1 www.upstream.cn
 host 127.0.0.1 www.example.cn  
 
 # port 代理配置
-下面例子都是在配置any-proxy/anyproxy/examples/conf/port_18080.conf里面
-# 代理回源nginx
-port_11131_to_tcp18080.conf  
-回源到nginx无需配置is_proxy_protocol_hello = true
-
-测试：
-curl http://www.example.cn:11131 -v
-
-# 边缘代理tcp加速
-port_11132_to_tcp11131.conf
-
-测试：
-curl http://www.example.cn:11132 -v
-
-# 边缘代理quic加速
-port_11133_to_quic11131.conf
-
-测试：
-curl http://www.example.cn:11133 -v
-
-# 边缘代理tunnel_tcp加速
-port_11134_to_tunnel_tcp11131.conf
-
-测试：
-curl http://www.example.cn:11134 -v
-
-# 边缘代理tunnel_quic加速
-port_11135_to_tunnel_quic11131.conf
-
-测试：
-curl http://www.example.cn:11135 -v
-
-# 边缘代理tunnel2_tcp加速
-port_11136_to_tunnel2_tcp11131.conf
-
-测试：
-curl http://www.example.cn:11136 -v
-
-# 边缘代理tunnel2_quic加速
-port_11137_to_tunnel2_quic11131.conf
-
-测试：
-curl http://www.example.cn:11137 -v
+参考any-proxy/anyproxy/examples/conf/anyproxy_port_simple.conf
 
 # domain代理配置
-domain_1444.conf  
+参考any-proxy/anyproxy/examples/conf/anyproxy_domain_simple.conf

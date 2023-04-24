@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
 pub fn bind(
@@ -57,10 +55,7 @@ pub fn bind(
     Ok(sk.into())
 }
 
-pub fn server_config(
-    config: &Config,
-    sni_rustls_map: Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>>,
-) -> Result<quinn::ServerConfig> {
+pub fn server_config(config: &Config, sni: Option<util::Sni>) -> Result<quinn::ServerConfig> {
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.max_concurrent_uni_streams(0_u8.into());
     if config.quic_upstream_streams > 0 {
@@ -93,7 +88,7 @@ pub fn server_config(
     let mut server_crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
-        .with_cert_resolver(sni_rustls_map.unwrap());
+        .with_cert_resolver(sni.as_ref().unwrap().sni_rustls.clone());
     server_crypto.alpn_protocols = vec![config.quic_protocols.as_bytes().to_vec()];
     if config.quic_enable_keylog {
         server_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
@@ -210,7 +205,7 @@ pub async fn listen(
     config: &Config,
     reuseport: bool,
     addr: &SocketAddr,
-    sni_rustls_map: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>,
+    sni: util::Sni,
     #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: &Option<Arc<any_ebpf::AddSockHash>>,
 ) -> Result<quinn::Endpoint> {
     let udp_socket = bind(
@@ -223,34 +218,39 @@ pub async fn listen(
 
     #[cfg(unix)]
     {
-        let fd = udp_socket.as_raw_fd();
+        #[cfg(feature = "anyproxy-ebpf")]
+        {
+            use std::os::unix::io::AsRawFd;
 
-        let mut cookie: libc::c_ulonglong = 0;
-        let mut optlen = std::mem::size_of::<libc::c_ulonglong>() as libc::socklen_t;
+            let fd = udp_socket.as_raw_fd();
 
-        unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_COOKIE,
-                &mut cookie as *mut _ as *mut _,
-                &mut optlen,
-            )
-        };
+            let mut cookie: libc::c_ulonglong = 0;
+            let mut optlen = std::mem::size_of::<libc::c_ulonglong>() as libc::socklen_t;
 
-        log::debug!("cookie:{}, fd:{}", cookie, fd);
-        if ebpf_add_sock_hash.is_some() {
-            ebpf_add_sock_hash
-                .as_ref()
-                .unwrap()
-                .add_reuseport_data(cookie, fd)
-                .await?;
+            unsafe {
+                libc::getsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_COOKIE,
+                    &mut cookie as *mut _ as *mut _,
+                    &mut optlen,
+                )
+            };
+
+            log::debug!("cookie:{}, fd:{}", cookie, fd);
+            if ebpf_add_sock_hash.is_some() {
+                ebpf_add_sock_hash
+                    .as_ref()
+                    .unwrap()
+                    .add_reuseport_data(cookie, fd)
+                    .await?;
+            }
         }
     }
 
     //let client_config =
     //   client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;
-    let server_config = server_config(config, Some(sni_rustls_map.clone()))
+    let server_config = server_config(config, Some(sni.clone()))
         .map_err(|e| anyhow!("err:server_config => e:{}", e))?;
     let endpoint = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
@@ -264,7 +264,20 @@ pub async fn listen(
     Ok(endpoint)
 }
 
-pub fn sni(listens: &Vec<config_toml::Listen>) -> Result<util::rustls::ResolvesServerCertUsingSNI> {
+pub fn sni(listens: &Vec<config_toml::Listen>) -> Result<util::Sni> {
+    let sni_rustls = std::sync::Arc::new(sni_rustls(listens)?);
+    #[cfg(feature = "anyproxy-openssl")]
+    let sni_openssl = std::sync::Arc::new(sni_openssl(listens)?);
+    Ok(util::Sni {
+        sni_rustls,
+        #[cfg(feature = "anyproxy-openssl")]
+        sni_openssl,
+    })
+}
+
+pub fn sni_rustls(
+    listens: &Vec<config_toml::Listen>,
+) -> Result<util::rustls::ResolvesServerCertUsingSNI> {
     let mut index = 0;
     let mut sni_contexts = Vec::with_capacity(50);
     let mut index_map = HashMap::new();
@@ -286,4 +299,29 @@ pub fn sni(listens: &Vec<config_toml::Listen>) -> Result<util::rustls::ResolvesS
         .map_err(|e| anyhow!("err:ResolvesServerCertUsingSNI => e:{}", e))?;
 
     Ok(sni_rustls)
+}
+
+#[cfg(feature = "anyproxy-openssl")]
+pub fn sni_openssl(listens: &Vec<config_toml::Listen>) -> Result<util::openssl::OpensslSni> {
+    let mut index = 0;
+    let mut sni_contexts = Vec::with_capacity(50);
+    let mut index_map = HashMap::new();
+
+    for listen in listens.iter() {
+        if listen.ssl.is_none() {
+            log::error!("err:listen.ssl.is_none");
+            continue;
+        }
+        let ssl = listen.ssl.clone();
+        index = index + 1;
+        index_map.insert(index, (ssl.as_ref().unwrap().ssl_domain.clone(), index));
+        sni_contexts.push(util::SniContext { index, ssl });
+    }
+
+    let domain_index = util::domain_index::DomainIndex::new(&index_map)
+        .map_err(|e| anyhow!("err:domain_index::DomainIndex => e:{}", e))?;
+    let sni_openssl = util::openssl::OpensslSni::new(&sni_contexts, domain_index, "")
+        .map_err(|e| anyhow!("err:OpensslSni => e:{}", e))?;
+
+    Ok(sni_openssl)
 }

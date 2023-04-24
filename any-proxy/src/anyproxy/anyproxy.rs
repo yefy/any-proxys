@@ -25,6 +25,8 @@ pub struct ArgsConfig {
     pub signal: Option<String>,
     #[structopt(long, short = "t")]
     pub check_config: bool,
+    #[structopt(long, short = "c")]
+    pub config: Option<String>,
 }
 
 impl ArgsConfig {
@@ -86,6 +88,11 @@ impl Anyproxy {
             {
                 return Ok(true);
             }
+        }
+
+        if arg_config.config.is_some() {
+            *default_config::ANYPROXY_CONF_FULL_PATH.lock().unwrap() =
+                arg_config.config.clone().unwrap();
         }
 
         if arg_config.check_config {
@@ -272,12 +279,16 @@ impl Anyproxy {
         is_fast_shutdown: bool,
         shutdown_timeout: u64,
     ) {
-        self.executor_local_spawn._start(move |_| async move {
-            anyproxy_group
-                .stop(is_fast_shutdown, shutdown_timeout)
-                .await;
-            Ok(())
-        });
+        self.executor_local_spawn._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |_| async move {
+                anyproxy_group
+                    .stop(is_fast_shutdown, shutdown_timeout)
+                    .await;
+                Ok(())
+            },
+        );
     }
 
     pub async fn wait_anyproxy_groups(&mut self) -> Result<()> {

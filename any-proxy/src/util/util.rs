@@ -6,7 +6,7 @@ use rand::Rng;
 use std::fs;
 use std::path::Path;
 
-pub fn str_addrs(addr: &str) -> Result<Vec<String>> {
+pub fn str_to_str_addrs(addr: &str) -> Result<Vec<String>> {
     let mut datas = Vec::with_capacity(20);
     let addrs = addr.split(" ").collect::<Vec<_>>();
     for addr in addrs {
@@ -60,7 +60,12 @@ pub fn str_addrs(addr: &str) -> Result<Vec<String>> {
     Ok(datas)
 }
 
-pub fn addrs(str_addrs: &Vec<String>) -> Result<Vec<SocketAddr>> {
+pub fn str_to_socket_addrs(addr: &str) -> Result<Vec<SocketAddr>> {
+    let str_addrs = str_to_str_addrs(addr)?;
+    strs_to_socket_addrs(&str_addrs)
+}
+
+pub fn strs_to_socket_addrs(str_addrs: &Vec<String>) -> Result<Vec<SocketAddr>> {
     let mut addrs = Vec::with_capacity(10);
     for addr in str_addrs.iter() {
         let addr = addr
@@ -72,7 +77,7 @@ pub fn addrs(str_addrs: &Vec<String>) -> Result<Vec<SocketAddr>> {
     Ok(addrs)
 }
 
-pub fn addr(str_addr: &str) -> Result<SocketAddr> {
+pub fn str_to_socket_addr(str_addr: &str) -> Result<SocketAddr> {
     let addr = str_addr
         .to_socket_addrs()?
         .next()
@@ -170,7 +175,11 @@ pub fn memlock_rlimit(curr: u64, max: u64) -> Result<()> {
     };
 
     if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
-        return Err(anyhow!("Failed to increase rlimit:{:?}", rlimit));
+        return Err(anyhow!(
+            "Failed to increase rlimit.rlim_cur:{}, rlimit.rlim_max:{}",
+            rlimit.rlim_cur,
+            rlimit.rlim_max
+        ));
     }
     Ok(())
 }
@@ -234,4 +243,25 @@ pub fn extract(file_name: &str, target: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn tcp_key_from_addr(addr: &SocketAddr) -> Result<String> {
+    Ok("tcp".to_string() + &addr.port().to_string())
+}
+pub fn udp_key_from_addr(addr: &SocketAddr) -> Result<String> {
+    Ok("udp".to_string() + &addr.port().to_string())
+}
+pub fn quic_key_from_addr(addr: &SocketAddr) -> Result<String> {
+    Ok("quic".to_string() + &addr.port().to_string())
+}
+
+pub fn host_and_port(http_host: &str) -> (&str, &str) {
+    let http_hosts = http_host.trim().split(":").collect::<Vec<_>>();
+    let domain = http_hosts[0].trim();
+    let port = if http_hosts.len() > 1 {
+        http_hosts[1].trim()
+    } else {
+        ""
+    };
+    (domain, port)
 }

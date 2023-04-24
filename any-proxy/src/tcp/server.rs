@@ -3,6 +3,7 @@ use crate::config::config_toml::TcpConfig as Config;
 use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
+use crate::tcp::stream::Stream;
 use crate::util;
 use crate::Protocol7;
 use anyhow::anyhow;
@@ -53,12 +54,15 @@ impl server::Server for Server {
     fn listen_addr(&self) -> Result<SocketAddr> {
         Ok(self.addr.clone())
     }
-    fn sni(&self) -> Option<std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>> {
+    fn sni(&self) -> Option<util::Sni> {
         None
     }
-    fn set_sni(&self, _sni: std::sync::Arc<util::rustls::ResolvesServerCertUsingSNI>) {}
+    fn set_sni(&self, _sni: util::Sni) {}
     fn protocol7(&self) -> Protocol7 {
         Protocol7::Tcp
+    }
+    fn is_tls(&self) -> bool {
+        false
     }
 }
 
@@ -134,7 +138,9 @@ impl server::Connection for Connection {
         let fd = tcp_stream.as_raw_fd();
         #[cfg(not(unix))]
         let fd = 0;
-        let (r, w) = tokio::io::split(tcp_stream);
+
+        let stream = Stream::new(tcp_stream);
+        let (r, w) = any_base::io::split::split(stream);
         let mut stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
@@ -146,6 +152,7 @@ impl server::Connection for Connection {
                 remote_addr: remote_addr,
                 local_addr: Some(local_addr),
                 domain: None,
+                is_tls: false,
             },
         )))
     }

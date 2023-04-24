@@ -3,6 +3,7 @@ use super::stream::Stream;
 use super::stream_flow::StreamFlow;
 use crate::peer_stream::PeerStreamKey;
 use crate::protopack::TunnelHello;
+use crate::push_stream::PushStream;
 use anyhow::anyhow;
 use anyhow::Result;
 use hashbrown::HashMap;
@@ -32,7 +33,7 @@ impl Listener {
         Listener { accept_rx, server }
     }
 
-    pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr)> {
+    pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
         loop {
             let accept = self
                 .server
@@ -61,12 +62,16 @@ impl Publish {
         w: Box<dyn AsyncWrite + Send + Unpin>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
+        domain: Option<String>,
     ) -> Result<()> {
+        let stream = PushStream::new(r, w);
+        let (r, w) = any_base::io::split::split(stream);
         self.server
             .create_accept_connect(
-                StreamFlow::new(0, r, w),
+                StreamFlow::new(0, Box::new(r), Box::new(w)),
                 local_addr,
                 remote_addr,
+                domain,
                 self.accept_tx.clone(),
             )
             .await
@@ -115,6 +120,7 @@ impl Server {
         stream: StreamFlow,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
+        domain: Option<String>,
         accept_tx: AcceptSenderType,
     ) -> Result<()> {
         PeerClient::do_create_peer_stream(
@@ -122,6 +128,7 @@ impl Server {
             "".to_string(),
             local_addr,
             remote_addr,
+            domain,
             None,
             stream,
             Some(accept_tx),
@@ -134,13 +141,13 @@ impl Server {
     pub async fn accept(
         &self,
         accept_rx: &mut AcceptReceiverType,
-    ) -> Result<(Stream, SocketAddr, SocketAddr)> {
+    ) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
         loop {
             let recv_msg = accept_rx
                 .recv()
                 .await
                 .map_err(|e| anyhow!("er:to_server_rx => e:{}", e))?;
-            let ret: Result<Option<(Stream, SocketAddr, SocketAddr)>> = async {
+            let ret: Result<Option<(Stream, SocketAddr, SocketAddr, Option<String>)>> = async {
                 let recv_msg = match recv_msg {
                     ServerRecv::ServerRecvHello(recv_msg) => recv_msg,
                 };
@@ -169,7 +176,9 @@ impl Server {
 
                     #[cfg(feature = "anydebug")]
                     log::info!("server add tunnel_hello:{:?}", tunnel_hello);
-                    if let Err(_e) = peer_client
+
+                    let ret = peer_client
+                        .context
                         .hello_to_peer_stream(
                             None,
                             &peer_stream_key,
@@ -178,25 +187,35 @@ impl Server {
                             Some(tunnel_hello.client_peer_stream_index),
                         )
                         .await
-                        .map_err(|e| anyhow!("er:hello_to_peer_stream => e:{}", e))
-                    {
-                        #[cfg(feature = "anydebug")]
-                        log::info!(
-                            "server close 222 tunnel_hello :{:?}， _e: {}",
-                            tunnel_hello,
-                            _e
-                        );
+                        .map_err(|e| anyhow!("er:hello_to_peer_stream => e:{}", e));
 
-                        peer_stream_key.to_peer_stream_tx.close();
-                        return Ok(None);
-                    }
+                    let _e = match ret {
+                        Err(e) => e,
+                        Ok(ret) => match ret {
+                            Some(_) => {
+                                return Ok(None);
+                            }
+                            None => {
+                                anyhow!("peer_client close")
+                            }
+                        },
+                    };
+
+                    #[cfg(feature = "anydebug")]
+                    log::info!(
+                        "server close 222 tunnel_hello :{:?}， _e: {}",
+                        tunnel_hello,
+                        _e
+                    );
+
+                    peer_stream_key.to_peer_stream_tx.close();
                     return Ok(None);
                 }
 
                 #[cfg(feature = "anydebug")]
                 log::info!("server create tunnel_hello:{:?}", tunnel_hello);
-                let (peer_client, stream, local_addr, remote_addr) =
-                    PeerClient::create_stream_and_peer_client(
+                let (peer_client, stream, local_addr, remote_addr, domain) = {
+                    let ret = PeerClient::create_stream_and_peer_client(
                         false,
                         10,
                         None,
@@ -211,7 +230,21 @@ impl Server {
                         Some(tunnel_hello.client_peer_stream_index),
                     )
                     .await
-                    .map_err(|e| anyhow!("er:create_stream_and_peer_client => e:{}", e))?;
+                    .map_err(|e| anyhow!("er:create_stream_and_peer_client => e:{}", e));
+
+                    if let Err(_e) = ret {
+                        #[cfg(feature = "anydebug")]
+                        log::info!(
+                            "server close 333 tunnel_hello :{:?}， _e: {}",
+                            tunnel_hello,
+                            _e
+                        );
+
+                        peer_stream_key.to_peer_stream_tx.close();
+                        return Ok(None);
+                    };
+                    ret.unwrap()
+                };
 
                 {
                     self.context
@@ -220,7 +253,7 @@ impl Server {
                         .insert(session_id.clone(), Some(peer_client.clone()));
                 }
 
-                Ok(Some((stream, local_addr, remote_addr)))
+                Ok(Some((stream, local_addr, remote_addr, domain)))
             }
             .await;
 

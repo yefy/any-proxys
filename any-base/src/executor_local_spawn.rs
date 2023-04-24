@@ -8,6 +8,14 @@ use std::future::Future;
 use std::thread;
 use tokio::sync::broadcast;
 
+#[cfg(feature = "anyspawn-count")]
+use lazy_static::lazy_static;
+#[cfg(feature = "anyspawn-count")]
+lazy_static! {
+    pub static ref LOCAL_SPAWN_COUNT_MAP: std::sync::Mutex<std::collections::HashMap<String, i64>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
 #[derive(Clone)]
 pub struct ExecutorsLocal {
     pub executor: async_executors::TokioCt,
@@ -19,12 +27,17 @@ pub struct ExecutorsLocal {
 }
 
 impl ExecutorsLocal {
-    pub fn _start<S, F>(&self, service: S)
+    pub fn _start<S, F>(&self, #[cfg(feature = "anyspawn-count")] name: String, service: S)
     where
         S: FnOnce(ExecutorsLocal) -> F + 'static,
         F: Future<Output = Result<()>> + 'static,
     {
-        _start(self.clone(), service)
+        _start(
+            #[cfg(feature = "anyspawn-count")]
+            name,
+            self.clone(),
+            service,
+        )
     }
     pub fn _start_and_free<S, F>(&self, service: S)
     where
@@ -123,12 +136,17 @@ impl ExecutorLocalSpawn {
         };
     }
 
-    pub fn _start<S, F>(&mut self, service: S)
+    pub fn _start<S, F>(&mut self, #[cfg(feature = "anyspawn-count")] name: String, service: S)
     where
         S: FnOnce(ExecutorsLocal) -> F + 'static,
         F: Future<Output = Result<()>> + 'static,
     {
-        _start(self.executors.clone(), service)
+        _start(
+            #[cfg(feature = "anyspawn-count")]
+            name,
+            self.executors.clone(),
+            service,
+        )
     }
 
     pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
@@ -148,6 +166,22 @@ impl ExecutorLocalSpawn {
             flag
         );
         self.wait_group.wait().await
+    }
+
+    pub async fn wait_group_count() {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            #[cfg(feature = "anyspawn-count")]
+            {
+                let count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                for (k, v) in count_map.iter() {
+                    if *v == 0 {
+                        continue;
+                    }
+                    log::info!("wait_group_count: {k} :{v}");
+                }
+            }
+        }
     }
 
     pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
@@ -179,6 +213,9 @@ impl ExecutorLocalSpawn {
                     }
                     break;
                 },
+                _ = ExecutorLocalSpawn::wait_group_count() =>  {
+                    break;
+                },
                 _ = tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
                     let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
                         log::warn!(
@@ -196,8 +233,11 @@ impl ExecutorLocalSpawn {
     }
 }
 
-pub fn _start<S, F>(executors: ExecutorsLocal, service: S)
-where
+pub fn _start<S, F>(
+    #[cfg(feature = "anyspawn-count")] name: String,
+    executors: ExecutorsLocal,
+    service: S,
+) where
     S: FnOnce(ExecutorsLocal) -> F + 'static,
     F: Future<Output = Result<()>> + 'static,
 {
@@ -217,8 +257,35 @@ where
             scopeguard::defer! {
                 log::debug!("stop executor version:{}", version);
                 wait_group_worker_inner.done();
+
+                #[cfg(feature = "anyspawn-count")]
+                {
+                    let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                    let count = count_map.get_mut(&name);
+                    if count.is_none() {
+                        log::error!("_start name {} nil", name);
+                    } else {
+                        let count = count.unwrap();
+                        *count -= 1;
+                        log::info!("_start name {} count:{}", name, count);
+                    }
+                }
             }
             log::debug!("start executor version:{}", version);
+
+            #[cfg(feature = "anyspawn-count")]
+            {
+                let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                let count = count_map.get_mut(&name);
+                if count.is_none() {
+                    count_map.insert(name.to_string(), 1);
+                    log::info!("-start name {} count:{}", name, 1);
+                } else {
+                    let count = count.unwrap();
+                    *count += 1;
+                    log::info!("-start name {} count:{}", name, count);
+                }
+            }
 
             let ret: Result<()> = async {
                 service(executors)

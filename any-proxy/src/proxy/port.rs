@@ -156,8 +156,10 @@ impl proxy::Proxy for Port {
             #[cfg(feature = "anyproxy-ebpf")]
             let ebpf_add_sock_hash = self.ebpf_add_sock_hash.clone();
             let session_id = self.session_id.clone();
-            self.executor_local_spawn
-                ._start(move |executors| async move {
+            self.executor_local_spawn._start(
+                #[cfg(feature = "anyspawn-count")]
+                format!("{}:{}", file!(), line!()),
+                move |executors| async move {
                     let port_server = port_server::PortServer::new(
                         executors,
                         tunnels,
@@ -177,12 +179,18 @@ impl proxy::Proxy for Port {
                         .await
                         .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
                     Ok(())
-                });
+                },
+            );
         }
 
         Ok(())
     }
     async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) -> Result<()> {
+        scopeguard::defer! {
+            log::info!("end port stop flag:{}", flag);
+        }
+        log::info!("start port stop flag:{}", flag);
+
         self.executor_local_spawn
             .stop(flag, is_fast_shutdown, shutdown_timeout)
             .await;

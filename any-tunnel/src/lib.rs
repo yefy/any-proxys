@@ -3,6 +3,7 @@ pub mod peer_client;
 pub mod peer_stream;
 pub mod peer_stream_connect;
 pub mod protopack;
+pub mod push_stream;
 pub mod round_async_channel;
 pub mod server;
 pub mod stream;

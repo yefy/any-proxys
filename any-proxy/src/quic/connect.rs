@@ -5,6 +5,7 @@ use crate::stream::client::Client;
 use crate::stream::connect;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::stream_flow;
+use crate::Protocol7;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -91,5 +92,23 @@ impl connect::Connect for Connect {
                 channel_size: None,
             },
         ))
+    }
+    async fn addr(&self) -> Result<SocketAddr> {
+        Ok(self.context.address.clone())
+    }
+
+    async fn host(&self) -> Result<String> {
+        Ok(self.context.host.clone())
+    }
+
+    async fn is_tls(&self) -> bool {
+        true
+    }
+
+    async fn protocol7(&self) -> String {
+        Protocol7::Quic.to_string()
+    }
+    async fn domain(&self) -> String {
+        self.context.host.clone()
     }
 }

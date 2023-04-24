@@ -97,6 +97,13 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    {
+        log::info!(
+            "config full path :{}",
+            default_config::ANYPROXY_CONF_FULL_PATH.lock().unwrap()
+        );
+    }
+
     executor_local_spawn::_block_on(1, move |executor_local_spawn| async move {
         async_main(executor_local_spawn).await
     })

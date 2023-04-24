@@ -5,13 +5,11 @@ cd any-proxy
 cargo build --release --bin anyproxy  
 cp target/release/anyproxy ./anyproxy/examples/  
 cd ./anyproxy/examples/  
+//默认读取 ./conf/anyproxy.conf, 可以使用-c 指定配置文件  
 ./anyproxy  
 
-# 配置读取
+# 目录使用
 cert放置密钥  
 conf放配置文件  
-logs放access_log、anyproxy.log、anyproxy.pid  
-
-any-proxy\anyproxy\examples/conf/anyproxy.conf
-any-proxy\anyproxy\examples/conf/port_18080.conf
+logs放access_log、anyproxy.log、anyproxy.pid
 

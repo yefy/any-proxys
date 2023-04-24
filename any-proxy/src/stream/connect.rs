@@ -25,4 +25,9 @@ pub trait Connect: Send + Sync {
         request_id: Option<String>,
         info: &mut Option<&mut stream_flow::StreamFlowInfo>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)>;
+    async fn addr(&self) -> Result<SocketAddr>;
+    async fn host(&self) -> Result<String>;
+    async fn is_tls(&self) -> bool;
+    async fn protocol7(&self) -> String;
+    async fn domain(&self) -> String;
 }

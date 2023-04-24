@@ -7,6 +7,7 @@ use crate::config::config_toml::UpstreamDispatch;
 use crate::config::config_toml::{ProxyPass, _UpstreamConfig};
 use crate::quic::connect as quic_connect;
 use crate::quic::endpoints;
+use crate::ssl::connect as ssl_connect;
 use crate::stream::connect;
 use crate::tcp::connect as tcp_connect;
 use crate::tunnel::connect as tunnel_connect;
@@ -165,12 +166,18 @@ impl UpstreamConfig {
                     config_toml::ProxyPass::Tcp(tcp) => {
                         (tcp.address.clone(), tcp.dynamic_domain.clone())
                     }
+                    config_toml::ProxyPass::Ssl(ssl) => {
+                        (ssl.address.clone(), ssl.dynamic_domain.clone())
+                    }
                     config_toml::ProxyPass::Quic(quic) => {
                         (quic.address.clone(), quic.dynamic_domain.clone())
                     }
                     config_toml::ProxyPass::Tunnel(tunnel) => match tunnel {
                         config_toml::ProxyPassTunnel::Tcp(tcp) => {
                             (tcp.address.clone(), tcp.dynamic_domain.clone())
+                        }
+                        config_toml::ProxyPassTunnel::Ssl(ssl) => {
+                            (ssl.address.clone(), ssl.dynamic_domain.clone())
                         }
                         config_toml::ProxyPassTunnel::Quic(quic) => {
                             (quic.address.clone(), quic.dynamic_domain.clone())
@@ -179,6 +186,9 @@ impl UpstreamConfig {
                     config_toml::ProxyPass::Tunnel2(tunnel) => match tunnel {
                         config_toml::ProxyPassTunnel2::Tcp(tcp) => {
                             (tcp.address.clone(), tcp.dynamic_domain.clone())
+                        }
+                        config_toml::ProxyPassTunnel2::Ssl(ssl) => {
+                            (ssl.address.clone(), ssl.dynamic_domain.clone())
                         }
                         config_toml::ProxyPassTunnel2::Quic(quic) => {
                             (quic.address.clone(), quic.dynamic_domain.clone())
@@ -264,7 +274,7 @@ impl UpstreamConfig {
     ) -> Result<Rc<RefCell<UpstreamHeartbeatData>>> {
         let (heartbeat, connect, is_proxy_protocol_hello, weight): (
             Option<UpstreamHeartbeat>,
-            Rc<Box<dyn connect::Connect>>,
+            Arc<Box<dyn connect::Connect>>,
             Option<bool>,
             Option<i64>,
         ) = match &proxy_pass {
@@ -282,9 +292,29 @@ impl UpstreamConfig {
 
                 (
                     tcp.heartbeat.clone(),
-                    Rc::new(connect),
+                    Arc::new(connect),
                     tcp.is_proxy_protocol_hello,
                     tcp.weight,
+                )
+            }
+            config_toml::ProxyPass::Ssl(ssl) => {
+                let tcp_str = ssl.tcp.clone().take().unwrap();
+                let tcp_config = tcp_config_map.get(&tcp_str).cloned();
+                if tcp_config.is_none() {
+                    return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+                }
+                let connect = Box::new(ssl_connect::Connect::new(
+                    host,
+                    addr.clone(),
+                    ssl.ssl_domain.clone(),
+                    tcp_config.unwrap(),
+                ));
+
+                (
+                    ssl.heartbeat.clone(),
+                    Arc::new(connect),
+                    ssl.is_proxy_protocol_hello,
+                    ssl.weight,
                 )
             }
             config_toml::ProxyPass::Quic(quic) => {
@@ -303,7 +333,7 @@ impl UpstreamConfig {
                 ));
                 (
                     quic.heartbeat.clone(),
-                    Rc::new(connect),
+                    Arc::new(connect),
                     quic.is_proxy_protocol_hello,
                     quic.weight,
                 )
@@ -328,9 +358,34 @@ impl UpstreamConfig {
                     ));
                     (
                         tcp.heartbeat.clone(),
-                        Rc::new(connect),
+                        Arc::new(connect),
                         tcp.is_proxy_protocol_hello,
                         tcp.weight,
+                    )
+                }
+                config_toml::ProxyPassTunnel::Ssl(ssl) => {
+                    let tcp_str = ssl.tcp.clone().take().unwrap();
+                    let tcp_config = tcp_config_map.get(&tcp_str).cloned();
+                    if tcp_config.is_none() {
+                        return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+                    }
+                    let connect = Box::new(tunnel_connect::Connect::new(
+                        tunnel_clients.client.clone(),
+                        Box::new(tunnel_connect::PeerStreamConnectSsl::new(
+                            host,
+                            addr.clone(),
+                            ssl.ssl_domain.clone(),
+                            tcp_config.unwrap(),
+                            ssl.tunnel.max_stream_size,
+                            ssl.tunnel.min_stream_cache_size,
+                            ssl.tunnel.channel_size,
+                        )),
+                    ));
+                    (
+                        ssl.heartbeat.clone(),
+                        Arc::new(connect),
+                        ssl.is_proxy_protocol_hello,
+                        ssl.weight,
                     )
                 }
                 config_toml::ProxyPassTunnel::Quic(quic) => {
@@ -355,7 +410,7 @@ impl UpstreamConfig {
                     ));
                     (
                         quic.heartbeat.clone(),
-                        Rc::new(connect),
+                        Arc::new(connect),
                         quic.is_proxy_protocol_hello,
                         quic.weight,
                     )
@@ -378,9 +433,31 @@ impl UpstreamConfig {
                     ));
                     (
                         tcp.heartbeat.clone(),
-                        Rc::new(connect),
+                        Arc::new(connect),
                         tcp.is_proxy_protocol_hello,
                         tcp.weight,
+                    )
+                }
+                config_toml::ProxyPassTunnel2::Ssl(ssl) => {
+                    let tcp_str = ssl.tcp.clone().take().unwrap();
+                    let tcp_config = tcp_config_map.get(&tcp_str).cloned();
+                    if tcp_config.is_none() {
+                        return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+                    }
+                    let connect = Box::new(tunnel2_connect::Connect::new(
+                        tunnel_clients.client2.clone(),
+                        Box::new(tunnel2_connect::PeerStreamConnectSsl::new(
+                            host,
+                            addr.clone(),
+                            ssl.ssl_domain.clone(),
+                            tcp_config.unwrap(),
+                        )),
+                    ));
+                    (
+                        ssl.heartbeat.clone(),
+                        Arc::new(connect),
+                        ssl.is_proxy_protocol_hello,
+                        ssl.weight,
                     )
                 }
                 config_toml::ProxyPassTunnel2::Quic(quic) => {
@@ -402,7 +479,7 @@ impl UpstreamConfig {
                     ));
                     (
                         quic.heartbeat.clone(),
-                        Rc::new(connect),
+                        Arc::new(connect),
                         quic.is_proxy_protocol_hello,
                         quic.weight,
                     )

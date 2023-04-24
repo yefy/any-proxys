@@ -27,6 +27,11 @@ lazy_static! {
 }
 
 lazy_static! {
+    pub static ref ANYPROXY_CONF_LOG_RAW_PATH: Mutex<String> =
+        Mutex::new("./logs/anyproxy.conf".to_string());
+}
+
+lazy_static! {
     pub static ref ANYPROXY_CONF_LOG_FULL_PATH: Mutex<String> =
         Mutex::new("./logs/anyproxy.toml".to_string());
 }

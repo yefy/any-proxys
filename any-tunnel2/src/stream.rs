@@ -1,6 +1,7 @@
 use super::protopack::TunnelData;
 use crate::anychannel::AnyAsyncReceiver;
 use crate::StreamPackToStreamReceiver;
+use any_base::io::async_write_msg::AsyncWriteBuf;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -126,6 +127,36 @@ impl Stream {
             let slice = slice.unwrap();
             self.buf = Some(StreamBuf::new(slice));
         }
+    }
+}
+
+impl any_base::io::async_stream::AsyncStream for Stream {
+    fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
+    }
+}
+
+impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+        return Poll::Ready(Ok(Vec::new()));
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
+    }
+}
+
+impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
+    fn poll_write_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        return Poll::Ready(Ok(0));
+    }
+
+    fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
     }
 }
 

@@ -2,6 +2,9 @@ use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
 //use std::future::Future;
+use crate::io::async_read_msg::AsyncReadMsg;
+use crate::io::async_stream::AsyncStream;
+use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
 use std::io;
 use std::io::ErrorKind;
 use std::pin::Pin;
@@ -11,12 +14,18 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 //use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub type StreamFlowRead = tokio::io::ReadHalf<StreamFlow>;
-pub type StreamFlowWrite = tokio::io::WriteHalf<StreamFlow>;
+pub type StreamFlowRead = crate::io::split::ReadHalf<StreamFlow>;
+pub type StreamFlowWrite = crate::io::split::WriteHalf<StreamFlow>;
 
 //+ Sync
 // pub trait AsyncReadAsyncWrite: AsyncRead + AsyncWrite + Send + Unpin {}
 // impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadAsyncWrite for T {}
+
+pub trait StreamRead: AsyncRead + AsyncReadMsg + AsyncStream + Send + Unpin {}
+impl<T: AsyncRead + AsyncReadMsg + AsyncStream + Send + Unpin> StreamRead for T {}
+
+pub trait StreamWrite: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Unpin {}
+impl<T: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Unpin> StreamWrite for T {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamFlowErr {
@@ -57,14 +66,14 @@ pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
     info: Option<Arc<Mutex<StreamFlowInfo>>>,
-    r: Box<dyn AsyncRead + Send + Unpin>,
-    w: Box<dyn AsyncWrite + Send + Unpin>,
+    r: Box<dyn StreamRead + Send + Unpin>,
+    w: Box<dyn StreamWrite + Send + Unpin>,
     fd: i32,
 }
 
 impl StreamFlow {
     pub fn split(self) -> (StreamFlowRead, StreamFlowWrite) {
-        tokio::io::split(self)
+        crate::io::split::split(self)
     }
     pub fn split_stream(
         self,
@@ -72,8 +81,8 @@ impl StreamFlow {
         tokio::time::Duration,
         tokio::time::Duration,
         Option<Arc<Mutex<StreamFlowInfo>>>,
-        Box<dyn AsyncRead + Send + Unpin>,
-        Box<dyn AsyncWrite + Send + Unpin>,
+        Box<dyn StreamRead + Send + Unpin>,
+        Box<dyn StreamWrite + Send + Unpin>,
         i32,
     ) {
         let StreamFlow {
@@ -89,8 +98,8 @@ impl StreamFlow {
 
     pub fn new(
         fd: i32,
-        r: Box<dyn AsyncRead + Send + Unpin>,
-        w: Box<dyn AsyncWrite + Send + Unpin>,
+        r: Box<dyn StreamRead + Send + Unpin>,
+        w: Box<dyn StreamWrite + Send + Unpin>,
     ) -> StreamFlow {
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
@@ -129,6 +138,7 @@ impl StreamFlow {
         }
         self.info = info;
     }
+
     /*
        async fn read_flow(&mut self, buf: &mut tokio::io::ReadBuf<'_>) -> io::Result<()> {
            let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
@@ -218,6 +228,11 @@ impl StreamFlow {
                     return Err(anyhow!("err:read_flow close"));
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted => {
+                    stream_err = StreamFlowErr::ReadClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:read_flow close"));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                     stream_err = StreamFlowErr::ReadClose;
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:read_flow close"));
@@ -349,6 +364,11 @@ impl StreamFlow {
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:write_flow close"));
                 }
+                Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                    stream_err = StreamFlowErr::WriteClose;
+                    kind = io::ErrorKind::ConnectionReset;
+                    return Err(anyhow!("err:write_flow close"));
+                }
                 Err(e) => {
                     stream_err = StreamFlowErr::WriteErr;
                     kind = e.kind();
@@ -376,6 +396,53 @@ impl StreamFlow {
                 Ok(usize)
             }
         }
+    }
+}
+
+impl crate::io::async_stream::AsyncStream for StreamFlow {
+    fn poll_is_single(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut self.r).poll_is_single(cx)
+    }
+}
+
+impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
+    fn poll_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+        let ret = Pin::new(&mut self.r).poll_read_msg(cx);
+        match ret {
+            Poll::Ready(ret) => match ret {
+                Err(e) => {
+                    self.read_flow(io::Result::Err(e))?;
+                    return Poll::Ready(Ok(Vec::new()));
+                }
+                Ok(data) => {
+                    self.read_flow(io::Result::Ok(data.len()))?;
+                    return Poll::Ready(Ok(data));
+                }
+            },
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut self.r).poll_is_read_msg(cx)
+    }
+}
+
+impl crate::io::async_write_msg::AsyncWriteMsg for StreamFlow {
+    fn poll_write_msg(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        let ret = Pin::new(&mut self.w).poll_write_msg(cx, buf);
+        match ret {
+            Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_is_write_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut self.w).poll_is_write_msg(cx)
     }
 }
 

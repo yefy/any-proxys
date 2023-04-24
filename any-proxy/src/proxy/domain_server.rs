@@ -3,6 +3,7 @@ use super::domain_stream;
 use crate::config::config_toml;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
+use crate::proxy::domain_context::DomainContext;
 use crate::stream::server;
 use crate::stream::server::Listener;
 use crate::stream::server::Server;
@@ -31,6 +32,7 @@ pub struct DomainServer {
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
     session_id: Arc<AtomicU64>,
+    domain_context: Rc<DomainContext>,
 }
 
 impl DomainServer {
@@ -45,6 +47,7 @@ impl DomainServer {
         tmp_file_id: Rc<RefCell<u64>>,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
         session_id: Arc<AtomicU64>,
+        domain_context: Rc<DomainContext>,
     ) -> Result<DomainServer> {
         Ok(DomainServer {
             executors,
@@ -58,6 +61,7 @@ impl DomainServer {
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_add_sock_hash,
             session_id,
+            domain_context,
         })
     }
 
@@ -117,52 +121,61 @@ impl DomainServer {
         let tmp_file_id = self.tmp_file_id.clone();
         let domain_config_listen_map = self.domain_config_listen_map.clone();
         let listen_shutdown_tx = self.listen_shutdown_tx.clone();
-        executor_local_spawn._start(move |executors| async move {
-            server::listen(
-                executors,
-                shutdown_timeout,
-                listen_shutdown_tx,
-                listen_server,
-                listen,
-                move |stream, server_stream_info, executors| async move {
-                    let domain_config_listen = {
-                        let domain_config_listen_map_borrow = domain_config_listen_map.borrow_mut();
-                        let domain_listen = domain_config_listen_map_borrow.get(&key);
-                        if domain_listen.is_none() {
-                            log::error!(
+        let domain_context = self.domain_context.clone();
+        executor_local_spawn._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |executors| async move {
+                server::listen(
+                    #[cfg(feature = "anyspawn-count")]
+                    format!("{}:{}", file!(), line!()),
+                    executors,
+                    shutdown_timeout,
+                    listen_shutdown_tx,
+                    listen_server,
+                    listen,
+                    move |stream, server_stream_info, executors| async move {
+                        let domain_config_listen = {
+                            let domain_config_listen_map_borrow =
+                                domain_config_listen_map.borrow_mut();
+                            let domain_listen = domain_config_listen_map_borrow.get(&key);
+                            if domain_listen.is_none() {
+                                log::error!(
                                 "err:domain_config_listen_map => key:{} invalid, group_version:{}",
                                 key,
                                 executors.group_version
                             );
-                            return Ok(());
-                        }
-                        let domain_listen = domain_listen.unwrap();
-                        let domain_config_listen = domain_listen.domain_config_listen.clone();
-                        domain_config_listen
-                    };
+                                return Ok(());
+                            }
+                            let domain_listen = domain_listen.unwrap();
+                            let domain_config_listen = domain_listen.domain_config_listen.clone();
+                            domain_config_listen
+                        };
 
-                    let domain_stream = domain_stream::DomainStream::new(
-                        executors,
-                        server_stream_info,
-                        tunnel_publish,
-                        tunnel2_publish,
-                        domain_config_listen,
-                        tmp_file_id,
-                        #[cfg(feature = "anyproxy-ebpf")]
-                        ebpf_add_sock_hash,
-                        session_id,
-                    )
-                    .map_err(|e| anyhow!("err:DomainStream::new => e:{}", e))?;
-                    domain_stream
-                        .start(stream)
-                        .await
-                        .map_err(|e| anyhow!("err:domain_stream.start => e:{}", e))?;
-                    Ok(())
-                },
-            )
-            .await
-            .map_err(|e| anyhow!("err:server::listen => e:{}", e))
-        });
+                        let domain_stream = domain_stream::DomainStream::new(
+                            executors,
+                            server_stream_info,
+                            tunnel_publish,
+                            tunnel2_publish,
+                            domain_config_listen,
+                            tmp_file_id,
+                            #[cfg(feature = "anyproxy-ebpf")]
+                            ebpf_add_sock_hash,
+                            session_id,
+                            domain_context,
+                        )
+                        .map_err(|e| anyhow!("err:DomainStream::new => e:{}", e))?;
+                        domain_stream
+                            .start(stream)
+                            .await
+                            .map_err(|e| anyhow!("err:domain_stream.start => e:{}", e))?;
+                        Ok(())
+                    },
+                )
+                .await
+                .map_err(|e| anyhow!("err:server::listen => e:{}", e))
+            },
+        );
         Ok(())
     }
 }

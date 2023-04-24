@@ -245,7 +245,10 @@ impl Worker {
     }
     pub fn add(&self) -> WorkerInner {
         if self.inner.complete.load(Ordering::SeqCst) {
-            log::error!("complete is true");
+            log::error!(
+                "complete is true, count:{}",
+                self.inner.count.load(Ordering::Relaxed)
+            );
         }
 
         self.inner.count.fetch_add(1, Ordering::Relaxed);
@@ -288,7 +291,10 @@ impl WorkerInner {
 
     pub fn done(&self) {
         if self.inner.complete.load(Ordering::SeqCst) {
-            log::error!("complete is true");
+            log::error!(
+                "complete is true, count:{}",
+                self.inner.count.load(Ordering::Relaxed)
+            );
         }
 
         let count = self.inner.count.fetch_sub(1, Ordering::Relaxed);

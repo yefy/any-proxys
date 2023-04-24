@@ -165,6 +165,12 @@ fn default_debug_is_open_ebpf_log() -> bool {
 fn default_worker_threads_blocking() -> usize {
     5
 }
+fn default_memlock_rlimit() -> MemlockRlimit {
+    MemlockRlimit {
+        curr: default_memlock_rlimit_curr(),
+        max: default_memlock_rlimit_max(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,6 +189,7 @@ pub struct CommonConfig {
     pub debug_is_print_config: bool,
     #[serde(default = "default_max_open_file_limit")]
     pub max_open_file_limit: u64,
+    #[serde(default = "default_memlock_rlimit")]
     pub memlock_rlimit: MemlockRlimit,
     #[serde(default = "default_debug_is_open_ebpf_log")]
     pub debug_is_open_ebpf_log: bool,
@@ -237,18 +244,81 @@ fn default_quic() -> Vec<QuicConfig> {
     }]
 }
 
+fn default_common() -> CommonConfig {
+    CommonConfig {
+        cpu_affinity: default_cpu_affinity(),
+        reuseport: default_reuseport(),
+        worker_threads: default_worker_threads(),
+        max_connections: default_max_connections(),
+        shutdown_timeout: default_shutdown_timeout(),
+        debug_is_print_config: default_config_log_stdout(),
+        max_open_file_limit: default_max_open_file_limit(),
+        memlock_rlimit: default_memlock_rlimit(),
+        debug_is_open_ebpf_log: default_debug_is_open_ebpf_log(),
+        worker_threads_blocking: default_worker_threads_blocking(),
+    }
+}
+
+fn default_tunnel2() -> Tunnel2Config {
+    Tunnel2Config {
+        tunnel2_worker_thread: default_tunnel2_worker_thread(),
+        tunnel2_max_connect: default_tunnel2_max_connect(),
+    }
+}
+
+fn default_stream() -> StreamConfig {
+    StreamConfig {
+        stream_cache_size: default_stream_cache_size(),
+        debug_is_open_stream_work_times: default_debug_is_open_stream_work_times(),
+        debug_print_access_log_time: default_debug_print_access_log_time(),
+        debug_print_stream_flow_time: default_debug_print_stream_flow_time(),
+        is_tmp_file_io_page: default_is_tmp_file_io_page(),
+        stream_so_singer_time: default_stream_so_singer_time(),
+    }
+}
+
+fn default_rate() -> RateLimit {
+    RateLimit {
+        download_limit_rate_after: default_download_limit_rate_after(),
+        download_limit_rate: default_download_limit_rate(),
+        upload_limit_rate_after: default_upload_limit_rate_after(),
+        upload_limit_rate: default_upload_limit_rate(),
+    }
+}
+
+fn default_tmp_file() -> TmpFile {
+    TmpFile {
+        download_tmp_file_size: default_download_tmp_file_size(),
+        upload_tmp_file_size: default_upload_tmp_file_size(),
+    }
+}
+
+fn default_fast_conf() -> FastConf {
+    FastConf {
+        is_open_ebpf: default_is_open_ebpf(),
+        debug_is_open_print: default_debug_is_open_print(),
+        is_open_sendfile: default_is_open_sendfile(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigToml {
+    #[serde(default = "default_common")]
     pub common: CommonConfig,
     #[serde(default = "default_tcp")]
     pub tcp: Vec<TcpConfig>,
     #[serde(default = "default_quic")]
     pub quic: Vec<QuicConfig>,
+    #[serde(default = "default_tunnel2")]
     pub tunnel2: Tunnel2Config,
+    #[serde(default = "default_stream")]
     pub stream: StreamConfig,
+    #[serde(default = "default_rate")]
     pub rate: RateLimit,
+    #[serde(default = "default_tmp_file")]
     pub tmp_file: TmpFile,
+    #[serde(default = "default_fast_conf")]
     pub fast_conf: FastConf,
     pub _port: Option<_PortConfig>,
     pub _domain: Option<_DomainConfig>,
@@ -330,6 +400,9 @@ fn default_debug_print_stream_flow_time() -> u64 {
 fn default_is_tmp_file_io_page() -> bool {
     true
 }
+fn default_stream_so_singer_time() -> usize {
+    300
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
@@ -343,6 +416,8 @@ pub struct StreamConfig {
     pub debug_print_stream_flow_time: u64,
     #[serde(default = "default_is_tmp_file_io_page")]
     pub is_tmp_file_io_page: bool,
+    #[serde(default = "default_stream_so_singer_time")]
+    pub stream_so_singer_time: usize,
 }
 
 fn default_access_log() -> bool {
@@ -354,7 +429,7 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
+    "[${local_time}] ${total_read_size} ${total_write_size} ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
 }
 
 fn default_access_log_stdout() -> bool {
@@ -436,6 +511,20 @@ pub struct TcpListen {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SslListenPort {
+    pub address: String,
+    pub ssl: SSL,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SslListenDomain {
+    pub address: String,
+    pub ssl: SSLDomain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuicListenPort {
     pub address: String,
     pub ssl: SSL,
@@ -454,6 +543,8 @@ pub struct QuicListenDomain {
 pub enum PortListen {
     #[serde(rename = "tcp")]
     Tcp(TcpListen),
+    #[serde(rename = "ssl")]
+    Ssl(SslListenPort),
     #[serde(rename = "quic")]
     Quic(QuicListenPort),
 }
@@ -464,8 +555,27 @@ pub enum PortListen {
 pub enum DomainListen {
     #[serde(rename = "tcp")]
     Tcp(TcpListen),
+    #[serde(rename = "ssl")]
+    Ssl(SslListenDomain),
     #[serde(rename = "quic")]
     Quic(QuicListenDomain),
+}
+
+impl DomainListen {
+    pub fn listen_type(&self) -> DomainListenType {
+        match &self {
+            &DomainListen::Tcp(_) => return DomainListenType::Tcp,
+            &DomainListen::Ssl(_) => return DomainListenType::Ssl,
+            &DomainListen::Quic(_) => return DomainListenType::Quic,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum DomainListenType {
+    Tcp = 0,
+    Ssl = 1,
+    Quic = 2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -491,12 +601,26 @@ pub struct ProxyPassQuicTunnel2 {
     pub weight: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyPassSslTunnel2 {
+    pub ssl_domain: String,
+    pub address: String, //ip:port, domain:port
+    pub tcp: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
+    pub is_proxy_protocol_hello: Option<bool>,
+    pub weight: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "tunnel_type")]
 pub enum ProxyPassTunnel2 {
     #[serde(rename = "tcp")]
     Tcp(ProxyPassTcpTunnel2),
+    #[serde(rename = "ssl")]
+    Ssl(ProxyPassSslTunnel2),
     #[serde(rename = "quic")]
     Quic(ProxyPassQuicTunnel2),
 }
@@ -546,6 +670,31 @@ pub struct ProxyPassTcpTunnel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProxyPassSsl {
+    pub ssl_domain: String,
+    pub address: String, //ip:port, domain:port
+    pub tcp: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
+    pub is_proxy_protocol_hello: Option<bool>,
+    pub weight: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyPassSslTunnel {
+    pub tunnel: Tunnel,
+    pub ssl_domain: String,
+    pub address: String, //ip:port, domain:port
+    pub tcp: Option<String>,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
+    pub is_proxy_protocol_hello: Option<bool>,
+    pub weight: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyPassQuic {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
@@ -575,6 +724,8 @@ pub struct ProxyPassQuicTunnel {
 pub enum ProxyPassTunnel {
     #[serde(rename = "tcp")]
     Tcp(ProxyPassTcpTunnel),
+    #[serde(rename = "ssl")]
+    Ssl(ProxyPassSslTunnel),
     #[serde(rename = "quic")]
     Quic(ProxyPassQuicTunnel),
 }
@@ -591,6 +742,8 @@ pub struct ProxyPassUpstream {
 pub enum ProxyPass {
     #[serde(rename = "tcp")]
     Tcp(ProxyPassTcp),
+    #[serde(rename = "ssl")]
+    Ssl(ProxyPassSsl),
     #[serde(rename = "quic")]
     Quic(ProxyPassQuic),
     #[serde(rename = "tunnel")]
@@ -682,6 +835,7 @@ pub struct DomainServerConfig {
     pub is_proxy_protocol_hello: Option<bool>,
     #[serde(default = "default_heartbeat")]
     pub heartbeat: bool,
+    pub server: Option<ServerConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,4 +924,102 @@ pub struct UpstreamServerConfig {
     #[serde(default = "default_upstream_dispatch")]
     pub dispatch: UpstreamDispatch,
     pub proxy_pass: Vec<ProxyPass>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "server")]
+pub enum ServerConfig {
+    #[serde(rename = "http_server")]
+    HttpServer(HttpServer),
+    #[serde(rename = "websocket_server")]
+    WebsocketServer(WebsocketServer),
+}
+
+impl ServerConfig {
+    pub fn server_type(&self) -> ServerConfigType {
+        match &self {
+            &ServerConfig::HttpServer(_) => return ServerConfigType::HttpServer,
+            &ServerConfig::WebsocketServer(_) => return ServerConfigType::WebsocketServer,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServerConfigType {
+    Nil = 0,
+    HttpServer = 1,
+    WebsocketServer = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpServer {
+    pub http: HttpServerConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebsocketServer {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "http_server")]
+pub enum HttpServerConfig {
+    #[serde(rename = "echo_server")]
+    EchoServer(HttpServerEchoConfig),
+    #[serde(rename = "static_server")]
+    StaticServer(HttpServerStaticConfig),
+    #[serde(rename = "proxy_server")]
+    ProxyServer(HttpServerProxyConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpServerEchoConfig {
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpServerStaticConfig {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpServerProxyConfig {
+    pub proxy_pass: HttpServerProxyPassConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "lowercase")]
+pub enum HttpVersion {
+    #[serde(rename = "http1.1")]
+    Http1_1,
+    #[serde(rename = "http2.0")]
+    Http2_0,
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+pub fn default_http_server_proxy_pass_config_version() -> HttpVersion {
+    HttpVersion::Auto
+}
+pub fn default_http_server_proxy_pass_config_pool_max_idle_per_host() -> usize {
+    100
+}
+pub fn default_http_server_proxy_pass_config_pool_idle_timeout() -> u64 {
+    60
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpServerProxyPassConfig {
+    #[serde(default = "default_http_server_proxy_pass_config_version")]
+    pub version: HttpVersion,
+    #[serde(default = "default_http_server_proxy_pass_config_pool_max_idle_per_host")]
+    pub pool_max_idle_per_host: usize,
+    #[serde(default = "default_http_server_proxy_pass_config_pool_idle_timeout")]
+    pub pool_idle_timeout: u64,
 }

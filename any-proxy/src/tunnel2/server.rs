@@ -14,6 +14,7 @@ pub struct Listener {
     listener: tunnel_server::Listener,
     stream_send_timeout: usize,
     stream_recv_timeout: usize,
+    is_tls: bool,
 }
 
 impl Listener {
@@ -22,12 +23,14 @@ impl Listener {
         listener: tunnel_server::Listener,
         stream_send_timeout: usize,
         stream_recv_timeout: usize,
+        is_tls: bool,
     ) -> Result<Listener> {
         Ok(Listener {
             protocol7,
             listener,
             stream_send_timeout,
             stream_recv_timeout,
+            is_tls,
         })
     }
 }
@@ -52,6 +55,7 @@ impl server::Listener for Listener {
                 remote_addr,
                 self.stream_send_timeout,
                 self.stream_recv_timeout,
+                self.is_tls,
             )?),
             false,
         ))
@@ -64,6 +68,7 @@ pub struct Connection {
     remote_addr: Option<SocketAddr>,
     stream_send_timeout: usize,
     stream_recv_timeout: usize,
+    is_tls: bool,
 }
 
 impl Connection {
@@ -73,6 +78,7 @@ impl Connection {
         remote_addr: SocketAddr,
         stream_send_timeout: usize,
         stream_recv_timeout: usize,
+        is_tls: bool,
     ) -> Result<Connection> {
         Ok(Connection {
             protocol7,
@@ -80,6 +86,7 @@ impl Connection {
             remote_addr: Some(remote_addr),
             stream_send_timeout,
             stream_recv_timeout,
+            is_tls,
         })
     }
 }
@@ -92,7 +99,7 @@ impl server::Connection for Connection {
         }
         let stream = self.stream.take().unwrap();
         let remote_addr = self.remote_addr.take().unwrap();
-        let (r, w) = tokio::io::split(stream);
+        let (r, w) = any_base::io::split::split(stream);
         let mut stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
         let read_timeout = tokio::time::Duration::from_secs(self.stream_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
@@ -105,6 +112,7 @@ impl server::Connection for Connection {
                 remote_addr: remote_addr,
                 local_addr: None,
                 domain: None,
+                is_tls: self.is_tls,
             },
         )))
     }

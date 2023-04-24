@@ -29,6 +29,7 @@ pub struct PeerStreamKey {
     pub key: String,
     pub local_addr: SocketAddr,
     pub remote_addr: SocketAddr,
+    pub domain: Option<String>,
     pub to_peer_stream_tx: async_channel::Sender<PeerStreamRecv>,
 }
 
@@ -115,6 +116,7 @@ impl PeerStream {
         is_client: bool,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
+        domain: Option<String>,
         client_context: Option<Arc<ClientContext>>,
         accept_tx: Option<AcceptSenderType>,
         key: String,
@@ -124,6 +126,7 @@ impl PeerStream {
             key,
             local_addr,
             remote_addr,
+            domain,
             to_peer_stream_tx,
         });
 
@@ -340,8 +343,14 @@ impl PeerStream {
                 return Err(anyhow!("err:self.is_client && tunnel_hello.is_none()"));
             }
 
+            let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.clone_and_ref();
+            if peer_stream_to_peer_client_tx.is_none() {
+                return Err(anyhow!("peer_stream_to_peer_client_tx.is_none"));
+            }
+            let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.unwrap();
+
             let mut peer_stream_read = PeerStreamRead::new(r,
-                                        peer_stream_to_peer_client_tx.clone_and_ref(),
+                                                           peer_stream_to_peer_client_tx,
                                         stream_to_peer_stream_rx.clone(),
                                         min_stream_cache_size,
                                         channel_size,
@@ -422,10 +431,6 @@ impl PeerStream {
             ));
         }
 
-        if min_stream_cache_size <= 0 {
-            return Ok(true);
-        }
-
         if self.context.client_context.is_some() {
             self.context
                 .client_context
@@ -438,6 +443,9 @@ impl PeerStream {
                 );
         }
 
+        if min_stream_cache_size <= 0 {
+            return Ok(true);
+        }
         Ok(false)
     }
 

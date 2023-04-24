@@ -7,7 +7,7 @@ edition = "2021"
 
 
 [features]
-default = ["anyack", "anyruntime-tokio-spawn-local"]
+default = ["anyack", "anyruntime-tokio-spawn"]
 anydebug-error = ["anydebug", "anyerror"]
 anydebug = []
 anyerror = []

@@ -8,6 +8,7 @@ edition = "2021"
 
 [features]
 default = []
+anyspawn-count = []
 
 [dependencies]
 anyhow = {path = "../anyhow"}

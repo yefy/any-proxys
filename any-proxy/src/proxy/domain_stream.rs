@@ -1,14 +1,19 @@
 use super::domain_config;
 use super::heartbeat_stream::HeartbeatStream;
+use super::http_proxy::http_server;
 use super::proxy;
-use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
 use super::stream_start;
 use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
+use crate::config::config_toml::ServerConfigType;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
 use crate::protopack;
+use crate::proxy::domain_context::DomainContext;
+use crate::proxy::util as proxy_util;
+use crate::proxy::websocket_proxy::websocket_server;
+use crate::proxy::ServerArg;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use any_base::executor_local_spawn::ExecutorsLocal;
@@ -17,10 +22,9 @@ use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 pub struct DomainStream {
@@ -29,11 +33,11 @@ pub struct DomainStream {
     tunnel_publish: tunnel_server::Publish,
     tunnel2_publish: tunnel2_server::Publish,
     domain_config_listen: Rc<domain_config::DomainConfigListen>,
-    domain_config_context: Option<Rc<domain_config::DomainConfigContext>>,
     tmp_file_id: Rc<RefCell<u64>>,
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
     session_id: Arc<AtomicU64>,
+    domain_context: Rc<DomainContext>,
 }
 
 impl DomainStream {
@@ -46,6 +50,7 @@ impl DomainStream {
         tmp_file_id: Rc<RefCell<u64>>,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
         session_id: Arc<AtomicU64>,
+        domain_context: Rc<DomainContext>,
     ) -> Result<DomainStream> {
         Ok(DomainStream {
             executors,
@@ -53,21 +58,22 @@ impl DomainStream {
             tunnel_publish,
             tunnel2_publish,
             domain_config_listen,
-            domain_config_context: None,
             tmp_file_id,
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_add_sock_hash,
             session_id,
+            domain_context,
         })
     }
 
     pub async fn start(self, mut stream: stream_flow::StreamFlow) -> Result<()> {
-        let (debug_print_access_log_time, debug_print_stream_flow_time) = {
+        let (debug_print_access_log_time, debug_print_stream_flow_time, stream_so_singer_time) = {
             let stream_conf = &self.domain_config_listen.stream;
 
             (
                 stream_conf.debug_print_access_log_time,
                 stream_conf.debug_print_stream_flow_time,
+                stream_conf.stream_so_singer_time,
             )
         };
 
@@ -77,7 +83,8 @@ impl DomainStream {
                 .stream
                 .debug_is_open_stream_work_times,
         );
-        stream.set_stream_info(Some(stream_info.client_stream_flow_info.clone()));
+        let stream_info = Rc::new(RefCell::new(stream_info));
+        stream.set_stream_info(Some(stream_info.borrow().client_stream_flow_info.clone()));
         let shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
 
         stream_start::do_start(
@@ -87,6 +94,7 @@ impl DomainStream {
             shutdown_thread_rx,
             debug_print_access_log_time,
             debug_print_stream_flow_time,
+            stream_so_singer_time,
         )
         .await
     }
@@ -97,8 +105,9 @@ impl proxy::Stream for DomainStream {
     async fn do_start(
         &mut self,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        stream: stream_flow::StreamFlow,
     ) -> Result<()> {
+        let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
         stream_info.borrow_mut().add_work_time("tunnel_stream");
 
         let client_buf_reader = TunnelStream::tunnel_stream(
@@ -127,116 +136,81 @@ impl proxy::Stream for DomainStream {
         if ret.is_none() {
             return Ok(());
         }
-        let (mut client_buf_reader, stream_info) = ret.unwrap();
+        let (client_buf_reader, stream_info) = ret.unwrap();
 
-        stream_info.borrow_mut().add_work_time("hello");
-
-        let hello = {
-            stream_info.borrow_mut().err_status = ErrStatus::ClientProtoErr;
-            let hello = protopack::anyproxy::read_hello(&mut client_buf_reader)
-                .await
-                .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
-            match hello {
-                Some((hello, hello_pack_size)) => {
-                    stream_info.borrow_mut().client_protocol_hello_size = hello_pack_size;
-                    if self.server_stream_info.domain.is_some() {
-                        stream_info.borrow_mut().ssl_domain =
-                            self.server_stream_info.domain.clone();
-                    } else {
-                        stream_info.borrow_mut().ssl_domain = Some(hello.domain.clone());
-                    }
-                    stream_info.borrow_mut().remote_domain = Some(hello.domain.clone());
-                    stream_info.borrow_mut().local_domain = Some(hello.domain.clone());
-                    hello
-                }
-                None => {
-                    let domain = protopack::ssl_hello::read_domain(&mut client_buf_reader)
-                        .await
-                        .map_err(|e| anyhow!("err:ssl_hello::read_domain => e:{}", e))?;
-                    let domain = match domain {
-                        Some(domain) => domain,
-                        None => {
-                            if self.server_stream_info.domain.is_none() {
-                                return Err(anyhow!("err:domain null"));
-                            }
-                            self.server_stream_info.domain.clone().unwrap()
-                        }
-                    };
-
-                    if self.server_stream_info.domain.is_some() {
-                        stream_info.borrow_mut().ssl_domain =
-                            self.server_stream_info.domain.clone();
-                    } else {
-                        stream_info.borrow_mut().ssl_domain = Some(domain.clone());
-                    }
-                    stream_info.borrow_mut().ssl_domain = Some(domain.clone());
-                    stream_info.borrow_mut().remote_domain = Some(domain.clone());
-                    stream_info.borrow_mut().local_domain = Some(domain.clone());
-
-                    protopack::anyproxy::AnyproxyHello {
-                        version: protopack::anyproxy::ANYPROXY_VERSION.to_string(),
-                        request_id: format!(
-                            "{:?}_{}_{}_{}_{}",
-                            stream_info.borrow().server_stream_info.local_addr,
-                            stream_info.borrow().server_stream_info.remote_addr,
-                            unsafe { libc::getpid() },
-                            self.session_id.fetch_add(1, Ordering::Relaxed),
-                            Local::now().timestamp_millis()
-                        ),
-                        client_addr: stream_info.borrow().server_stream_info.remote_addr.clone(),
-                        domain,
-                    }
-                }
-            }
+        let arg = ServerArg {
+            executors: self.executors.clone(),
+            stream_info: stream_info.clone(),
+            domain_config_listen: self.domain_config_listen.clone(),
+            server_stream_info: self.server_stream_info.clone(),
+            session_id: self.session_id.clone(),
+            http_context: self.domain_context.http_context.clone(),
+            tmp_file_id: self.tmp_file_id.clone(),
         };
 
-        stream_info.borrow_mut().request_id = hello.request_id.clone();
-        {
-            *stream_info.borrow().protocol_hello.lock().unwrap() = Some(Arc::new(hello));
+        match self.domain_config_listen.server_type {
+            ServerConfigType::Nil => {
+                //next
+            }
+            ServerConfigType::HttpServer => {
+                let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+                    any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+                );
+                http_server::http_connection(arg, client_buf_stream).await?;
+                return Ok(());
+            }
+            ServerConfigType::WebsocketServer => {
+                let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+                    any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+                );
+                return websocket_server::WebsocketServer::new(arg)
+                    .run(client_buf_stream)
+                    .await;
+            }
         }
 
-        let domain_index = {
-            self.domain_config_listen
-                .domain_index
-                .index(
-                    &stream_info
-                        .borrow()
-                        .protocol_hello
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .unwrap()
-                        .domain,
+        let client_buf_reader = Arc::new(tokio::sync::Mutex::new(Some(client_buf_reader)));
+
+        let client_buf_reader_hello = client_buf_reader.clone();
+        let client_buf_reader_domain = client_buf_reader.clone();
+        let server_stream_info = self.server_stream_info.clone();
+
+        let stream_config_context = proxy_util::parse_proxy_domain(
+            &arg,
+            move || async move {
+                let hello = protopack::anyproxy::read_hello(
+                    &mut client_buf_reader_hello.lock().await.as_mut().unwrap(),
                 )
-                .map_err(|e| anyhow!("err:domain_index.index => e:{}", e))?
-        };
-        let domain_config_context = self
-            .domain_config_listen
-            .domain_config_context_map
-            .get(&domain_index)
-            .cloned()
-            .ok_or(anyhow!(
-                "err:domain_index nil => domain_index:{}",
-                domain_index
-            ))?;
+                .await
+                .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
+                Ok(hello)
+            },
+            move || async move {
+                let domain = protopack::ssl_hello::read_domain(
+                    &mut client_buf_reader_domain.lock().await.as_mut().unwrap(),
+                )
+                .await
+                .map_err(|e| anyhow!("err:ssl_hello::read_domain => e:{}", e))?;
+                let domain = match domain {
+                    Some(domain) => domain,
+                    None => {
+                        if server_stream_info.domain.is_none() {
+                            return Err(anyhow!("err:domain null"));
+                        }
+                        server_stream_info.domain.clone().unwrap()
+                    }
+                };
+                Ok(domain)
+            },
+        )
+        .await?;
 
-        self.domain_config_context = Some(domain_config_context);
-        let config_ctx = self
-            .domain_config_context
-            .as_ref()
-            .unwrap()
-            .stream_config_context
-            .clone();
-
-        stream_info.borrow_mut().stream_config_context = Some(config_ctx.clone());
-        stream_info.borrow_mut().debug_is_open_print = config_ctx.fast_conf.debug_is_open_print;
-        stream_info.borrow_mut().debug_is_open_stream_work_times =
-            config_ctx.stream.debug_is_open_stream_work_times;
+        let client_buf_reader = client_buf_reader.lock().await.take().unwrap();
 
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
         StreamStream::connect_and_stream(
-            config_ctx.clone(),
+            stream_config_context,
             stream_info,
             client_buffer,
             client_stream,

@@ -157,6 +157,17 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                     let upstream_name = format!("tcp_{:?}", tcp);
                     upstream_name
                 }
+                config_toml::ProxyPass::Ssl(ssl) => {
+                    if ssl.tcp.is_none() {
+                        ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                    }
+                    // let upstream_name = "tcp_".to_string()
+                    //     + &tcp.address.clone()
+                    //     + "_"
+                    //     + &tcp.tcp.clone().take().unwrap();
+                    let upstream_name = format!("ssl_{:?}", ssl);
+                    upstream_name
+                }
                 config_toml::ProxyPass::Quic(quic) => {
                     if quic.quic.is_none() {
                         quic.quic = Some(config.quic[0].quic_name.clone())
@@ -178,6 +189,17 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         //     + "_"
                         //     + &tcp.tcp.clone().take().unwrap();
                         let upstream_name = format!("tcp_tunnel_{:?}", tcp);
+                        upstream_name
+                    }
+                    config_toml::ProxyPassTunnel::Ssl(ssl) => {
+                        if ssl.tcp.is_none() {
+                            ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                        }
+                        // let upstream_name = "tcp_tunnel_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("ssl_tunnel_{:?}", ssl);
                         upstream_name
                     }
                     config_toml::ProxyPassTunnel::Quic(quic) => {
@@ -202,6 +224,17 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         //     + "_"
                         //     + &tcp.tcp.clone().take().unwrap();
                         let upstream_name = format!("tcp_tunnel2_{:?}", tcp);
+                        upstream_name
+                    }
+                    config_toml::ProxyPassTunnel2::Ssl(ssl) => {
+                        if ssl.tcp.is_none() {
+                            ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                        }
+                        // let upstream_name = "tcp_tunnel2_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("ssl_tunnel2_{:?}", ssl);
                         upstream_name
                     }
                     config_toml::ProxyPassTunnel2::Quic(quic) => {
@@ -311,20 +344,33 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                     if tcp.tcp.is_none() {
                         tcp.tcp = Some(config.tcp[0].tcp_name.clone())
                     }
-                    let upstream_name = "tcp_".to_string()
-                        + &tcp.address.clone()
-                        + "_"
-                        + &tcp.tcp.clone().take().unwrap();
+                    // let upstream_name = "tcp_".to_string()
+                    //     + &tcp.address.clone()
+                    //     + "_"
+                    //     + &tcp.tcp.clone().take().unwrap();
+                    let upstream_name = format!("tcp_{:?}", tcp);
+                    upstream_name
+                }
+                config_toml::ProxyPass::Ssl(ssl) => {
+                    if ssl.tcp.is_none() {
+                        ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                    }
+                    // let upstream_name = "tcp_".to_string()
+                    //     + &tcp.address.clone()
+                    //     + "_"
+                    //     + &tcp.tcp.clone().take().unwrap();
+                    let upstream_name = format!("ssl_{:?}", ssl);
                     upstream_name
                 }
                 config_toml::ProxyPass::Quic(quic) => {
                     if quic.quic.is_none() {
                         quic.quic = Some(config.quic[0].quic_name.clone())
                     }
-                    let upstream_name = "quic_".to_string()
-                        + &quic.address.clone()
-                        + "_"
-                        + &quic.quic.clone().take().unwrap();
+                    // let upstream_name = "quic_".to_string()
+                    //     + &quic.address.clone()
+                    //     + "_"
+                    //     + &quic.quic.clone().take().unwrap();
+                    let upstream_name = format!("quic_{:?}", quic);
                     upstream_name
                 }
                 config_toml::ProxyPass::Tunnel(tunnel) => match tunnel {
@@ -332,20 +378,33 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         if tcp.tcp.is_none() {
                             tcp.tcp = Some(config.tcp[0].tcp_name.clone())
                         }
-                        let upstream_name = "tcp_tunnel_".to_string()
-                            + &tcp.address.clone()
-                            + "_"
-                            + &tcp.tcp.clone().take().unwrap();
+                        // let upstream_name = "tcp_tunnel_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("tcp_tunnel_{:?}", tcp);
+                        upstream_name
+                    }
+                    config_toml::ProxyPassTunnel::Ssl(ssl) => {
+                        if ssl.tcp.is_none() {
+                            ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                        }
+                        // let upstream_name = "tcp_tunnel_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("ssl_tunnel_{:?}", ssl);
                         upstream_name
                     }
                     config_toml::ProxyPassTunnel::Quic(quic) => {
                         if quic.quic.is_none() {
                             quic.quic = Some(config.quic[0].quic_name.clone())
                         }
-                        let upstream_name = "quic_tunnel_".to_string()
-                            + &quic.address.clone()
-                            + "_"
-                            + &quic.quic.clone().take().unwrap();
+                        // let upstream_name = "quic_tunnel_".to_string()
+                        //     + &quic.address.clone()
+                        //     + "_"
+                        //     + &quic.quic.clone().take().unwrap();
+                        let upstream_name = format!("quic_tunnel_{:?}", quic);
                         upstream_name
                     }
                 },
@@ -354,20 +413,33 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         if tcp.tcp.is_none() {
                             tcp.tcp = Some(config.tcp[0].tcp_name.clone())
                         }
-                        let upstream_name = "tcp_tunnel2_".to_string()
-                            + &tcp.address.clone()
-                            + "_"
-                            + &tcp.tcp.clone().take().unwrap();
+                        // let upstream_name = "tcp_tunnel2_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("tcp_tunnel2_{:?}", tcp);
+                        upstream_name
+                    }
+                    config_toml::ProxyPassTunnel2::Ssl(ssl) => {
+                        if ssl.tcp.is_none() {
+                            ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                        }
+                        // let upstream_name = "tcp_tunnel2_".to_string()
+                        //     + &tcp.address.clone()
+                        //     + "_"
+                        //     + &tcp.tcp.clone().take().unwrap();
+                        let upstream_name = format!("ssl_tunnel2_{:?}", ssl);
                         upstream_name
                     }
                     config_toml::ProxyPassTunnel2::Quic(quic) => {
                         if quic.quic.is_none() {
                             quic.quic = Some(config.quic[0].quic_name.clone())
                         }
-                        let upstream_name = "quic_tunnel2_".to_string()
-                            + &quic.address.clone()
-                            + "_"
-                            + &quic.quic.clone().take().unwrap();
+                        // let upstream_name = "quic_tunnel2_".to_string()
+                        //     + &quic.address.clone()
+                        //     + "_"
+                        //     + &quic.quic.clone().take().unwrap();
+                        let upstream_name = format!("quic_tunnel2_{:?}", quic);
                         upstream_name
                     }
                 },
@@ -395,6 +467,11 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                             tcp.tcp = Some(config.tcp[0].tcp_name.clone())
                         }
                     }
+                    config_toml::ProxyPass::Ssl(ssl) => {
+                        if ssl.tcp.is_none() {
+                            ssl.tcp = Some(config.tcp[0].tcp_name.clone())
+                        }
+                    }
                     config_toml::ProxyPass::Quic(quic) => {
                         if quic.quic.is_none() {
                             quic.quic = Some(config.quic[0].quic_name.clone())
@@ -404,6 +481,11 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         config_toml::ProxyPassTunnel::Tcp(tcp) => {
                             if tcp.tcp.is_none() {
                                 tcp.tcp = Some(config.tcp[0].tcp_name.clone())
+                            }
+                        }
+                        config_toml::ProxyPassTunnel::Ssl(ssl) => {
+                            if ssl.tcp.is_none() {
+                                ssl.tcp = Some(config.tcp[0].tcp_name.clone())
                             }
                         }
                         config_toml::ProxyPassTunnel::Quic(quic) => {
@@ -416,6 +498,11 @@ pub fn merger(mut config: config_toml::ConfigToml) -> Result<config_toml::Config
                         config_toml::ProxyPassTunnel2::Tcp(tcp) => {
                             if tcp.tcp.is_none() {
                                 tcp.tcp = Some(config.tcp[0].tcp_name.clone())
+                            }
+                        }
+                        config_toml::ProxyPassTunnel2::Ssl(ssl) => {
+                            if ssl.tcp.is_none() {
+                                ssl.tcp = Some(config.tcp[0].tcp_name.clone())
                             }
                         }
                         config_toml::ProxyPassTunnel2::Quic(quic) => {

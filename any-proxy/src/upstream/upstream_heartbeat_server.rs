@@ -20,15 +20,19 @@ impl UpstreamHeartbeatServer {
         ups_data: Arc<Mutex<UpstreamData>>,
         index: usize,
     ) {
-        executors._start(move |executors| async move {
-            let heartbeat_server = UpstreamHeartbeatServer::new(executors, ups_data, index)
-                .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
-            heartbeat_server
-                .start()
-                .await
-                .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
-            Ok(())
-        });
+        executors._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |executors| async move {
+                let heartbeat_server = UpstreamHeartbeatServer::new(executors, ups_data, index)
+                    .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
+                heartbeat_server
+                    .start()
+                    .await
+                    .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
+                Ok(())
+            },
+        );
     }
     pub fn new(
         executors: ExecutorsLocal,

@@ -4,6 +4,7 @@ use super::proxy;
 use crate::config::config_toml;
 #[cfg(feature = "anyproxy-ebpf")]
 use crate::ebpf::any_ebpf;
+use crate::proxy::domain_context::DomainContext;
 use crate::upstream::upstream;
 use crate::TunnelClients;
 use crate::Tunnels;
@@ -33,6 +34,7 @@ pub struct Domain {
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
     session_id: Arc<AtomicU64>,
+    context: Rc<DomainContext>,
 }
 
 impl Domain {
@@ -52,6 +54,7 @@ impl Domain {
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_add_sock_hash,
             session_id,
+            context: Rc::new(DomainContext::new()),
         })
     }
 }
@@ -155,9 +158,12 @@ impl proxy::Proxy for Domain {
             #[cfg(feature = "anyproxy-ebpf")]
             let ebpf_add_sock_hash = self.ebpf_add_sock_hash.clone();
             let session_id = self.session_id.clone();
+            let domain_context = self.context.clone();
 
-            self.executor_local_spawn
-                ._start(move |executors| async move {
+            self.executor_local_spawn._start(
+                #[cfg(feature = "anyspawn-count")]
+                format!("{}:{}", file!(), line!()),
+                move |executors| async move {
                     let domain_server = domain_server::DomainServer::new(
                         executors,
                         tunnels,
@@ -170,6 +176,7 @@ impl proxy::Proxy for Domain {
                         #[cfg(feature = "anyproxy-ebpf")]
                         ebpf_add_sock_hash,
                         session_id,
+                        domain_context,
                     )
                     .map_err(|e| anyhow!("err:DomainServer::new => e:{}", e))?;
                     domain_server
@@ -177,11 +184,16 @@ impl proxy::Proxy for Domain {
                         .await
                         .map_err(|e| anyhow!("err:domain_server.start => e:{}", e))?;
                     Ok(())
-                });
+                },
+            );
         }
         Ok(())
     }
     async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) -> Result<()> {
+        scopeguard::defer! {
+            log::info!("end domain stop flag:{}", flag);
+        }
+        log::info!("start domain stop flag:{}", flag);
         self.executor_local_spawn
             .stop(flag, is_fast_shutdown, shutdown_timeout)
             .await;

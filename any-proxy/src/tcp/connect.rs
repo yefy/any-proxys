@@ -1,9 +1,10 @@
-use super::client as tcp_lient;
+use super::client as tcp_client;
 use crate::config::config_toml::TcpConfig;
 use crate::stream::client::Client;
 use crate::stream::connect;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::stream_flow;
+use crate::Protocol7;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -49,8 +50,8 @@ impl connect::Connect for Connect {
         let start_time = Instant::now();
         let addr = self.context.address.clone();
         let client =
-            tcp_lient::Client::new(addr, timeout, Arc::new(self.context.tcp_config.clone()))
-                .map_err(|e| anyhow!("err:tcp_lient::Client::new => e:{}", e))?;
+            tcp_client::Client::new(addr, timeout, Arc::new(self.context.tcp_config.clone()))
+                .map_err(|e| anyhow!("err:tcp_client::Client::new => e:{}", e))?;
         let connection = {
             client
                 .connect(stream_info)
@@ -85,5 +86,22 @@ impl connect::Connect for Connect {
                 channel_size: None,
             },
         ))
+    }
+
+    async fn addr(&self) -> Result<SocketAddr> {
+        Ok(self.context.address.clone())
+    }
+
+    async fn host(&self) -> Result<String> {
+        Ok(self.context.host.clone())
+    }
+    async fn is_tls(&self) -> bool {
+        false
+    }
+    async fn protocol7(&self) -> String {
+        Protocol7::Tcp.to_string()
+    }
+    async fn domain(&self) -> String {
+        self.context.host.clone()
     }
 }

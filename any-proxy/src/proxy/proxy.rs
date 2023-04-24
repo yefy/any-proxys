@@ -36,7 +36,7 @@ pub trait Stream {
     async fn do_start(
         &mut self,
         stream_info: Rc<RefCell<StreamInfo>>,
-        client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        stream: stream_flow::StreamFlow,
     ) -> Result<()>;
 }
 

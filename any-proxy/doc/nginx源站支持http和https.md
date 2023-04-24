@@ -18,5 +18,5 @@ vim /etc/hosts
 127.0.0.1 www.upstream.cn
 
 # 测试
-curl http://www.example.cn:18080 -v  
-curl https://www.example.cn:1444 -v --insecure  
+curl http://www.example.cn:19090 -v  
+curl https://www.example.cn:19091 -v -k  

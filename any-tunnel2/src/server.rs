@@ -5,6 +5,7 @@ use super::stream_flow::StreamFlow;
 use super::tunnel::Tunnel;
 use super::Protocol4;
 use crate::peer_client::PeerClientSender;
+use crate::push_stream::PushStream;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -50,10 +51,12 @@ impl Publish {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
+        let stream = PushStream::new(r, w);
+        let (r, w) = any_base::io::split::split(stream);
         self.server
             .insert_peer_stream(
                 self.tunnel_key.clone(),
-                StreamFlow::new(0, r, w),
+                StreamFlow::new(0, Box::new(r), Box::new(w)),
                 local_addr,
                 remote_addr,
             )

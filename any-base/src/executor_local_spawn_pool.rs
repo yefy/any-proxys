@@ -37,13 +37,21 @@ impl ExecutorLocalSpawnPool {
         };
     }
 
-    pub fn _start<S, F>(&mut self, service: S) -> Result<()>
+    pub fn _start<S, F>(
+        &mut self,
+        #[cfg(feature = "anyspawn-count")] name: String,
+        service: S,
+    ) -> Result<()>
     where
         S: FnOnce(ExecutorsLocal) -> F + 'static + Clone,
         F: Future<Output = Result<()>> + 'static,
     {
         for _ in 0..self.worker_threads {
-            self.executor_local_spawn._start::<S, F>(service.clone());
+            self.executor_local_spawn._start::<S, F>(
+                #[cfg(feature = "anyspawn-count")]
+                name.clone(),
+                service.clone(),
+            );
         }
 
         Ok(())

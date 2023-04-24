@@ -1,9 +1,9 @@
 extern crate rand;
 use crate::stream::connect;
 use crate::upstream::UpstreamData;
-use std::rc::Rc;
+use std::sync::Arc;
 
-pub fn fair(ups_data: &mut UpstreamData) -> Option<(Option<bool>, Rc<Box<dyn connect::Connect>>)> {
+pub fn fair(ups_data: &mut UpstreamData) -> Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
     if ups_data.ups_heartbeats_active.len() <= 0 {
         return None;
     }

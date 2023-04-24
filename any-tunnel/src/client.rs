@@ -35,6 +35,7 @@ impl ClientContext {
         min_stream_cache_size: usize,
     ) {
         if min_stream_cache_size <= 0 {
+            peer_stream_key.to_peer_stream_tx.close();
             return;
         }
 
@@ -146,10 +147,10 @@ impl Client {
         peer_stream_size: Option<Arc<AtomicUsize>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
         let client_id = CLIENT_ID.fetch_add(1, Ordering::Relaxed);
-        let max_stream_size = peer_stream_connect.max_stream_size();
-        let min_stream_cache_size = peer_stream_connect.min_stream_cache_size();
-        let channel_size = peer_stream_connect.channel_size();
-        let (_, stream, local_addr, remote_addr) = PeerClient::create_stream_and_peer_client(
+        let max_stream_size = peer_stream_connect.max_stream_size().await;
+        let min_stream_cache_size = peer_stream_connect.min_stream_cache_size().await;
+        let channel_size = peer_stream_connect.channel_size().await;
+        let (_, stream, local_addr, remote_addr, _) = PeerClient::create_stream_and_peer_client(
             true,
             max_stream_size,
             Some((self.pid, client_id)),

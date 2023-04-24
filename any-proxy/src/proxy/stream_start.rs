@@ -1,20 +1,17 @@
+use super::access_log::AccessLog;
 use super::proxy;
 use super::stream_info;
 use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
-use super::stream_var;
 use super::StreamConfigContext;
-use crate::config::config_toml;
 use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
-use crate::util::var;
 use any_base::stream_flow;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
 use std::cell::RefCell;
-use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -23,20 +20,19 @@ use tokio::sync::broadcast;
 
 pub async fn do_start(
     mut start_stream: impl proxy::Stream,
-    stream_info: StreamInfo,
+    stream_info: Rc<RefCell<StreamInfo>>,
     stream: stream_flow::StreamFlow,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
     debug_print_access_log_time: u64,
     debug_print_stream_flow_time: u64,
+    stream_so_singer_time: usize,
 ) -> Result<()> {
     let start_time = Instant::now();
-    let stream_info = Rc::new(RefCell::new(stream_info));
     let stream_timeout = StreamTimeout::new();
-    let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
     let ret: Option<Result<()>> = async {
         tokio::select! {
             biased;
-            _ret = start_stream.do_start(stream_info.clone(), client_buf_reader) => {
+            _ret = start_stream.do_start(stream_info.clone(), stream) => {
                 let _ret = _ret.map_err(|e| anyhow!("err:do_start => request_id:{}, e:{}",
                     stream_info.borrow().request_id, e));
                 return Some(_ret);
@@ -107,14 +103,14 @@ pub async fn do_start(
     let session_time = start_time.elapsed().as_secs_f32();
     stream_info.session_time = session_time;
 
-    let is_close = stream_info_parse(stream_timeout, &mut stream_info)
+    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, &mut stream_info)
         .await
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
 
     if !stream_info.is_discard_flow {
         if stream_info.stream_config_context.is_some() {
             let stream_config_context = stream_info.stream_config_context.as_ref().unwrap();
-            access_log(
+            AccessLog::access_log(
                 &stream_config_context.access,
                 &stream_config_context.access_context,
                 &stream_config_context.stream_var,
@@ -126,6 +122,14 @@ pub async fn do_start(
     }
     if ret.is_some() {
         log::debug!("ret:{:?}", ret.as_ref().unwrap());
+    }
+
+    //服务器关闭了， 固定延迟一秒， 让客户端接收完缓冲区，在进行socket关闭
+    if is_ups_close {
+        tokio::time::sleep(tokio::time::Duration::from_millis(
+            stream_so_singer_time as u64,
+        ))
+        .await;
     }
 
     if is_close {
@@ -143,8 +147,9 @@ pub async fn do_start(
 pub async fn stream_info_parse(
     stream_timeout: StreamTimeout,
     stream_info: &mut StreamInfo,
-) -> Result<bool> {
+) -> Result<(bool, bool)> {
     let mut is_close = false;
+    let mut is_ups_close = false;
     let mut client_stream_flow_info = stream_info.client_stream_flow_info.lock().unwrap();
     let mut upstream_stream_flow_info = stream_info.upstream_stream_flow_info.lock().unwrap();
 
@@ -313,15 +318,27 @@ pub async fn stream_info_parse(
             if err == stream_flow::StreamFlowErr::WriteClose {
                 is_close = true;
                 stream_info.err_status_str = Some(err_status_200.write_close());
+                if err_status_200.is_ups_err() {
+                    is_ups_close = true;
+                }
             } else if err == stream_flow::StreamFlowErr::ReadClose {
                 is_close = true;
                 stream_info.err_status_str = Some(err_status_200.read_close());
+                if err_status_200.is_ups_err() {
+                    is_ups_close = true;
+                }
             } else if err == stream_flow::StreamFlowErr::WriteReset {
                 is_close = true;
                 stream_info.err_status_str = Some(err_status_200.write_reset());
+                if err_status_200.is_ups_err() {
+                    is_ups_close = true;
+                }
             } else if err == stream_flow::StreamFlowErr::ReadReset {
                 is_close = true;
                 stream_info.err_status_str = Some(err_status_200.read_reset());
+                if err_status_200.is_ups_err() {
+                    is_ups_close = true;
+                }
             } else if err == stream_flow::StreamFlowErr::WriteTimeout {
                 stream_info.err_status_str = Some(err_status_200.write_timeout());
             } else if err == stream_flow::StreamFlowErr::ReadTimeout {
@@ -333,7 +350,7 @@ pub async fn stream_info_parse(
             }
         }
     } else if stream_info.err_status == ErrStatus::ServiceUnavailable {
-        let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.borrow();
+        let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.lock().await;
         if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteTimeout {
             stream_info.err_status = ErrStatus::GatewayTimeout;
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteReset {
@@ -348,89 +365,7 @@ pub async fn stream_info_parse(
         is_close = false;
     }
 
-    Ok(is_close)
-}
-
-pub async fn access_log(
-    access: &Vec<config_toml::AccessConfig>,
-    access_context: &Vec<proxy::AccessContext>,
-    stream_var: &Rc<stream_var::StreamVar>,
-    stream_info: &StreamInfo,
-) -> Result<()> {
-    for (index, access) in access.iter().enumerate() {
-        if access.access_log {
-            let access_context = &access_context[index];
-            let mut access_format_var = var::Var::copy(&access_context.access_format_vars)
-                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
-            access_format_var.for_each(|var| {
-                let var_name = var::Var::var_name(var);
-                let value = stream_var.find(var_name, stream_info);
-                match value {
-                    Err(e) => {
-                        log::error!("{}", anyhow!("{}", e));
-                        Ok(None)
-                    }
-                    Ok(value) => Ok(value),
-                }
-            })?;
-
-            let mut access_log_data = access_format_var
-                .join()
-                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
-
-            if access.access_log_stdout {
-                log::info!("{}", access_log_data);
-            }
-            access_log_data.push_str("\n");
-            let access_log_file = access_context.access_log_file.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut access_log_file = access_log_file.as_ref();
-                let ret = access_log_file
-                    .write_all(access_log_data.as_bytes())
-                    .map_err(|e| {
-                        anyhow!(
-                            "err:access_log_file.write_all => access_log_data:{}, e:{}",
-                            access_log_data,
-                            e
-                        )
-                    });
-                if let Err(e) = ret {
-                    log::error!("{}", e);
-                }
-            });
-        }
-    }
-    Ok(())
-}
-
-pub async fn debug_access_log(
-    access: &Vec<config_toml::AccessConfig>,
-    access_context: &Vec<proxy::AccessContext>,
-    stream_var: &Rc<stream_var::StreamVar>,
-    stream_info: &mut StreamInfo,
-) -> Result<()> {
-    for (index, _) in access.iter().enumerate() {
-        let access_context = &access_context[index];
-        let mut access_format_var = var::Var::copy(&access_context.access_format_vars)
-            .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
-        access_format_var.for_each(|var| {
-            let var_name = var::Var::var_name(var);
-            let value = stream_var.find(var_name, stream_info);
-            match value {
-                Err(e) => {
-                    log::error!("{}", anyhow!("{}", e));
-                    Ok(None)
-                }
-                Ok(value) => Ok(value),
-            }
-        })?;
-
-        let access_log_data = access_format_var
-            .join()
-            .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
-        log::info!("***debug***{}", access_log_data);
-    }
-    Ok(())
+    Ok((is_close, is_ups_close))
 }
 
 pub async fn read_timeout(
@@ -566,7 +501,7 @@ pub async fn debug_print_access_log(
         debug_print_access_log_time
     };
 
-    let mut config_ctx: Option<Rc<StreamConfigContext>> = None;
+    let mut stream_config_context: Option<Rc<StreamConfigContext>> = None;
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
@@ -577,14 +512,14 @@ pub async fn debug_print_access_log(
             continue;
         }
         if stream_info.borrow().stream_config_context.is_some() {
-            if config_ctx.is_none() {
-                config_ctx = stream_info.borrow().stream_config_context.clone();
+            if stream_config_context.is_none() {
+                stream_config_context = stream_info.borrow().stream_config_context.clone();
             }
-            let config_ctx = config_ctx.as_ref().unwrap();
-            if let Err(e) = debug_access_log(
-                &config_ctx.access,
-                &config_ctx.access_context,
-                &config_ctx.stream_var,
+            let stream_config_context = stream_config_context.as_ref().unwrap();
+            if let Err(e) = AccessLog::debug_access_log(
+                &stream_config_context.access,
+                &stream_config_context.access_context,
+                &stream_config_context.stream_var,
                 &mut stream_info.borrow_mut(),
             )
             .await

@@ -20,7 +20,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct UpstreamHeartbeatData {
     ///vector中第几个域名的索引，自己属于哪个域名
     domain_index: usize,
@@ -28,7 +28,7 @@ pub struct UpstreamHeartbeatData {
     index: usize,
     heartbeat: Option<UpstreamHeartbeat>,
     addr: SocketAddr,
-    connect: Rc<Box<dyn connect::Connect>>,
+    connect: Arc<Box<dyn connect::Connect>>,
     pub curr_fail: usize,
     ///心跳失败了，被无效
     pub disable: bool,
@@ -42,7 +42,7 @@ pub struct UpstreamHeartbeatData {
     pub current_weight: i64,
 }
 
-#[derive(Debug, Clone)]
+//#[derive(Debug, Clone)]
 pub struct UpstreamDynamicDomainData {
     ///vector中第几个域名的索引
     index: usize,
@@ -54,7 +54,7 @@ pub struct UpstreamDynamicDomainData {
     is_weight: bool,
 }
 
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct UpstreamData {
     ///心跳失败了
     pub is_heartbeat_disable: bool,
@@ -87,7 +87,7 @@ impl UpstreamData {
         ip: &str,
     ) -> (
         UpstreamDispatch,
-        Option<(Option<bool>, Rc<Box<dyn connect::Connect>>)>,
+        Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)>,
     ) {
         let connect_info = match self.ups_config.dispatch {
             UpstreamDispatch::Weight => dispatch::weight::weight(self),

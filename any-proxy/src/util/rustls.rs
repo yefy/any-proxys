@@ -191,7 +191,8 @@ pub fn load_private_key(filename: &str) -> Result<rustls::PrivateKey> {
 /// rustls accept
 pub fn tls_acceptor(
     sni_rustls_map: std::sync::Arc<ResolvesServerCertUsingSNI>,
-    protocols: &[Vec<u8>],
+    //alpn_protocols: &[Vec<u8>],
+    alpn_protocols: Vec<Vec<u8>>,
 ) -> Rc<TlsAcceptor> {
     let tls_cfg = {
         let mut server_crypto = rustls::ServerConfig::builder()
@@ -201,8 +202,9 @@ pub fn tls_acceptor(
 
         // Configure ALPN to accept HTTP/2, HTTP/1.1 in that order.
         //cfg.set_protocols(&[b"h2".to_vec(), b"http/1.1".to_vec()]);
-        if protocols.len() > 0 {
-            server_crypto.alpn_protocols = protocols.to_vec();
+        if alpn_protocols.len() > 0 {
+            //server_crypto.alpn_protocols = protocols.to_vec();
+            server_crypto.alpn_protocols = alpn_protocols;
         }
         std::sync::Arc::new(server_crypto)
     };
