@@ -1,10 +1,10 @@
 # 编译运行anyproxy
 cd $HOME  
-git clone https://github.com/yefy/any-proxy.git  
-cd any-proxy  
+git clone https://github.com/yefy/any-proxys.git  
+cd any-proxys  
 cargo build --release --bin anyproxy  
-cp target/release/anyproxy ./anyproxy/examples/  
-cd ./anyproxy/examples/  
+cp target/release/anyproxy ./any-proxy/anyproxy/examples/  
+cd ./any-proxy/anyproxy/examples/  
 //默认读取 ./conf/anyproxy.conf, 可以使用-c 指定配置文件  
 ./anyproxy  
 
