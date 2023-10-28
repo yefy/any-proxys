@@ -77,7 +77,7 @@ reinit重新创建线程和配置热加载
 支持泛域名  
 支持配置范围端口监听   
 quic支持绑定端口  
-临时文件缓存
+临时文件缓存  
 限流  
 proxy_pass回源  
 upstream 配置多主机回源  
@@ -89,9 +89,9 @@ linux零拷贝技术sendfile
 cpu绑定  
 linux reuseport  
 配置支持include  
-命令:anyproxy -s [quit|stop|reload|reinit]
+命令:anyproxy -s [quit|stop|reload|reinit]  
 命令:anyproxy -t,配置正确性检查  
-命令:anyproxy -c,指定配置文件路径
+命令:anyproxy -c,指定配置文件路径  
 支持链路日志,定位流走向，容易排查问题  
 sni域名解析  
 异步文件io  
