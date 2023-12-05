@@ -4,22 +4,21 @@ use crate::protopack;
 use crate::protopack::anyproxy::AnyproxyHeartbeat;
 use crate::stream::stream_flow;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::typ::Share;
 use anyhow::anyhow;
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub struct HeartbeatStream {}
 
 impl HeartbeatStream {
     pub async fn heartbeat_stream(
         mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
-        stream_info: Rc<RefCell<StreamInfo>>,
+        stream_info: Share<StreamInfo>,
         executors: ExecutorsLocal,
     ) -> Result<
         Option<(
             any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
-            Rc<RefCell<StreamInfo>>,
+            Share<StreamInfo>,
         )>,
     > {
         let heartbeat = protopack::anyproxy::read_heartbeat_rollback(&mut client_buf_reader)
@@ -54,12 +53,12 @@ impl HeartbeatStream {
 
     pub async fn do_heartbeat_stream(
         client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
-        stream_info: Rc<RefCell<StreamInfo>>,
+        stream_info: Share<StreamInfo>,
         mut heartbeat: Option<AnyproxyHeartbeat>,
     ) -> Result<()> {
-        stream_info.borrow_mut().err_status = ErrStatus::Ok;
-        stream_info.borrow_mut().is_discard_flow = true;
-        stream_info.borrow_mut().is_discard_timeout = true;
+        stream_info.get_mut().err_status = ErrStatus::Ok;
+        stream_info.get_mut().is_discard_flow = true;
+        stream_info.get_mut().is_discard_timeout = true;
 
         let mut client_buf_stream = any_base::io::buf_stream::BufStream::from(
             any_base::io::buf_writer::BufWriter::new(client_buf_reader),
@@ -82,7 +81,7 @@ impl HeartbeatStream {
             log::debug!(
                 "heartbeat:{:?}, remote_addr:{}",
                 heartbeat,
-                stream_info.borrow().server_stream_info.remote_addr
+                stream_info.get().server_stream_info.remote_addr
             );
 
             protopack::anyproxy::write_pack(

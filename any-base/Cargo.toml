@@ -7,13 +7,14 @@ edition = "2021"
 
 
 [features]
-default = []
+default = ["anyspawn-parking-lot"]
 anyspawn-count = []
+anyspawn-parking-lot = []
+anyspawn-std-sync = []
 
 [dependencies]
 anyhow = {path = "../anyhow"}
 awaitgroup = {path = "../awaitgroup"}
-async_executors = {path = "../async_executors", features = ["tokio_ct", "tokio_io", "tokio_timer"]}
 tokio = { version = "1.24.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
@@ -35,7 +36,5 @@ num-traits = "0.2"
 pin-project-lite = "0.2.9"
 core_affinity = "0.7.6"
 futures-core = "0.3.26"
-
-#[dependencies.async_executors]
-#version = "0.6.0"
-#features = ["tokio_ct", "tokio_io", "tokio_timer"]
+async-recursion = "1.0.5"
+parking_lot = "0.11"

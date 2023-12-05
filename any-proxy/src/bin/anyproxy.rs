@@ -57,14 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     std::panic::set_hook(Box::new(thread_panic));
     if let Err(e) = log4rs::init_file(
-        default_config::ANYPROXY_LOG_FULL_PATH
-            .lock()
-            .unwrap()
-            .as_str(),
+        default_config::ANYPROXY_LOG_FULL_PATH.get().as_str(),
         Default::default(),
     ) {
         eprintln!("err:log4rs::init_file => e:{}", e);
-        return Err(anyhow!("err:log4rs::init_fil"))?;
+        return Err(anyhow!("err:log4rs::init_file"))?;
     }
     if let Err(e) = do_main() {
         log::error!("err:main => err:{}", e);
@@ -100,19 +97,21 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     {
         log::info!(
             "config full path :{}",
-            default_config::ANYPROXY_CONF_FULL_PATH.lock().unwrap()
+            default_config::ANYPROXY_CONF_FULL_PATH.get().as_str()
         );
     }
 
-    executor_local_spawn::_block_on(1, move |executor_local_spawn| async move {
-        async_main(executor_local_spawn).await
-    })
+    executor_local_spawn::_block_on(
+        1,
+        512,
+        move |executor| async move { async_main(executor).await },
+    )
     .map_err(|e| anyhow!("err:anyproxy block_on => e:{}", e))?;
     Ok(())
 }
 
-async fn async_main(executor_local_spawn: ExecutorLocalSpawn) -> Result<()> {
-    let mut anyproxy = Anyproxy::new(executor_local_spawn)?;
+async fn async_main(executor: ExecutorLocalSpawn) -> Result<()> {
+    let mut anyproxy = Anyproxy::new(executor)?;
     anyproxy.start().await
 }
 

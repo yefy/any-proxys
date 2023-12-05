@@ -141,9 +141,9 @@ pub struct EbpfGroup {
 }
 
 impl EbpfGroup {
-    pub fn new(cpu_affinity: bool, group_version: i32) -> Result<EbpfGroup> {
+    pub fn new(cpu_affinity: bool, group_version: i32) -> EbpfGroup {
         let thread_spawn = ThreadSpawn::new(cpu_affinity, group_version);
-        Ok(EbpfGroup { thread_spawn })
+        EbpfGroup { thread_spawn }
     }
 
     pub async fn stop(&mut self) {
@@ -155,7 +155,7 @@ impl EbpfGroup {
 
         let mut thread_spawn_wait_run = self.thread_spawn.thread_spawn_wait_run();
         thread_spawn_wait_run._start(move |async_context| {
-            _block_on(1, move |_| async move {
+            _block_on(1, 1, move |_| async move {
                 EbpfSockhash::create_sockhash(async_context, data_rx, debug_is_open_ebpf_log)
                     .await
                     .map_err(|e| anyhow!("err:create_sockhash => e:{}", e))?;

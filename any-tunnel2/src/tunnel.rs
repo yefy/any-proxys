@@ -2,6 +2,7 @@ use super::peer_client::PeerClient;
 use super::peer_client::PeerClientSender;
 use super::peer_stream_connect::PeerStreamConnect;
 use super::server::AcceptSenderType;
+use any_base::typ::ArcMutexTokio;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -10,12 +11,11 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Tunnel {
     tx: mpsc::Sender<PeerClient>,
-    peer_client_sender_map: Arc<Mutex<HashMap<String, HashMap<String, PeerClientSender>>>>,
+    peer_client_sender_map: ArcMutexTokio<HashMap<String, HashMap<String, PeerClientSender>>>,
 }
 
 impl Tunnel {
@@ -50,16 +50,16 @@ impl Tunnel {
                 });
 
                 if cfg!(feature = "anyruntime-tokio-spawn-local") {
-                    any_base::executor_local_spawn::_start_and_free2(move || async move {
-                        async_.await
-                    });
+                    any_base::executor_local_spawn::_start_and_free(
+                        move || async move { async_.await },
+                    );
                 } else {
                     any_base::executor_spawn::_start_and_free(move || async move { async_.await });
                 }
             }
         };
         if cfg!(feature = "anyruntime-tokio-spawn-local") {
-            any_base::executor_local_spawn::_start_and_free2(move || async move {
+            any_base::executor_local_spawn::_start_and_free(move || async move {
                 async_.await;
                 Ok(())
             });
@@ -71,11 +71,11 @@ impl Tunnel {
         }
         Tunnel {
             tx,
-            peer_client_sender_map: Arc::new(Mutex::new(HashMap::new())),
+            peer_client_sender_map: ArcMutexTokio::new(HashMap::new()),
         }
     }
 
-    pub async fn start_thread(thread_num: usize) -> Tunnel {
+    pub async fn start_thread(flag: String, thread_num: usize) -> Tunnel {
         let (tx, mut rx) = mpsc::channel::<PeerClient>(10);
         std::thread::spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
@@ -84,7 +84,7 @@ impl Tunnel {
                 .build()
                 .unwrap()
                 .block_on(async {
-                    log::info!("tunnel2 start_thread");
+                    log::info!("tunnel2 start_thread {}", flag);
                     let (shutdown_tx, _) = broadcast::channel::<()>(100);
                     loop {
                         let peer_client = rx.recv().await;
@@ -112,7 +112,7 @@ impl Tunnel {
                         });
 
                         if cfg!(feature = "anyruntime-tokio-spawn-local") {
-                            any_base::executor_local_spawn::_start_and_free2(move || async move {
+                            any_base::executor_local_spawn::_start_and_free(move || async move {
                                 async_.await
                             });
                         } else {
@@ -125,7 +125,7 @@ impl Tunnel {
         });
         Tunnel {
             tx,
-            peer_client_sender_map: Arc::new(Mutex::new(HashMap::new())),
+            peer_client_sender_map: ArcMutexTokio::new(HashMap::new()),
         }
     }
 
@@ -134,7 +134,7 @@ impl Tunnel {
         tunnel_key: &String,
         register_id: &String,
     ) -> Option<PeerClientSender> {
-        let peer_client_sender_map = self.peer_client_sender_map.lock().await;
+        let peer_client_sender_map = self.peer_client_sender_map.get().await;
         let peer_client_sender_map = peer_client_sender_map.get(tunnel_key);
         if peer_client_sender_map.is_none() {
             return None;
@@ -154,7 +154,7 @@ impl Tunnel {
         accept_tx: Option<AcceptSenderType>,
         peer_stream_connect: Option<(Arc<Box<dyn PeerStreamConnect>>, SocketAddr)>,
     ) -> Result<PeerClientSender> {
-        let mut peer_client_sender_map = self.peer_client_sender_map.lock().await;
+        let mut peer_client_sender_map = self.peer_client_sender_map.get_mut().await;
         let peer_client_sender = peer_client_sender_map.get_mut(&tunnel_key);
         let peer_client_sender_map = if peer_client_sender.is_none() {
             peer_client_sender_map.insert(tunnel_key.clone(), HashMap::new());

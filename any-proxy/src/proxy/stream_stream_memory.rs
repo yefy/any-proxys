@@ -1,147 +1,127 @@
-use super::stream_info::StreamInfo;
 use super::StreamCacheBuffer;
-use super::StreamLimit;
-use super::StreamStreamContext;
-use crate::proxy::stream_stream::{StreamStatus, StreamStream};
-use crate::util::default_config;
-use any_base::io::async_read_msg::AsyncReadMsg;
+use crate::config::http_core_plugin::PluginHandleStream;
+use crate::proxy::StreamStreamShare;
+use crate::proxy::{get_flag, StreamStatus, LIMIT_SLEEP_TIME_MILLIS};
 use any_base::io::async_read_msg::AsyncReadMsgExt;
-use any_base::io::async_write_msg::AsyncWriteMsg;
+use any_base::typ::{ArcRwLockTokio, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::atomic::Ordering;
+use dynamic_pool::{DynamicPool, DynamicPoolItem};
+use lazy_static::lazy_static;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::AsyncReadExt;
 
-const LIMIT_SLEEP_TIME_MILLIS: u64 = 100;
+lazy_static! {
+    pub static ref MEMORY_HANDLE_NEXT: ArcRwLockTokio<PluginHandleStream> =
+        ArcRwLockTokio::default();
+}
 
-pub struct StreamStreamMemory {}
-
-impl StreamStreamMemory {
-    pub fn new() -> StreamStreamMemory {
-        StreamStreamMemory {}
+pub async fn set_memory_handle(plugin: PluginHandleStream) -> Result<()> {
+    if MEMORY_HANDLE_NEXT.is_none().await {
+        MEMORY_HANDLE_NEXT.set(plugin).await;
     }
-    pub async fn start<
-        R: AsyncRead + AsyncReadMsg + Unpin,
-        W: AsyncWrite + AsyncWriteMsg + Unpin,
-    >(
-        &mut self,
-        limit: StreamLimit,
-        stream_info: Rc<RefCell<StreamInfo>>,
-        mut r: R,
-        mut w: W,
-        is_client: bool,
-    ) -> Result<()> {
-        stream_info.borrow_mut().buffer_cache = Some("memory".to_string());
-        stream_info
-            .borrow_mut()
-            .add_work_time(&format!("{} cache", StreamStream::get_flag(is_client)));
+    Ok(())
+}
 
-        let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
-        let mut ssc = StreamStreamContext {
-            stream_cache_size: 0,
-            tmp_file_size: 0,
-            limit_rate_after: limit.limit_rate_after as i64,
-            max_limit_rate: limit.max_limit_rate,
-            curr_limit_rate: limit.curr_limit_rate.clone(),
-            max_stream_cache_size: 0,
-            max_tmp_file_size: 0,
-            is_tmp_file_io_page: true,
-            page_size,
-            min_merge_cache_buffer_size: (page_size / 2) as u64,
-            min_cache_buffer_size: page_size * *default_config::MIN_CACHE_BUFFER_NUM,
-            min_read_buffer_size: page_size,
-            min_cache_file_size: page_size * 256,
-            total_read_size: 0,
-            total_write_size: 0,
-        };
+pub async fn memory_handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
+    handle_run(sss).await
+}
 
-        let mut is_first = true;
-        let mut buffer = StreamCacheBuffer::new();
-        buffer.is_cache = true;
-        loop {
-            buffer.reset();
-            buffer.resize(None);
-            buffer.is_cache = true;
+pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
+    #[cfg(unix)]
+    {
+        let sendfile = sss.get().sendfile.clone();
+        sendfile.set_nil().await;
+    }
+    let stream_info = sss.get().stream_info.clone();
 
-            if r.is_read_msg().await {
-                let msg = r.read_msg().await?;
-                buffer.size = msg.len() as u64;
-                buffer.msg = Some(msg);
-            } else {
-                buffer.size =
-                    r.read(&mut buffer.data)
-                        .await
-                        .map_err(|e| anyhow!("err:r.read => e:{}", e))? as u64;
-            }
-            ssc.total_read_size += buffer.size;
-            stream_info.borrow_mut().total_read_size += buffer.size;
+    stream_info.get_mut().buffer_cache = Some(sss.get().ssc.cs.buffer_cache.clone());
+    stream_info
+        .get_mut()
+        .add_work_time(&format!("{} memory", get_flag(sss.get().is_client)));
 
-            if stream_info.borrow().debug_is_open_print {
-                let stream_info = stream_info.borrow();
-                log::info!(
-                    "{}---{:?}---{}:read buffer.size:{}",
-                    stream_info.request_id,
-                    stream_info.server_stream_info.local_addr,
-                    StreamStream::get_flag(is_client),
-                    buffer.size,
-                );
-            }
+    {
+        let buffer_pool = DynamicPool::new(1, 2, StreamCacheBuffer::default);
+        sss.get_mut().buffer_pool.set(buffer_pool);
+    }
 
-            if is_first {
-                is_first = false;
+    let mut _is_first = true;
+    loop {
+        if sss.get().read_err.is_none() {
+            let (ret, buffer) = read(sss.clone()).await?;
+            if _is_first {
+                _is_first = false;
                 stream_info
-                    .borrow_mut()
-                    .add_work_time(StreamStream::get_flag(is_client));
+                    .get_mut()
+                    .add_work_time(get_flag(sss.get().is_client));
             }
-
-            loop {
-                if buffer.start >= buffer.size {
-                    break;
+            sss.get_mut().read_buffer = Some(buffer);
+            sss.get_mut().read_buffer_ret = Some(ret);
+        } else {
+            if sss.get().read_buffer.is_some() {
+                if sss.get().read_buffer.as_ref().unwrap().read_size <= 0 {
+                    log::error!("err:buffer.read_size <= 0");
+                } else {
+                    sss.get_mut().read_buffer_ret = Some(Ok(0));
                 }
+            }
+        }
 
-                if stream_info.borrow().debug_is_open_print {
-                    let stream_info = stream_info.borrow();
-                    log::info!(
-                        "{}---{:?}---{}:write start:{}, size:{}",
-                        stream_info.request_id,
-                        stream_info.server_stream_info.local_addr,
-                        StreamStream::get_flag(is_client),
-                        buffer.start,
-                        buffer.size
-                    );
-                }
-
-                let stream_status = StreamStream::stream_limit_write(
-                    &mut buffer,
-                    &mut ssc,
-                    &mut w,
-                    is_client,
-                    #[cfg(unix)]
-                    &None,
-                    stream_info.clone(),
-                )
-                .await
-                .map_err(|e| anyhow!("err:StreamStream.stream_write => e:{}", e))?;
-                if stream_info.borrow().debug_is_open_print {
-                    let stream_info = stream_info.borrow();
-                    log::info!(
-                        "{}---{:?}---{}: stream_status:{:?}",
-                        stream_info.request_id,
-                        stream_info.server_stream_info.local_addr,
-                        StreamStream::get_flag(is_client),
-                        stream_status
-                    );
-                }
-
+        loop {
+            check_stream_close(sss.clone()).await?;
+            if !sss.get().is_empty() {
+                let handle_next = &*MEMORY_HANDLE_NEXT.get_mut().await;
+                (handle_next)(sss.clone())
+                    .await
+                    .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
+                let stream_status = sss.get().stream_status.clone();
                 if let StreamStatus::Limit = stream_status {
                     tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS))
                         .await;
                 }
+            } else {
+                break;
             }
         }
     }
+}
+
+pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
+    let mut sss = sss.get_mut();
+    if sss.write_err.is_some() {
+        sss.write_err.take().unwrap()?;
+    }
+
+    if sss.read_err.is_some() && sss.is_read_empty() && sss.is_write_empty() {
+        sss.read_err.take().unwrap()?;
+    }
+    Ok(())
+}
+
+pub async fn read(
+    sss: ShareRw<StreamStreamShare>,
+) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
+    let mut buffer = sss.get_mut().buffer_pool.get().take();
+    buffer.reset();
+    buffer.resize(None);
+    buffer.is_cache = true;
+
+    let r = sss.get().r.clone();
+    let mut r = r.get_mut().await;
+
+    let ret: std::io::Result<usize> = async {
+        if r.is_read_msg().await {
+            let msg = r.read_msg().await?;
+            let n = msg.len();
+            buffer.msg = Some(msg);
+            return Ok(n);
+        } else {
+            let n = r.read(&mut buffer.data).await?;
+            return Ok(n);
+        }
+    }
+    .await;
+
+    Ok((ret, buffer))
 }

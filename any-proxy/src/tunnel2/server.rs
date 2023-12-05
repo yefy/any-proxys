@@ -2,6 +2,7 @@ use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
+use any_base::typ::ArcMutex;
 use any_tunnel2::server as tunnel_server;
 use any_tunnel2::stream as tunnel_stream;
 use anyhow::anyhow;
@@ -35,7 +36,7 @@ impl Listener {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Listener for Listener {
     async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         let ret: Result<(tunnel_stream::Stream, SocketAddr, SocketAddr)> = async {
@@ -91,7 +92,7 @@ impl Connection {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Connection for Connection {
     async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
         if self.stream.is_none() {
@@ -100,10 +101,11 @@ impl server::Connection for Connection {
         let stream = self.stream.take().unwrap();
         let remote_addr = self.remote_addr.take().unwrap();
         let (r, w) = any_base::io::split::split(stream);
-        let mut stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
+        let mut stream =
+            stream_flow::StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
         let read_timeout = tokio::time::Duration::from_secs(self.stream_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
-        stream.set_config(read_timeout, write_timeout, None);
+        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
 
         Ok(Some((
             stream,

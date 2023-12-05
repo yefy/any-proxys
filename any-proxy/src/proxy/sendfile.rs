@@ -2,20 +2,19 @@
 
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::io;
 use std::io::ErrorKind;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 pub struct SendFile {
-    info: Option<Arc<Mutex<StreamFlowInfo>>>,
+    info: ArcMutex<StreamFlowInfo>,
     fd: i32,
 }
 
 impl SendFile {
-    pub fn new(fd: i32, info: Option<Arc<Mutex<StreamFlowInfo>>>) -> SendFile {
+    pub fn new(fd: i32, info: ArcMutex<StreamFlowInfo>) -> SendFile {
         SendFile { fd, info }
     }
     pub async fn write(&self, fd: i32, seek: u64, size: u64) -> io::Result<u64> {
@@ -52,8 +51,7 @@ impl SendFile {
                     if c_err == libc::EINPROGRESS {
                         if self.info.is_some() {
                             {
-                                self.info.as_ref().unwrap().lock().unwrap().err =
-                                    StreamFlowErr::WriteClose;
+                                self.info.get_mut().err = StreamFlowErr::WriteClose;
                             }
                         }
                         stream_err = StreamFlowErr::Init;
@@ -88,7 +86,7 @@ impl SendFile {
             Err(e) => {
                 if self.info.is_some() && stream_err != StreamFlowErr::Init {
                     {
-                        self.info.as_ref().unwrap().lock().unwrap().err = stream_err;
+                        self.info.get_mut().err = stream_err;
                     }
                 }
                 //log::error!("write kind:{:?}, e:{:?}", kind, e);
@@ -98,7 +96,7 @@ impl SendFile {
                 log::trace!("sendfile write size:{:?}", size);
                 if self.info.is_some() {
                     {
-                        self.info.as_ref().unwrap().lock().unwrap().write += size as i64;
+                        self.info.get_mut().write += size as i64;
                     }
                 }
                 Ok(size)

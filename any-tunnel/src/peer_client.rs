@@ -21,8 +21,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 
+use any_base::executor_local_spawn::Runtime;
+use any_base::typ::ArcMutex;
 use lazy_static::lazy_static;
 lazy_static! {
     static ref PEER_CLIENT_NUM: AtomicU32 = AtomicU32::new(0);
@@ -33,7 +34,7 @@ pub struct PeerStreamToPeerClientTx {
     pub tx: async_channel::Sender<TunnelPack>,
     pub wait_group: WaitGroup,
     pub worker_inner: Option<WorkerInner>,
-    pub is_close: std::sync::Arc<std::sync::Mutex<bool>>,
+    pub is_close: ArcMutex<bool>,
 }
 
 impl PeerStreamToPeerClientTx {
@@ -43,12 +44,12 @@ impl PeerStreamToPeerClientTx {
             tx,
             wait_group: WaitGroup::new(),
             worker_inner: None,
-            is_close: std::sync::Arc::new(std::sync::Mutex::new(false)),
+            is_close: ArcMutex::new(false),
         }
     }
 
     pub fn clone_and_ref(&self) -> Option<PeerStreamToPeerClientTx> {
-        if *self.is_close.lock().unwrap() {
+        if *self.is_close.get() {
             return None;
         }
 
@@ -64,7 +65,7 @@ impl PeerStreamToPeerClientTx {
     }
 
     pub fn close(&self) {
-        let mut is_close = self.is_close.lock().unwrap();
+        let mut is_close = self.is_close.get_mut();
         self.tx.close();
         *is_close = true;
     }
@@ -72,7 +73,7 @@ impl PeerStreamToPeerClientTx {
 
 impl Drop for PeerStreamToPeerClientTx {
     fn drop(&mut self) {
-        let mut is_close = self.is_close.lock().unwrap();
+        let mut is_close = self.is_close.get_mut();
 
         if self.worker_inner.is_some() {
             self.worker_inner.as_ref().unwrap().done();
@@ -92,11 +93,11 @@ pub struct PeerClientContext {
     peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
     stream_wait_group: Arc<WaitGroup>,
     peer_stream_to_peer_client_rx: async_channel::Receiver<TunnelPack>,
-    session_id: Arc<Mutex<Option<String>>>,
+    session_id: ArcMutex<String>,
     peer_client_order_pack_id: Arc<AtomicU32>,
     peer_stream_connect: Option<Arc<Box<dyn PeerStreamConnect>>>,
     peer_stream_size: Arc<AtomicUsize>,
-    round_async_channel: Arc<Mutex<RoundAsyncChannel<TunnelPack>>>,
+    round_async_channel: ArcMutex<RoundAsyncChannel<TunnelPack>>,
     wait_peer_stream_size: Arc<AtomicUsize>,
     is_peer_stream_max: Arc<AtomicBool>,
     peer_stream_index: Arc<AtomicUsize>,
@@ -105,6 +106,7 @@ pub struct PeerClientContext {
     peer_stream_tx_pack_id: Arc<AtomicU32>,
     peer_stream_rx_pack_id: Arc<AtomicU32>,
     is_error: Arc<AtomicBool>,
+    run_time: Arc<Box<dyn Runtime>>,
 }
 
 impl PeerClientContext {
@@ -210,6 +212,7 @@ impl PeerClientContext {
                 self.client_context.clone(),
                 stream,
                 None,
+                self.run_time.clone(),
             )
             .await?
         };
@@ -249,9 +252,9 @@ impl PeerClientContext {
         min_stream_cache_size: usize,
     ) -> Result<(String, TunnelHello)> {
         let session_id = {
-            let mut session_id_ = self.session_id.lock().unwrap();
-            if session_id_.is_some() {
-                session_id_.clone().unwrap()
+            if self.session_id.is_some() {
+                let session_id_ = self.session_id.get();
+                session_id_.clone()
             } else {
                 if client_info.is_none() {
                     let err = anyhow!("err:client_info.is_none");
@@ -269,7 +272,7 @@ impl PeerClientContext {
                     peer_stream_key.remote_addr,
                     Local::now().timestamp_millis(),
                 );
-                *session_id_ = Some(session_id.clone());
+                self.session_id.set(session_id.clone());
                 session_id
             }
         };
@@ -293,8 +296,7 @@ impl PeerClientContext {
     ) -> Result<Option<()>> {
         let stream_to_peer_stream_rx = {
             self.round_async_channel
-                .lock()
-                .unwrap()
+                .get_mut()
                 .channel(self.channel_size)
         };
         if stream_to_peer_stream_rx.is_err() {
@@ -336,7 +338,7 @@ impl PeerClientContext {
 }
 
 pub struct PeerClient {
-    server_context: Option<Arc<Mutex<ServerContext>>>,
+    server_context: Option<ArcMutex<ServerContext>>,
     stream_tx_pack_id: Arc<AtomicU32>,
     stream_rx_pack_id: Arc<AtomicU32>,
     pub context: Arc<PeerClientContext>,
@@ -356,15 +358,21 @@ impl PeerClient {
         client_context: Option<Arc<ClientContext>>,
         session_id: Option<String>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
-        server_context: Option<Arc<Mutex<ServerContext>>>,
+        server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> PeerClient {
         #[cfg(feature = "anydebug")]
         {
             let num = PEER_CLIENT_NUM.fetch_add(1, Ordering::Relaxed) + 1;
             log::info!("new PEER_CLIENT_NUM:{}", num);
         }
-        let round_async_channel = Arc::new(Mutex::new(RoundAsyncChannel::<TunnelPack>::new()));
+        let session_id = if session_id.is_some() {
+            ArcMutex::new(session_id.unwrap())
+        } else {
+            ArcMutex::default()
+        };
+        let round_async_channel = ArcMutex::new(RoundAsyncChannel::<TunnelPack>::new());
         let (peer_stream_to_peer_client_tx, peer_stream_to_peer_client_rx) =
             async_channel::bounded(channel_size);
         let peer_stream_to_peer_client_tx =
@@ -388,7 +396,7 @@ impl PeerClient {
                 peer_stream_to_peer_client_tx,
                 stream_wait_group: Arc::new(WaitGroup::new()),
                 peer_stream_to_peer_client_rx,
-                session_id: Arc::new(Mutex::new(session_id)),
+                session_id,
                 peer_client_order_pack_id: Arc::new(AtomicU32::new(0)),
                 peer_stream_connect,
                 peer_stream_size,
@@ -401,6 +409,7 @@ impl PeerClient {
                 peer_stream_tx_pack_id: Arc::new(AtomicU32::new(0)),
                 peer_stream_rx_pack_id: Arc::new(AtomicU32::new(0)),
                 is_error: Arc::new(AtomicBool::new(false)),
+                run_time,
             }),
         }
     }
@@ -479,7 +488,7 @@ impl PeerClient {
         if self.server_context.is_none() {
             return;
         }
-        let session_id = { self.context.session_id.lock().unwrap().clone().unwrap() };
+        let session_id = { self.context.session_id.get().clone() };
         #[cfg(feature = "anydebug")]
         {
             use crate::get_flag;
@@ -493,8 +502,7 @@ impl PeerClient {
         self.server_context
             .as_ref()
             .unwrap()
-            .lock()
-            .unwrap()
+            .get_mut()
             .delete(session_id);
     }
 
@@ -541,7 +549,7 @@ impl PeerClient {
 
             //有堵塞了才需要创建链接
             let mut is_w = {
-                let is_full = { self.context.round_async_channel.lock().unwrap().is_full() };
+                let is_full = { self.context.round_async_channel.get().is_full() };
                 if is_full {
                     w_num += 1;
                     if w_num < max_num {
@@ -571,13 +579,13 @@ impl PeerClient {
 
             if self.context.peer_stream_connect.is_none() {
                 if !self.context.is_peer_stream_max.load(Ordering::Relaxed) {
-                    let is_close = { self.context.round_async_channel.lock().unwrap().is_close() };
+                    let is_close = { self.context.round_async_channel.get().is_close() };
                     if is_close {
                         continue;
                     }
                     //TunnelAddConnect
                     let (sender, lock) = {
-                        let round_async_channel = self.context.round_async_channel.lock().unwrap();
+                        let round_async_channel = self.context.round_async_channel.get();
 
                         (
                             round_async_channel.round_sender_clone(),
@@ -587,7 +595,7 @@ impl PeerClient {
 
                     {
                         //这里不加锁，队列永远都是full的， 不知道哪里有问题
-                        let mut lock = lock.lock().await;
+                        let mut lock = lock.get_mut().await;
                         let _ = sender
                             .send(TunnelPack::TunnelAddConnect(TunnelAddConnect {
                                 peer_stream_size: 0,
@@ -604,11 +612,12 @@ impl PeerClient {
             if self.context.peer_stream_size() >= peer_max_stream_size {
                 continue;
             }
-            let is_close = { self.context.round_async_channel.lock().unwrap().is_close() };
+            let is_close = { self.context.round_async_channel.get().is_close() };
             if is_close {
                 continue;
             }
 
+            let run_time = self.context.run_time.clone();
             let context = self.context.clone();
             let async_ = Box::pin(async move {
                 let ret = context
@@ -628,11 +637,15 @@ impl PeerClient {
             });
 
             if cfg!(feature = "anyruntime-tokio-spawn-local") {
-                any_base::executor_local_spawn::_start_and_free2(
+                any_base::executor_local_spawn::_start_and_free(
                     move || async move { async_.await },
                 );
-            } else {
+            } else if cfg!(feature = "anyruntime-tokio-spawn") {
                 any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+            } else {
+                run_time.spawn(Box::pin(async move {
+                    let _ = async_.await;
+                }));
             }
         }
     }
@@ -647,9 +660,10 @@ impl PeerClient {
         min_stream_cache_size: usize,
         peer_stream_size: Option<Arc<AtomicUsize>>,
         session_id: Option<String>,
-        server_context: Option<Arc<Mutex<ServerContext>>>,
+        server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
         peer_stream_id: Option<usize>,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<(
         Arc<PeerClient>,
         Stream,
@@ -668,6 +682,7 @@ impl PeerClient {
             peer_stream_size,
             server_context,
             channel_size,
+            run_time.clone(),
         ));
         let round_async_channel = peer_client.context.round_async_channel.clone();
 
@@ -726,17 +741,15 @@ impl PeerClient {
                 .map_err(|e| anyhow!("err:peer_client.start => e:{}", e))
         });
         if cfg!(feature = "anyruntime-tokio-spawn-local") {
-            any_base::executor_local_spawn::_start_and_free2(move || async move { async_.await });
-        } else {
+            any_base::executor_local_spawn::_start_and_free(move || async move { async_.await });
+        } else if cfg!(feature = "anyruntime-tokio-spawn") {
             any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+        } else {
+            run_time.spawn(Box::pin(async move {
+                let _ = async_.await;
+            }));
         }
-        let session_id = peer_client
-            .context
-            .session_id
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
+        let session_id = peer_client.context.session_id.get().clone();
         let stream_tx_pack_id = peer_client.stream_tx_pack_id.clone();
         let stream_rx_pack_id = peer_client.stream_rx_pack_id.clone();
         let worker_inner = peer_client.context.stream_wait_group.worker().add();
@@ -768,6 +781,7 @@ impl PeerClient {
         client_context: Option<Arc<ClientContext>>,
         stream: StreamFlow,
         accept_tx: Option<AcceptSenderType>,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<Arc<PeerStreamKey>> {
         let peer_stream = PeerStream::new(
             is_client,
@@ -779,7 +793,7 @@ impl PeerClient {
             key,
         );
         let peer_stream_key = peer_stream.peer_stream_key();
-        PeerStream::start(peer_stream, stream).await?;
+        PeerStream::start(peer_stream, stream, run_time).await?;
         Ok(peer_stream_key)
     }
 }
@@ -877,11 +891,7 @@ impl PeerClientToStream {
                                             peer_stream_size: self.context.peer_stream_size(),
                                         });
                                     let sender = {
-                                        self.context
-                                            .round_async_channel
-                                            .lock()
-                                            .unwrap()
-                                            .round_sender_clone()
+                                        self.context.round_async_channel.get().round_sender_clone()
                                     };
                                     let _ = sender.send(tunnel_max_connect).await;
                                 } else {

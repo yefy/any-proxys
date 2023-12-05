@@ -1,25 +1,23 @@
 use super::UpstreamData;
 use crate::protopack;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::io::buf_reader::BufReader;
+use any_base::io::buf_writer::BufWriter;
+use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
 
 pub struct UpstreamHeartbeatServer {
     executors: ExecutorsLocal,
-    ups_data: Arc<Mutex<UpstreamData>>,
+    ups_data: ArcMutex<UpstreamData>,
     ///在map中的索引
     index: usize,
 }
 
 impl UpstreamHeartbeatServer {
-    pub fn spawn_local(
-        executors: ExecutorsLocal,
-        ups_data: Arc<Mutex<UpstreamData>>,
-        index: usize,
-    ) {
+    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ArcMutex<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
@@ -36,7 +34,7 @@ impl UpstreamHeartbeatServer {
     }
     pub fn new(
         executors: ExecutorsLocal,
-        ups_data: Arc<Mutex<UpstreamData>>,
+        ups_data: ArcMutex<UpstreamData>,
         index: usize,
     ) -> Result<UpstreamHeartbeatServer> {
         Ok(UpstreamHeartbeatServer {
@@ -48,7 +46,7 @@ impl UpstreamHeartbeatServer {
 
     pub async fn start(&self) -> Result<()> {
         let (ups_heartbeat, ups_config_name) = {
-            let ups_data = self.ups_data.lock().unwrap();
+            let ups_data = self.ups_data.get_mut();
 
             let ups_heartbeat = ups_data.ups_heartbeats_map.get(&self.index).cloned();
             if ups_heartbeat.is_none() {
@@ -60,148 +58,146 @@ impl UpstreamHeartbeatServer {
         scopeguard::defer! {
             log::info!("stop upstream_heartbeat_server ups_name:[{}], addr:{}",
                 ups_config_name,
-                ups_heartbeat.borrow().addr
+                ups_heartbeat.get().addr
             );
         }
 
         log::debug!(
             "start upstream_heartbeat_server ups_name:[{}], addr:{}",
             ups_config_name,
-            ups_heartbeat.borrow().addr
+            ups_heartbeat.get().addr
         );
 
         let (interval, _timeout, fail, connect, mut shutdown_heartbeat_rx) = {
-            let tmp_ups_heartbeat = ups_heartbeat.borrow();
+            let tmp_ups_heartbeat = ups_heartbeat.get();
             let heartbeat = tmp_ups_heartbeat.heartbeat.as_ref().unwrap();
             (
                 heartbeat.interval,
                 heartbeat.timeout,
                 heartbeat.fail,
-                ups_heartbeat.borrow().connect.clone(),
-                ups_heartbeat.borrow().shutdown_heartbeat_tx.subscribe(),
+                ups_heartbeat.get().connect.clone(),
+                ups_heartbeat.get().shutdown_heartbeat_tx.subscribe(),
             )
         };
 
+        let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
+        let mut r: Option<BufReader<StreamFlowRead>> = None;
+        let mut w: Option<BufWriter<StreamFlowWrite>> = None;
+
         loop {
-            let connect_info = connect
-                .connect(None, &mut None)
-                .await
-                .map_err(|e| anyhow!("err:connect => e:{}", e));
-
-            let connect_info = match connect_info {
-                Err(e) => {
-                    log::error!("connect_info err:{}", e);
-                    continue;
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval as u64)) => {
                 }
-                Ok(connect_info) => connect_info,
-            };
-
-            let (upstream_stream, upstream_connect_info) = connect_info;
-            log::debug!(
-                "new upstream_heartbeat upstream_addr:{}, remote_addr:{}",
-                upstream_connect_info.domain,
-                upstream_connect_info.remote_addr
-            );
-            let (r, w) = upstream_stream.split();
-            let mut r = any_base::io::buf_reader::BufReader::new(r);
-            let mut w = any_base::io::buf_writer::BufWriter::new(w);
-
-            let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
-
-            let mut is_fist = true;
-            loop {
-                if !is_fist {
-                    tokio::select! {
-                        biased;
-                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval as u64)) => {
-                        }
-                         _ =  shutdown_heartbeat_rx.recv() => {
-                            return Ok(());
-                        }
-                        _ =  shutdown_thread_rx.recv() => {
-                            return Ok(());
-                        }
-                        else => {
-                            return Err(anyhow!("err:select"));
-                        }
-                    }
-                } else {
-                    is_fist = false;
+                 _ =  shutdown_heartbeat_rx.recv() => {
+                    return Ok(());
                 }
+                _ =  shutdown_thread_rx.recv() => {
+                    return Ok(());
+                }
+                else => {
+                    return Err(anyhow!("err:select"));
+                }
+            }
 
-                let ret: Result<()> = async {
-                    let heartbeat_time = Instant::now();
-                    protopack::anyproxy::write_pack(
-                        &mut w,
-                        protopack::anyproxy::AnyproxyHeaderType::Heartbeat,
-                        &protopack::anyproxy::AnyproxyHeartbeat {
-                            version: protopack::anyproxy::ANYPROXY_VERSION.to_string(),
-                        },
-                    )
-                    .await
-                    .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
-
-                    let heartbeat_r = protopack::anyproxy::read_heartbeat_r(&mut r)
+            let ret: Result<()> = async {
+                if r.is_none() {
+                    let connect_info = connect
+                        .connect(
+                            None,
+                            ArcMutex::default(),
+                            Some(self.executors.run_time.clone()),
+                        )
                         .await
-                        .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
-                    if heartbeat_r.is_none() {
-                        return Err(anyhow!("err:connect.connect => e:heartbeat_r nil"));
-                    }
+                        .map_err(|e| anyhow!("err:connect => e:{}", e))?;
+
+                    let (upstream_stream, upstream_connect_info) = connect_info;
+                    log::debug!(
+                        "new upstream_heartbeat upstream_addr:{}, remote_addr:{}",
+                        upstream_connect_info.domain,
+                        upstream_connect_info.remote_addr
+                    );
+                    let (r_, w_) = upstream_stream.split();
+                    let r_ = any_base::io::buf_reader::BufReader::new(r_);
+                    let w_ = any_base::io::buf_writer::BufWriter::new(w_);
+                    r = Some(r_);
+                    w = Some(w_);
+                }
+
+                let heartbeat_time = Instant::now();
+                protopack::anyproxy::write_pack(
+                    &mut w.as_mut().unwrap(),
+                    protopack::anyproxy::AnyproxyHeaderType::Heartbeat,
+                    &protopack::anyproxy::AnyproxyHeartbeat {
+                        version: protopack::anyproxy::ANYPROXY_VERSION.to_string(),
+                    },
+                )
+                .await
+                .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
+
+                let heartbeat_r = protopack::anyproxy::read_heartbeat_r(&mut r.as_mut().unwrap())
+                    .await
+                    .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
+                if heartbeat_r.is_none() {
+                    return Err(anyhow!("err:connect.connect => e:heartbeat_r nil"));
+                }
+
+                {
+                    let heartbeat_time_elapsed = heartbeat_time.elapsed().as_millis();
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    ups_heartbeat.total_elapsed += heartbeat_time_elapsed;
+                    ups_heartbeat.count_elapsed += 1;
+                    ups_heartbeat.avg_elapsed =
+                        ups_heartbeat.total_elapsed / ups_heartbeat.count_elapsed as u128;
 
                     {
-                        let heartbeat_time_elapsed = heartbeat_time.elapsed().as_millis();
-                        let mut ups_heartbeat = ups_heartbeat.borrow_mut();
-                        ups_heartbeat.total_elapsed += heartbeat_time_elapsed;
-                        ups_heartbeat.count_elapsed += 1;
-                        ups_heartbeat.avg_elapsed =
-                            ups_heartbeat.total_elapsed / ups_heartbeat.count_elapsed as u128;
+                        self.ups_data.get_mut().is_sort_heartbeats_active = true;
+                    }
 
+                    log::debug!(
+                        "heartbeat name:{}, index:{}, domain_index:{}, index:{}, addr:{}",
+                        ups_config_name,
+                        self.index,
+                        ups_heartbeat.domain_index,
+                        ups_heartbeat.index,
+                        ups_heartbeat.addr,
+                    );
+                }
+                Ok(())
+            }
+            .await;
+            match ret {
+                Ok(_) => {
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    if ups_heartbeat.disable {
                         {
-                            self.ups_data.lock().unwrap().is_sort_heartbeats_active = true;
+                            self.ups_data.get_mut().is_heartbeat_disable = true;
                         }
-
-                        log::debug!(
-                            "heartbeat name:{}, index:{}, domain_index:{}, index:{}, addr:{}",
+                        ups_heartbeat.curr_fail = 0;
+                        ups_heartbeat.disable = false;
+                        log::info!(
+                            "heartbeat name:{}, index:{}, domain_index:{}, index:{}, open addr:{}",
                             ups_config_name,
                             self.index,
                             ups_heartbeat.domain_index,
                             ups_heartbeat.index,
-                            ups_heartbeat.addr,
+                            ups_heartbeat.addr
                         );
                     }
-                    Ok(())
                 }
-                .await;
-                match ret {
-                    Ok(_) => {
-                        let mut ups_heartbeat = ups_heartbeat.borrow_mut();
-                        if ups_heartbeat.disable {
-                            {
-                                self.ups_data.lock().unwrap().is_heartbeat_disable = true;
-                            }
-                            ups_heartbeat.curr_fail = 0;
-                            ups_heartbeat.disable = false;
-                            log::info!(
-                                "heartbeat name:{}, index:{}, domain_index:{}, index:{}, open addr:{}",
-                                ups_config_name,
-                                self.index,
-                                ups_heartbeat.domain_index,
-                                ups_heartbeat.index,
-                                ups_heartbeat.addr
-                            );
+                Err(e) => {
+                    r = None;
+                    w = None;
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    ups_heartbeat.curr_fail += 1;
+                    ups_heartbeat.effective_weight =
+                        ups_heartbeat.weight / ups_heartbeat.curr_fail as i64;
+                    if ups_heartbeat.curr_fail > fail && !ups_heartbeat.disable {
+                        {
+                            self.ups_data.get_mut().is_heartbeat_disable = true;
                         }
-                    }
-                    Err(e) => {
-                        let mut ups_heartbeat = ups_heartbeat.borrow_mut();
-                        ups_heartbeat.curr_fail += 1;
-                        ups_heartbeat.effective_weight =
-                            ups_heartbeat.weight / ups_heartbeat.curr_fail as i64;
-                        if ups_heartbeat.curr_fail > fail && !ups_heartbeat.disable {
-                            {
-                                self.ups_data.lock().unwrap().is_heartbeat_disable = true;
-                            }
-                            ups_heartbeat.disable = true;
-                            log::info!(
+                        ups_heartbeat.disable = true;
+                        log::info!(
                                 "heartbeat name:{}, index:{}, domain_index:{}, index:{}, disable addr:{}",
                                 ups_config_name,
                                 self.index,
@@ -209,10 +205,8 @@ impl UpstreamHeartbeatServer {
                                 ups_heartbeat.index,
                                 ups_heartbeat.addr
                             );
-                        }
-                        log::error!("err:upstream_heartbeat_server.rs => e:{}", e);
-                        break;
                     }
+                    log::error!("err:upstream_heartbeat_server.rs => e:{}", e);
                 }
             }
         }

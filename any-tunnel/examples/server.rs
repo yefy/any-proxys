@@ -4,6 +4,8 @@ use anyhow::Result;
 use std::net::ToSocketAddrs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use any_base::executor_local_spawn::{ThreadRuntime};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,7 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let publish = publish.clone();
         tokio::spawn(async move {
             if let Err(e) = publish
-                .push_peer_stream(stream, local_addr, remote_addr)
+                .push_peer_stream(stream, local_addr, remote_addr,
+                                  Arc::new(Box::new(ThreadRuntime))
                 .await
             {
                 log::error!("err: server stream => e:{}", e);

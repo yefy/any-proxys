@@ -1,24 +1,19 @@
 use super::UpstreamData;
 use crate::util;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 pub struct UpstreamDynamicDomainServer {
     executors: ExecutorsLocal,
-    ups_data: Arc<Mutex<UpstreamData>>,
+    ups_data: ArcMutex<UpstreamData>,
     ///vector中第几个域名的索引
     index: usize,
 }
 
 impl UpstreamDynamicDomainServer {
-    pub fn spawn_local(
-        executors: ExecutorsLocal,
-        ups_data: Arc<Mutex<UpstreamData>>,
-        index: usize,
-    ) {
+    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ArcMutex<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
@@ -36,7 +31,7 @@ impl UpstreamDynamicDomainServer {
     }
     pub fn new(
         executors: ExecutorsLocal,
-        ups_data: Arc<Mutex<UpstreamData>>,
+        ups_data: ArcMutex<UpstreamData>,
         index: usize,
     ) -> Result<UpstreamDynamicDomainServer> {
         Ok(UpstreamDynamicDomainServer {
@@ -48,8 +43,9 @@ impl UpstreamDynamicDomainServer {
 
     pub async fn start(&self) -> Result<()> {
         let (interval, timeout, host, mut addrs, ups_config_name) = {
-            let ups_data = self.ups_data.lock().unwrap();
-            let ups_dynamic_domain = &ups_data.ups_dynamic_domains[self.index];
+            let ups_data = self.ups_data.get_mut();
+            let ups_dynamic_domain = ups_data.ups_dynamic_domains[self.index].clone();
+            let ups_dynamic_domain = ups_dynamic_domain.get();
             let dynamic_domain = ups_dynamic_domain.dynamic_domain.as_ref().unwrap();
             (
                 dynamic_domain.interval,
@@ -109,9 +105,9 @@ impl UpstreamDynamicDomainServer {
             log::info!("name:{}, {:?} => {:?}", ups_config_name, addrs, curr_addrs);
             addrs = curr_addrs.clone();
             {
-                let mut ups_data = self.ups_data.lock().unwrap();
+                let mut ups_data = self.ups_data.get_mut();
                 ups_data.is_dynamic_domain_change = true;
-                ups_data.ups_dynamic_domains[self.index].addrs = curr_addrs.clone();
+                ups_data.ups_dynamic_domains[self.index].get_mut().addrs = curr_addrs.clone();
             }
         }
     }

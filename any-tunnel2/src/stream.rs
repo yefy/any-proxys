@@ -46,7 +46,8 @@ pub struct Stream {
         Pin<
             Box<
                 dyn Future<Output = std::result::Result<(), async_channel::SendError<Vec<u8>>>>
-                    + std::marker::Send,
+                    + std::marker::Send
+                    + Sync,
             >,
         >,
     >,

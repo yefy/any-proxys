@@ -1,38 +1,31 @@
-pub mod dispatch;
+pub mod balancer;
 pub mod upstream;
-pub mod upstream_config;
 pub mod upstream_dynamic_domain_server;
 pub mod upstream_heartbeat_server;
 pub mod upstream_server;
 
-use super::config::config_toml::ProxyPass;
-use crate::config::config_toml;
-use crate::config::config_toml::UpstreamDispatch;
+use crate::config::config_toml::UpstreamDynamicDomain;
 use crate::config::config_toml::UpstreamHeartbeat;
-use crate::config::config_toml::{UpstreamDynamicDomain, UpstreamServerConfig};
-use crate::quic::endpoints;
+use crate::config::upstream_block;
 use crate::stream::connect;
-use crate::TunnelClients;
-use std::cell::RefCell;
+use anyhow::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-//#[derive(Clone)]
 pub struct UpstreamHeartbeatData {
     ///vector中第几个域名的索引，自己属于哪个域名
-    domain_index: usize,
+    pub domain_index: usize,
     ///在map中的索引
-    index: usize,
-    heartbeat: Option<UpstreamHeartbeat>,
-    addr: SocketAddr,
-    connect: Arc<Box<dyn connect::Connect>>,
+    pub index: usize,
+    pub heartbeat: Option<UpstreamHeartbeat>,
+    pub addr: SocketAddr,
+    pub connect: Arc<Box<dyn connect::Connect>>,
     pub curr_fail: usize,
     ///心跳失败了，被无效
     pub disable: bool,
-    shutdown_heartbeat_tx: broadcast::Sender<()>,
+    pub shutdown_heartbeat_tx: broadcast::Sender<()>,
     pub is_proxy_protocol_hello: Option<bool>,
     pub total_elapsed: u128,
     pub count_elapsed: usize,
@@ -41,20 +34,22 @@ pub struct UpstreamHeartbeatData {
     pub effective_weight: i64,
     pub current_weight: i64,
 }
+use crate::config::upstream_core;
+use any_base::typ::Share;
 
-//#[derive(Debug, Clone)]
 pub struct UpstreamDynamicDomainData {
     ///vector中第几个域名的索引
-    index: usize,
-    dynamic_domain: Option<UpstreamDynamicDomain>,
-    proxy_pass: ProxyPass,
-    host: String,
+    pub index: usize,
+    pub dynamic_domain: Option<UpstreamDynamicDomain>,
+    pub heartbeat: Arc<Box<dyn upstream_core::HeartbeatI>>,
+    pub host: String,
     pub addrs: Vec<SocketAddr>,
-    ups_heartbeat: Option<UpstreamHeartbeat>,
-    is_weight: bool,
+    pub ups_heartbeat: Option<UpstreamHeartbeat>,
+    pub is_weight: bool,
 }
 
-//#[derive(Clone)]
+//哪个心跳失败删除哪个
+//如果host改变了就全部初始化
 pub struct UpstreamData {
     ///心跳失败了
     pub is_heartbeat_disable: bool,
@@ -62,44 +57,31 @@ pub struct UpstreamData {
     pub is_dynamic_domain_change: bool,
     ///响应时间有变化需要排序了
     pub is_sort_heartbeats_active: bool,
-    pub ups_config: UpstreamServerConfig,
+    pub ups_config: Arc<upstream_block::Conf>,
     ///全部域名
-    pub ups_dynamic_domains: Vec<UpstreamDynamicDomainData>,
+    pub ups_dynamic_domains: Vec<Share<UpstreamDynamicDomainData>>,
     ///全部域名对于的ip（包括心跳失败）
-    pub ups_heartbeats: Vec<Rc<RefCell<UpstreamHeartbeatData>>>,
+    pub ups_heartbeats: Vec<Share<UpstreamHeartbeatData>>,
     ///全部域名对于的活动ip
-    pub ups_heartbeats_active: Vec<Rc<RefCell<UpstreamHeartbeatData>>>,
+    pub ups_heartbeats_active: Vec<Share<UpstreamHeartbeatData>>,
     ///全部域名对于的ip
-    pub ups_heartbeats_map: HashMap<usize, Rc<RefCell<UpstreamHeartbeatData>>>,
+    pub ups_heartbeats_map: HashMap<usize, Share<UpstreamHeartbeatData>>,
     ///map索引，保证唯一
     pub ups_heartbeats_index: usize,
-    tcp_config_map: Rc<HashMap<String, config_toml::TcpConfig>>,
-    quic_config_map: Rc<HashMap<String, config_toml::QuicConfig>>,
-    endpoints_map: Rc<HashMap<String, Arc<endpoints::Endpoints>>>,
-    tunnel_clients: TunnelClients,
     ///轮询对于的index
     pub round_robin_index: usize,
 }
 
 impl UpstreamData {
-    pub fn get_connect(
+    pub fn balancer_and_connect(
         &mut self,
         ip: &str,
-    ) -> (
-        UpstreamDispatch,
+    ) -> Result<(
+        String,
         Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)>,
-    ) {
-        let connect_info = match self.ups_config.dispatch {
-            UpstreamDispatch::Weight => dispatch::weight::weight(self),
-            UpstreamDispatch::Random => dispatch::random::random(self),
-            UpstreamDispatch::RoundRobin => dispatch::round_robin::round_robin(self),
-            UpstreamDispatch::IpHash => dispatch::ip_hash::ip_hash(ip, self),
-            UpstreamDispatch::IpHashActive => dispatch::ip_hash_active::ip_hash_active(ip, self),
-            UpstreamDispatch::Fair => dispatch::fair::fair(self),
-        };
-        (self.ups_config.dispatch.clone(), connect_info)
+    )> {
+        let plugin_handle_balancer = self.ups_config.plugin_handle_balancer.as_ref().unwrap();
+        let connect_info = (plugin_handle_balancer)(ip, self);
+        Ok((self.ups_config.balancer.clone(), connect_info))
     }
 }
-
-//哪个心跳失败删除哪个
-//如果host改变了就全部初始化

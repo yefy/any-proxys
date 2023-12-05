@@ -8,11 +8,10 @@ use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
 use any_base::stream_flow;
+use any_base::typ::{ArcMutex, Share, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -20,7 +19,7 @@ use tokio::sync::broadcast;
 
 pub async fn do_start(
     mut start_stream: impl proxy::Stream,
-    stream_info: Rc<RefCell<StreamInfo>>,
+    stream_info: Share<StreamInfo>,
     stream: stream_flow::StreamFlow,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
     debug_print_access_log_time: u64,
@@ -29,16 +28,19 @@ pub async fn do_start(
 ) -> Result<()> {
     let start_time = Instant::now();
     let stream_timeout = StreamTimeout::new();
+
+    let client_stream_flow_info = stream_info.get().client_stream_flow_info.clone();
+    let upstream_stream_flow_info = stream_info.get().upstream_stream_flow_info.clone();
     let ret: Option<Result<()>> = async {
         tokio::select! {
             biased;
             _ret = start_stream.do_start(stream_info.clone(), stream) => {
                 let _ret = _ret.map_err(|e| anyhow!("err:do_start => request_id:{}, e:{}",
-                    stream_info.borrow().request_id, e));
+                    stream_info.get().request_id, e));
                 return Some(_ret);
             }
             _ret = read_timeout(
-                stream_info.as_ref().borrow().client_stream_flow_info.clone(),
+                client_stream_flow_info.clone(),
                 stream_info.clone(),
                 stream_timeout.clone(),
                 stream_timeout.client_read_timeout_millis.clone(),
@@ -46,7 +48,7 @@ pub async fn do_start(
                 return Some(_ret);
             }
             _ret = read_timeout(
-                stream_info.as_ref().borrow().upstream_stream_flow_info.clone(),
+                upstream_stream_flow_info.clone(),
                 stream_info.clone(),
                 stream_timeout.clone(),
                 stream_timeout.ups_read_timeout_millis.clone(),
@@ -54,7 +56,7 @@ pub async fn do_start(
                 return Some(_ret);
             }
             _ret = write_timeout(
-                stream_info.as_ref().borrow().client_stream_flow_info.clone(),
+                client_stream_flow_info.clone(),
                 stream_info.clone(),
                 stream_timeout.clone(),
                 stream_timeout.client_write_timeout_millis.clone(),
@@ -62,14 +64,11 @@ pub async fn do_start(
                 return Some(_ret);
             }
             _ret = write_timeout(
-                stream_info.as_ref().borrow().upstream_stream_flow_info.clone(),
+                upstream_stream_flow_info.clone(),
                 stream_info.clone(),
                 stream_timeout.clone(),
                 stream_timeout.ups_write_timeout_millis.clone(),
             ) => {
-                return Some(_ret);
-            }
-            _ret = check_break_stream_write(stream_info.clone()) => {
                 return Some(_ret);
             }
             _ret = debug_print_access_log(debug_print_access_log_time, stream_info.clone()) => {
@@ -79,19 +78,19 @@ pub async fn do_start(
                 return Some(_ret);
             }
             _ = shutdown_thread_rx.recv() => {
-                stream_info.borrow_mut().err_status = ErrStatus::ServerErr;
+                stream_info.get_mut().err_status = ErrStatus::ServerErr;
                 return None;
             }
             else => {
-                stream_info.borrow_mut().err_status = ErrStatus::ServerErr;
+                stream_info.get_mut().err_status = ErrStatus::ServerErr;
                 return None;
             }
         }
     }
     .await;
 
-    if stream_info.borrow().debug_is_open_print {
-        let stream_info = stream_info.borrow();
+    if stream_info.get().debug_is_open_print {
+        let stream_info = stream_info.get();
         log::info!(
             "{}---{:?}:do_start end",
             stream_info.request_id,
@@ -99,33 +98,33 @@ pub async fn do_start(
         );
     }
 
-    let mut stream_info = stream_info.borrow_mut();
     let session_time = start_time.elapsed().as_secs_f32();
-    stream_info.session_time = session_time;
+    stream_info.get_mut().session_time = session_time;
 
-    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, &mut stream_info)
+    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, stream_info.clone())
         .await
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
 
-    if !stream_info.is_discard_flow {
-        if stream_info.stream_config_context.is_some() {
-            let stream_config_context = stream_info.stream_config_context.as_ref().unwrap();
-            AccessLog::access_log(
-                &stream_config_context.access,
-                &stream_config_context.access_context,
-                &stream_config_context.stream_var,
-                &stream_info,
-            )
-            .await
-            .map_err(|e| anyhow!("err:StreamStream::access_log => e:{}", e))?;
+    if stream_info.get().scc.is_some() {
+        let plugin_handle_logs = {
+            let stream_info = stream_info.get();
+            let scc = stream_info.scc.get();
+            use crate::config::http_core_plugin;
+            let http_core_plugin_conf = http_core_plugin::currs_conf(scc.http_main_confs());
+            http_core_plugin_conf.plugin_handle_logs.clone()
+        };
+
+        for plugin_handle_log in &*plugin_handle_logs.get().await {
+            (plugin_handle_log)(stream_info.clone()).await?;
         }
     }
+
     if ret.is_some() {
         log::debug!("ret:{:?}", ret.as_ref().unwrap());
     }
 
-    //服务器关闭了， 固定延迟一秒， 让客户端接收完缓冲区，在进行socket关闭
-    if is_ups_close {
+    //延迟服务器关闭, 让客户端接收完缓冲区, 在进行socket关闭
+    if is_ups_close && stream_so_singer_time > 0 {
         tokio::time::sleep(tokio::time::Duration::from_millis(
             stream_so_singer_time as u64,
         ))
@@ -146,12 +145,15 @@ pub async fn do_start(
 
 pub async fn stream_info_parse(
     stream_timeout: StreamTimeout,
-    stream_info: &mut StreamInfo,
+    stream_info: Share<StreamInfo>,
 ) -> Result<(bool, bool)> {
+    let stream_info = &mut stream_info.get_mut();
     let mut is_close = false;
     let mut is_ups_close = false;
-    let mut client_stream_flow_info = stream_info.client_stream_flow_info.lock().unwrap();
-    let mut upstream_stream_flow_info = stream_info.upstream_stream_flow_info.lock().unwrap();
+    let client_stream_flow_info = stream_info.client_stream_flow_info.clone();
+    let upstream_stream_flow_info = stream_info.upstream_stream_flow_info.clone();
+    let mut client_stream_flow_info = client_stream_flow_info.get_mut();
+    let mut upstream_stream_flow_info = upstream_stream_flow_info.get_mut();
 
     #[cfg(feature = "anyerror")]
     let mut is_error = false;
@@ -350,7 +352,8 @@ pub async fn stream_info_parse(
             }
         }
     } else if stream_info.err_status == ErrStatus::ServiceUnavailable {
-        let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.lock().await;
+        let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.clone();
+        let upstream_connect_flow_info = upstream_connect_flow_info.get();
         if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteTimeout {
             stream_info.err_status = ErrStatus::GatewayTimeout;
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteReset {
@@ -369,13 +372,13 @@ pub async fn stream_info_parse(
 }
 
 pub async fn read_timeout(
-    stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
-    stream_info: Rc<RefCell<StreamInfo>>,
+    stream_flow_info: ArcMutex<StreamFlowInfo>,
+    stream_info: Share<StreamInfo>,
     stream_timeout: StreamTimeout,
     timeout_millis: Arc<AtomicI64>,
 ) -> Result<()> {
     let (mut read_timeout, mut read) = {
-        let stream_flow_info = stream_flow_info.lock().unwrap();
+        let stream_flow_info = stream_flow_info.get();
         let mut read_timeout = stream_flow_info.read_timeout;
         if read_timeout <= 0 || read_timeout == u64::MAX {
             read_timeout = 10;
@@ -387,7 +390,7 @@ pub async fn read_timeout(
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(read_timeout)).await;
         read_timeout = {
-            let read_timeout = stream_flow_info.lock().unwrap().read_timeout;
+            let read_timeout = stream_flow_info.get().read_timeout;
             read_timeout
         };
         if read_timeout <= 0 || read_timeout == u64::MAX {
@@ -395,13 +398,13 @@ pub async fn read_timeout(
             continue;
         }
 
-        if stream_info.borrow().is_discard_timeout {
+        if stream_info.get().is_discard_timeout {
             continue;
         }
 
-        let curr_read = { stream_flow_info.lock().unwrap().read };
+        let curr_read = { stream_flow_info.get().read };
         if curr_read <= read {
-            let stream_flow_info = stream_flow_info.lock().unwrap();
+            let stream_flow_info = stream_flow_info.get();
             let time_millis = if stream_flow_info.err != StreamFlowErr::Init {
                 1 as i64
             } else {
@@ -427,13 +430,13 @@ pub async fn read_timeout(
 }
 
 pub async fn write_timeout(
-    stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
-    stream_info: Rc<RefCell<StreamInfo>>,
+    stream_flow_info: ArcMutex<StreamFlowInfo>,
+    stream_info: Share<StreamInfo>,
     stream_timeout: StreamTimeout,
     timeout_millis: Arc<AtomicI64>,
 ) -> Result<()> {
     let (mut write_timeout, mut write) = {
-        let stream_flow_info = stream_flow_info.lock().unwrap();
+        let stream_flow_info = stream_flow_info.get();
         let mut write_timeout = stream_flow_info.write_timeout;
         if write_timeout <= 0 || write_timeout == u64::MAX {
             write_timeout = 10;
@@ -445,7 +448,7 @@ pub async fn write_timeout(
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(write_timeout)).await;
         write_timeout = {
-            let write_timeout = stream_flow_info.lock().unwrap().write_timeout;
+            let write_timeout = stream_flow_info.get().write_timeout;
             write_timeout
         };
         if write_timeout <= 0 || write_timeout == u64::MAX {
@@ -453,13 +456,13 @@ pub async fn write_timeout(
             continue;
         }
 
-        if stream_info.borrow().is_discard_timeout {
+        if stream_info.get().is_discard_timeout {
             continue;
         }
 
-        let curr_write = { stream_flow_info.lock().unwrap().write };
+        let curr_write = { stream_flow_info.get().write };
         if curr_write <= write {
-            let stream_flow_info = stream_flow_info.lock().unwrap();
+            let stream_flow_info = stream_flow_info.get();
             let time_millis = if stream_flow_info.err != StreamFlowErr::Init {
                 1 as i64
             } else {
@@ -484,16 +487,9 @@ pub async fn write_timeout(
     }
 }
 
-pub async fn check_break_stream_write(stream_info: Rc<RefCell<StreamInfo>>) -> Result<()> {
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        stream_info.borrow_mut().is_break_stream_write = true;
-    }
-}
-
 pub async fn debug_print_access_log(
     debug_print_access_log_time: u64,
-    stream_info: Rc<RefCell<StreamInfo>>,
+    stream_info: Share<StreamInfo>,
 ) -> Result<()> {
     let timeout = if debug_print_access_log_time <= 0 {
         10
@@ -501,29 +497,23 @@ pub async fn debug_print_access_log(
         debug_print_access_log_time
     };
 
-    let mut stream_config_context: Option<Rc<StreamConfigContext>> = None;
+    let mut scc: ShareRw<StreamConfigContext> = ShareRw::default();
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
         if debug_print_access_log_time <= 0 || debug_print_access_log_time == u64::MAX {
             continue;
         }
-        if stream_info.borrow().is_discard_flow {
+        if stream_info.get().is_discard_flow {
             continue;
         }
-        if stream_info.borrow().stream_config_context.is_some() {
-            if stream_config_context.is_none() {
-                stream_config_context = stream_info.borrow().stream_config_context.clone();
+        if stream_info.get().scc.is_some() {
+            if scc.is_none() {
+                scc = stream_info.get().scc.clone();
             }
-            let stream_config_context = stream_config_context.as_ref().unwrap();
-            if let Err(e) = AccessLog::debug_access_log(
-                &stream_config_context.access,
-                &stream_config_context.access_context,
-                &stream_config_context.stream_var,
-                &mut stream_info.borrow_mut(),
-            )
-            .await
-            .map_err(|e| anyhow!("err:StreamStream::debug_access_log => e:{}", e))
+            if let Err(e) = AccessLog::debug_access_log(stream_info.clone())
+                .await
+                .map_err(|e| anyhow!("err:StreamStream::debug_access_log => e:{}", e))
             {
                 log::error!("err:{}", e);
                 continue;
@@ -534,7 +524,7 @@ pub async fn debug_print_access_log(
 
 pub async fn debug_print_stream_flow(
     debug_print_stream_flow_time: u64,
-    stream_info: Rc<RefCell<StreamInfo>>,
+    stream_info: Share<StreamInfo>,
 ) -> Result<()> {
     let timeout = if debug_print_stream_flow_time <= 0 {
         10
@@ -546,13 +536,13 @@ pub async fn debug_print_stream_flow(
         if debug_print_stream_flow_time <= 0 || debug_print_stream_flow_time == u64::MAX {
             continue;
         }
-        if stream_info.borrow().is_discard_flow {
+        if stream_info.get().is_discard_flow {
             continue;
         }
 
-        let stream_info = stream_info.borrow();
-        let client_stream_flow_info = stream_info.client_stream_flow_info.lock().unwrap();
-        let upstream_stream_flow_info = stream_info.upstream_stream_flow_info.lock().unwrap();
+        let stream_info = stream_info.get();
+        let client_stream_flow_info = stream_info.client_stream_flow_info.get();
+        let upstream_stream_flow_info = stream_info.upstream_stream_flow_info.get();
 
         log::info!(
             "stream_flow_sec:{} {} {} {}",

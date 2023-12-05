@@ -4,11 +4,13 @@ use super::stream_flow::StreamFlow;
 use crate::peer_stream::PeerStreamKey;
 use crate::protopack::TunnelHello;
 use crate::push_stream::PushStream;
+use any_base::executor_local_spawn::Runtime;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use hashbrown::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub type AcceptSenderType = async_channel::Sender<ServerRecv>;
@@ -26,18 +28,27 @@ pub enum ServerRecv {
 pub struct Listener {
     accept_rx: AcceptReceiverType,
     server: Server,
+    run_time: Arc<Box<dyn Runtime>>,
 }
 
 impl Listener {
-    pub fn new(accept_rx: AcceptReceiverType, server: Server) -> Listener {
-        Listener { accept_rx, server }
+    pub fn new(
+        accept_rx: AcceptReceiverType,
+        server: Server,
+        run_time: Arc<Box<dyn Runtime>>,
+    ) -> Listener {
+        Listener {
+            accept_rx,
+            server,
+            run_time,
+        }
     }
 
     pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
         loop {
             let accept = self
                 .server
-                .accept(&mut self.accept_rx)
+                .accept(&mut self.accept_rx, self.run_time.clone())
                 .await
                 .map_err(|e| anyhow!("err:any-tunnel accept => e:{}", e))?;
             return Ok(accept);
@@ -49,17 +60,26 @@ impl Listener {
 pub struct Publish {
     accept_tx: AcceptSenderType,
     server: Server,
+    run_time: Arc<Box<dyn Runtime>>,
 }
 
 impl Publish {
-    pub fn new(accept_tx: AcceptSenderType, server: Server) -> Publish {
-        Publish { accept_tx, server }
+    pub fn new(
+        accept_tx: AcceptSenderType,
+        server: Server,
+        run_time: Arc<Box<dyn Runtime>>,
+    ) -> Publish {
+        Publish {
+            accept_tx,
+            server,
+            run_time,
+        }
     }
 
     pub async fn push_peer_stream(
         &self,
-        r: Box<dyn AsyncRead + Send + Unpin>,
-        w: Box<dyn AsyncWrite + Send + Unpin>,
+        r: ArcMutex<Box<dyn AsyncRead + Send + Sync + Unpin>>,
+        w: ArcMutex<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
         domain: Option<String>,
@@ -68,11 +88,12 @@ impl Publish {
         let (r, w) = any_base::io::split::split(stream);
         self.server
             .create_accept_connect(
-                StreamFlow::new(0, Box::new(r), Box::new(w)),
+                StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w))),
                 local_addr,
                 remote_addr,
                 domain,
                 self.accept_tx.clone(),
+                self.run_time.clone(),
             )
             .await
             .map_err(|e| anyhow!("er:create_connect => e:{}", e))
@@ -105,13 +126,13 @@ impl ServerContext {
 
 #[derive(Clone)]
 pub struct Server {
-    context: Arc<Mutex<ServerContext>>,
+    context: ArcMutex<ServerContext>,
 }
 
 impl Server {
     pub fn new() -> Server {
         Server {
-            context: Arc::new(Mutex::new(ServerContext::new())),
+            context: ArcMutex::new(ServerContext::new()),
         }
     }
 
@@ -122,6 +143,7 @@ impl Server {
         remote_addr: SocketAddr,
         domain: Option<String>,
         accept_tx: AcceptSenderType,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<()> {
         PeerClient::do_create_peer_stream(
             false,
@@ -132,6 +154,7 @@ impl Server {
             None,
             stream,
             Some(accept_tx),
+            run_time,
         )
         .await
         .map_err(|e| anyhow!("er:do_create_peer_stream => e:{}", e))?;
@@ -141,6 +164,7 @@ impl Server {
     pub async fn accept(
         &self,
         accept_rx: &mut AcceptReceiverType,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
         loop {
             let recv_msg = accept_rx
@@ -162,7 +186,7 @@ impl Server {
 
                 log::debug!("server tunnel_hello:{:?}", tunnel_hello);
                 let session_id = tunnel_hello.session_id.clone();
-                let peer_client = { self.context.lock().unwrap().get(&session_id) };
+                let peer_client = { self.context.get_mut().get(&session_id) };
                 if peer_client.is_some() {
                     let peer_client = peer_client.unwrap();
                     if peer_client.is_none() {
@@ -228,6 +252,7 @@ impl Server {
                         Some(self.context.clone()),
                         tunnel_hello.channel_size,
                         Some(tunnel_hello.client_peer_stream_index),
+                        run_time.clone(),
                     )
                     .await
                     .map_err(|e| anyhow!("er:create_stream_and_peer_client => e:{}", e));
@@ -248,8 +273,7 @@ impl Server {
 
                 {
                     self.context
-                        .lock()
-                        .unwrap()
+                        .get_mut()
                         .insert(session_id.clone(), Some(peer_client.clone()));
                 }
 
@@ -269,11 +293,11 @@ impl Server {
         }
     }
 
-    pub async fn listen(&self) -> (Listener, Publish) {
+    pub async fn listen(&self, run_time: Arc<Box<dyn Runtime>>) -> (Listener, Publish) {
         let (accept_tx, accept_rx) = async_channel::unbounded::<ServerRecv>();
         (
-            Listener::new(accept_rx, self.clone()),
-            Publish::new(accept_tx, self.clone()),
+            Listener::new(accept_rx, self.clone(), run_time.clone()),
+            Publish::new(accept_tx, self.clone(), run_time),
         )
     }
 }

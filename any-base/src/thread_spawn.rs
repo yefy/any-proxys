@@ -1,8 +1,8 @@
 use crate::thread_spawn_wait_run::ThreadSpawnWaitRun;
+use crate::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::{WaitGroup, Worker};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::broadcast;
 
@@ -50,7 +50,7 @@ impl AsyncThreadContext {
 pub struct ThreadSpawn {
     cpu_affinity: bool,
     version: i32,
-    thread_handles: Arc<Mutex<Option<Vec<std::thread::JoinHandle<()>>>>>,
+    thread_handles: ArcMutex<Vec<std::thread::JoinHandle<()>>>,
     wait_group: WaitGroup,
     wait_group_worker: Worker,
     shutdown_thread_tx: broadcast::Sender<bool>,
@@ -65,7 +65,7 @@ impl ThreadSpawn {
         return ThreadSpawn {
             cpu_affinity,
             version,
-            thread_handles: Arc::new(Mutex::new(Some(Vec::new()))),
+            thread_handles: ArcMutex::new(Vec::new()),
             wait_group,
             wait_group_worker,
             shutdown_thread_tx,
@@ -155,12 +155,7 @@ impl ThreadSpawn {
             }
         });
 
-        self.thread_handles
-            .lock()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .push(thread_handle);
+        self.thread_handles.get_mut().push(thread_handle);
     }
 
     pub fn send(&self, is_fast_shutdown: bool) {
@@ -198,16 +193,11 @@ impl ThreadSpawn {
             }
         }
 
-        self.thread_handles
-            .lock()
-            .unwrap()
-            .take()
-            .map(|thread_handles| {
-                log::info!("stop join version:{}", self.version);
-                for handle in thread_handles.into_iter() {
-                    handle.join().unwrap();
-                }
-                log::info!("stop done version:{}", self.version);
-            });
+        let thread_handles = unsafe { self.thread_handles.take() };
+        log::info!("stop join version:{}", self.version);
+        for handle in thread_handles.into_iter() {
+            handle.join().unwrap();
+        }
+        log::info!("stop done version:{}", self.version);
     }
 }

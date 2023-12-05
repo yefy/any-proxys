@@ -1,4 +1,9 @@
+use super::http_server;
+use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::io::buf_reader::BufReader;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::{ArcMutex, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use hyper::body::Bytes;
@@ -7,18 +12,46 @@ use hyper::http::{Request, Response, StatusCode, Version};
 use hyper::Body;
 use std::io::Read;
 
-pub struct HttpStaticServer<'a> {
-    executors: ExecutorsLocal,
-    req: Request<Body>,
-    path: &'a str,
+pub async fn http_server_handle(
+    arg: ServerArg,
+    client_buf_reader: BufReader<StreamFlow>,
+) -> Result<()> {
+    let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+        any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+    );
+    http_server::http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
+        Box::pin(http_server_run_handle(arg, http_arg, scc, req))
+    })
+    .await
 }
 
-impl HttpStaticServer<'_> {
-    pub fn new(executors: ExecutorsLocal, req: Request<Body>, path: &str) -> HttpStaticServer {
+pub async fn http_server_run_handle(
+    arg: ServerArg,
+    _http_arg: ServerArg,
+    scc: ShareRw<StreamConfigContext>,
+    req: Request<Body>,
+) -> Result<Response<Body>> {
+    HttpStaticServer::new(arg.executors.clone(), req, scc)
+        .run()
+        .await
+}
+
+pub struct HttpStaticServer {
+    executors: ExecutorsLocal,
+    req: Request<Body>,
+    scc: ShareRw<StreamConfigContext>,
+}
+
+impl HttpStaticServer {
+    pub fn new(
+        executors: ExecutorsLocal,
+        req: Request<Body>,
+        scc: ShareRw<StreamConfigContext>,
+    ) -> HttpStaticServer {
         HttpStaticServer {
             executors,
             req,
-            path,
+            scc,
         }
     }
 
@@ -34,14 +67,26 @@ impl HttpStaticServer<'_> {
     }
 
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
-        let file_name = format!("{}{}", self.path, self.req.uri().path().to_string());
-        let mut file = std::fs::File::open(&file_name)
+        let scc = self.scc.get();
+        use crate::config::http_server_static;
+        let http_server_static_conf = http_server_static::currs_conf(scc.http_server_confs());
+        let mut seq = "";
+        let mut name = self.req.uri().path();
+        log::trace!("name:{}", name);
+        if name.len() <= 0 || name == "/" {
+            seq = "/";
+            name = &http_server_static_conf.conf.index;
+        }
+
+        let file_name = format!("{}{}{}", http_server_static_conf.conf.path, seq, name);
+        let file = std::fs::File::open(&file_name)
             .map_err(|e| anyhow!("err:file.open => file_name:{}, e:{}", file_name, e))?;
         let file_len = file
             .metadata()
             .map_err(|e| anyhow!("err:file.metadata => file_name:{}, e:{}", file_name, e))?
             .len()
             .to_string();
+        let file = ArcMutex::new(file);
 
         let (mut res_sender, res_body) = Body::channel();
         let mut res = Response::new(res_body);
@@ -90,10 +135,18 @@ impl HttpStaticServer<'_> {
             move |_| async move {
                 let buffer_len = 8192;
                 loop {
-                    let mut buffer = vec![0u8; buffer_len];
-                    let size = file
-                        .read(&mut buffer.as_mut_slice()[..])
-                        .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
+                    let file = file.clone();
+                    let data: Result<(usize, Vec<u8>)> = tokio::task::spawn_blocking(move || {
+                        let mut buffer = vec![0u8; buffer_len];
+                        let size = file
+                            .get_mut()
+                            .read(&mut buffer.as_mut_slice()[..])
+                            .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
+                        Ok((size, buffer))
+                    })
+                    .await?;
+                    let (size, mut buffer) = data?;
+
                     if size > 0 {
                         if size != buffer_len {
                             unsafe { buffer.set_len(size) }

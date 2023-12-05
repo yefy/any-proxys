@@ -1,6 +1,8 @@
 use crate::proxy::http_proxy::http_hyper_stream::HttpHyperStream;
 use crate::stream::connect::Connect;
+use any_base::executor_local_spawn::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use hyper::{service::Service, Uri};
 use std::future::Future;
@@ -14,20 +16,22 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// A Connector for the `https` scheme.
 #[derive(Clone)]
 pub struct HttpHyperConnector {
-    upstream_connect_flow_info: std::sync::Arc<tokio::sync::Mutex<StreamFlowInfo>>,
+    upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
     request_id: String,
-    upstream_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
+    upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
     connect_func: Arc<Box<dyn Connect>>,
     session_id: Arc<AtomicU64>,
+    run_time: Arc<Box<dyn Runtime>>,
 }
 
 impl HttpHyperConnector {
     pub fn new(
-        upstream_connect_flow_info: std::sync::Arc<tokio::sync::Mutex<StreamFlowInfo>>,
+        upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
         request_id: String,
-        upstream_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
+        upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
         connect_func: Arc<Box<dyn Connect>>,
         session_id: Arc<AtomicU64>,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> HttpHyperConnector {
         HttpHyperConnector {
             upstream_connect_flow_info,
@@ -35,6 +39,7 @@ impl HttpHyperConnector {
             upstream_stream_flow_info,
             connect_func,
             session_id,
+            run_time,
         }
     }
 }
@@ -60,18 +65,20 @@ impl Service<Uri> for HttpHyperConnector {
         let upstream_connect_flow_info = self.upstream_connect_flow_info.clone();
         let upstream_stream_flow_info = self.upstream_stream_flow_info.clone();
         let connect_func = self.connect_func.clone();
+        let run_time = self.run_time.clone();
         Box::pin(async move {
             let connect_info = connect_func
                 .connect(
                     Some(request_id.clone()),
-                    &mut Some(&mut *upstream_connect_flow_info.lock().await),
+                    upstream_connect_flow_info,
+                    Some(run_time),
                 )
                 .await
                 .map_err(|e| anyhow!("err:connect => request_id:{}, e:{}", request_id, e))?;
 
             let (mut upstream_stream, _) = connect_info;
 
-            upstream_stream.set_stream_info(Some(upstream_stream_flow_info.clone()));
+            upstream_stream.set_stream_info(upstream_stream_flow_info.clone());
 
             Ok(HttpHyperStream::new(upstream_stream))
         })

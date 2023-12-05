@@ -1,39 +1,38 @@
 use super::executor_local_spawn::ExecutorLocalSpawn;
-use crate::executor_local_spawn::ExecutorsLocal;
-use crate::executor_local_spawn_pool_wait_run::ExecutorLocalSpawnPoolWaitRun;
+use super::executor_local_spawn::ExecutorsLocal;
+use super::executor_local_spawn::Runtime;
+use super::executor_local_spawn_pool_wait_run::ExecutorLocalSpawnPoolWaitRun;
 use anyhow::Result;
 use std::future::Future;
+use std::sync::Arc;
 
 pub struct ExecutorLocalSpawnPool {
     worker_threads: usize,
-    executor_local_spawn: ExecutorLocalSpawn,
+    executor: ExecutorLocalSpawn,
 }
 
 impl ExecutorLocalSpawnPool {
     pub fn executor_local_spawn_pool_wait_run(&self) -> ExecutorLocalSpawnPoolWaitRun {
-        ExecutorLocalSpawnPoolWaitRun::new(
-            self.worker_threads,
-            self.executor_local_spawn.executors(),
-        )
+        ExecutorLocalSpawnPoolWaitRun::new(self.worker_threads, self.executor.executors())
     }
 
     pub fn default(
+        run_time: Arc<Box<dyn Runtime>>,
         worker_threads: usize,
-        executor: async_executors::TokioCt,
         cpu_affinity: bool,
         version: i32,
     ) -> ExecutorLocalSpawnPool {
-        let executor_local_spawn = ExecutorLocalSpawn::default(executor, cpu_affinity, version);
+        let executor = ExecutorLocalSpawn::default(run_time, cpu_affinity, version);
         return ExecutorLocalSpawnPool {
             worker_threads,
-            executor_local_spawn,
+            executor,
         };
     }
     pub fn new(worker_threads: usize, executors: ExecutorsLocal) -> ExecutorLocalSpawnPool {
-        let executor_local_spawn = ExecutorLocalSpawn::new(executors);
+        let executor = ExecutorLocalSpawn::new(executors);
         return ExecutorLocalSpawnPool {
             worker_threads,
-            executor_local_spawn,
+            executor,
         };
     }
 
@@ -43,11 +42,11 @@ impl ExecutorLocalSpawnPool {
         service: S,
     ) -> Result<()>
     where
-        S: FnOnce(ExecutorsLocal) -> F + 'static + Clone,
-        F: Future<Output = Result<()>> + 'static,
+        S: FnOnce(ExecutorsLocal) -> F + 'static + Clone + Send,
+        F: Future<Output = Result<()>> + 'static + Send,
     {
         for _ in 0..self.worker_threads {
-            self.executor_local_spawn._start::<S, F>(
+            self.executor._start::<S, F>(
                 #[cfg(feature = "anyspawn-count")]
                 name.clone(),
                 service.clone(),
@@ -57,16 +56,28 @@ impl ExecutorLocalSpawnPool {
         Ok(())
     }
 
+    pub fn _start_and_free<S, F>(&mut self, worker_threads: usize, service: S) -> Result<()>
+    where
+        S: FnOnce(ExecutorsLocal) -> F + 'static + Clone + Send,
+        F: Future<Output = Result<()>> + 'static + Send,
+    {
+        for _ in 0..worker_threads {
+            self.executor._start_and_free::<S, F>(service.clone());
+        }
+
+        Ok(())
+    }
+
     pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
-        self.executor_local_spawn.send(flag, is_fast_shutdown)
+        self.executor.send(flag, is_fast_shutdown)
     }
 
     pub async fn wait(&self, flag: &str) -> Result<()> {
-        self.executor_local_spawn.wait(flag).await
+        self.executor.wait(flag).await
     }
 
     pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
-        self.executor_local_spawn
+        self.executor
             .stop(flag, is_fast_shutdown, shutdown_timeout)
             .await
     }

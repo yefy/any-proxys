@@ -8,7 +8,7 @@ make
 make install
 
 # 运行nginx
-cp -r $HOME/any-proxy/anyproxy/nginx/conf/* ./nginx/conf/  
+cp -r $HOME/any-proxys/any-proxy/examples/anyproxy/nginx/conf/* ./nginx/conf/  
 ./nginx/sbin/nginx
 
 # 添加host
@@ -18,5 +18,7 @@ vim /etc/hosts
 127.0.0.1 www.upstream.cn
 
 # 测试
-curl http://www.example.cn:19090 -v  
-curl https://www.example.cn:19091 -v -k  
+http:  
+curl http://www.example.cn:19090 -k -v  
+https:  
+curl https://www.example.cn:19091 -k -v  

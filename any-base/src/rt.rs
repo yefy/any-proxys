@@ -20,6 +20,32 @@ pub trait ExecutorTime {
     fn sleep(&self, dur: Duration) -> BoxFuture<'static, ()>;
 }
 
+pub trait SpawnExec<F>: Clone {
+    fn spawn(
+        &self,
+        version: i32,
+        worker_inner: Option<WorkerInner>,
+        err_worker: Option<Worker>,
+        fut: F,
+    );
+}
+
+impl<E, F> SpawnExec<F> for E
+where
+    F: Future<Output = Result<()>> + 'static,
+    E: Executor<F> + Clone,
+{
+    fn spawn(
+        &self,
+        version: i32,
+        worker_inner: Option<WorkerInner>,
+        err_worker: Option<Worker>,
+        fut: F,
+    ) {
+        self.execute(version, worker_inner, err_worker, fut)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LocalExec;
 
@@ -35,7 +61,7 @@ where
         fut: F,
     ) {
         // This will spawn into the currently running `LocalSet`.
-        let _ = tokio::task::spawn_local(async move {
+        tokio::task::spawn_local(async move {
             scopeguard::defer! {
                 log::debug!("stop spawn_local version:{}", version);
                 if worker_inner.is_some(){
@@ -113,81 +139,3 @@ impl ExecutorTime for ThreadExec {
         Box::pin(tokio::time::sleep(dur))
     }
 }
-
-pub trait SpawnExec<F>: Clone {
-    fn spawn(
-        &self,
-        version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
-        fut: F,
-    );
-}
-
-impl<E, F> SpawnExec<F> for E
-where
-    F: Future<Output = Result<()>> + 'static,
-    E: Executor<F> + Clone,
-{
-    fn spawn(
-        &self,
-        version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
-        fut: F,
-    ) {
-        self.execute(version, worker_inner, err_worker, fut)
-    }
-}
-
-// pub fn _block_on<S, F>(service: S) -> Result<()>
-//     where
-//         S: FnOnce(ExecutorLocalSpawn) -> F + 'static,
-//         F: Future<Output = Result<()>> + 'static,
-// {
-//     let executor = async_executors::TokioCtBuilder::new().build().unwrap();
-//     executor
-//         .clone()
-//         .block_on(async {
-//             let executor_local_spawn = ExecutorLocalSpawn::default(executor, false, 0);
-//             service(executor_local_spawn)
-//                 .await
-//                 .map_err(|e| anyhow!("err:block_on service => e:{}", e))
-//         })
-//         .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
-//     Ok(())
-// }
-
-//
-// {
-// any_base::executor_spawn::_block_on(
-// 1,
-// ThreadExec,
-// move |mut executor_spawn: ExecutorSpawn<ThreadExec>| async move {
-// use any_base::rt::ExecutorTime;
-//
-// println!("any_base::executor_spawn::_block_on");
-// executor_spawn._start(false, move |executors_spawn: ExecutorsSpawn<ThreadExec>| async move {
-// executors_spawn.executor.sleep(tokio::time::Duration::from_secs(2)).await;
-// println!("111111 thread id:{:?}", std::thread::current().id());
-// if true {
-// return Err(anyhow!("11111111"));
-// }
-// Ok(())
-// });
-// executor_spawn._start(true, move |executors_spawn: ExecutorsSpawn<ThreadExec>| async move {
-// executors_spawn.sleep(tokio::time::Duration::from_secs(3)).await;
-// println!("2222 thread id:{:?}", std::thread::current().id());
-//
-// Ok(())
-// });
-// executor_spawn.sleep(tokio::time::Duration::from_secs(10)).await;
-// Ok(())
-// },
-// )
-// .map_err(|e| anyhow!("err:anyproxy block_on => e:{}", e))?;
-//
-// if true {
-// return Ok(());
-// }
-// }

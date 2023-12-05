@@ -10,12 +10,14 @@ use std::task::{Context, Poll};
 pub struct Stream {
     stream_rx: Option<quinn::RecvStream>,
     stream_rx_future: Option<
-        Pin<Box<dyn Future<Output = Result<(Bytes, quinn::RecvStream)>> + std::marker::Send>>,
+        Pin<
+            Box<dyn Future<Output = Result<(Bytes, quinn::RecvStream)>> + std::marker::Send + Sync>,
+        >,
     >,
     stream_tx: Option<quinn::SendStream>,
     stream_tx_data_size: usize,
     stream_tx_future:
-        Option<Pin<Box<dyn Future<Output = Result<quinn::SendStream>> + std::marker::Send>>>,
+        Option<Pin<Box<dyn Future<Output = Result<quinn::SendStream>> + std::marker::Send + Sync>>>,
 }
 
 impl Stream {

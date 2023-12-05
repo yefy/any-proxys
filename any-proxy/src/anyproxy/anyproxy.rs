@@ -1,22 +1,13 @@
 use super::anyproxy_group;
+use crate::anyproxy::anymodule;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
-use crate::config::config;
-#[cfg(feature = "anyproxy-ebpf")]
-use crate::ebpf::any_ebpf;
 use crate::util::default_config;
 use crate::util::signal;
-use crate::Tunnels;
 use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
-use any_tunnel::client;
-use any_tunnel::server;
-use any_tunnel2::client as client2;
-use any_tunnel2::server as server2;
-use any_tunnel2::tunnel as tunnel2;
+use any_base::module::module;
 use anyhow::anyhow;
 use anyhow::Result;
-use std::sync::atomic::{AtomicU64, AtomicUsize};
-use std::sync::Arc;
 use structopt::StructOpt;
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, StructOpt)]
@@ -69,14 +60,14 @@ pub enum AnyproxyState {
 }
 
 pub struct Anyproxy {
-    executor_local_spawn: ExecutorLocalSpawn,
+    executor: ExecutorLocalSpawn,
     group_version: i32,
 }
 
 impl Anyproxy {
-    pub fn new(executor_local_spawn: ExecutorLocalSpawn) -> Result<Anyproxy> {
+    pub fn new(executor: ExecutorLocalSpawn) -> Result<Anyproxy> {
         Ok(Anyproxy {
-            executor_local_spawn,
+            executor,
             group_version: 0,
         })
     }
@@ -91,13 +82,13 @@ impl Anyproxy {
         }
 
         if arg_config.config.is_some() {
-            *default_config::ANYPROXY_CONF_FULL_PATH.lock().unwrap() =
-                arg_config.config.clone().unwrap();
+            let config = arg_config.config.clone().unwrap();
+            default_config::ANYPROXY_CONF_FULL_PATH.set(config);
         }
 
         if arg_config.check_config {
-            executor_local_spawn::_block_on(1, move |executor_local_spawn| async move {
-                AnyproxyGroup::check(0, executor_local_spawn.executors())
+            executor_local_spawn::_block_on(1, 1, move |executor| async move {
+                AnyproxyGroup::check(0, executor.executors())
                     .await
                     .map_err(|e| anyhow::anyhow!("err:check => e:{}", e))?;
                 Ok(())
@@ -114,6 +105,7 @@ impl Anyproxy {
     }
 
     pub async fn start(&mut self) -> Result<()> {
+        log::trace!("anyproxy start");
         scopeguard::defer! {
             Anyproxy::remove_pid_file();
             Anyproxy::remove_signal_file();
@@ -125,51 +117,25 @@ impl Anyproxy {
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
         Anyproxy::remove_signal_file();
 
-        let config = config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e))?;
+        anymodule::add_modules()?;
 
-        let peer_stream_max_len = Arc::new(AtomicUsize::new(config.tunnel2.tunnel2_max_connect));
-        let client2 = tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
-        let client2 = client2::Client::new(client2, peer_stream_max_len.clone());
+        let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+        let mut ms = module::Modules::new(None);
+        ms.parse_module_config(&file_name, None)
+            .await
+            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
 
-        let server2 = tunnel2::Tunnel::start_thread(config.tunnel2.tunnel2_worker_thread).await;
-        let server2 = server2::Server::new(server2);
-
-        let client = client::Client::new();
-        let server = server::Server::new();
-
-        let session_id = Arc::new(AtomicU64::new(100000));
-        let shutdown_timeout = config.common.shutdown_timeout;
-
-        #[cfg(feature = "anyproxy-ebpf")]
-        let mut ebpf_group = any_ebpf::EbpfGroup::new(config.common.cpu_affinity, 0)?;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = ebpf_group
-            .start(config.common.debug_is_open_ebpf_log)
-            .await?;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = Arc::new(ebpf_add_sock_hash);
-
-        let tunnels = Tunnels {
-            client,
-            server,
-            client2,
-            server2,
-        };
+        use crate::config::common_core;
+        let common_conf = common_core::main_conf(&ms).await;
+        let shutdown_timeout = common_conf.shutdown_timeout;
 
         let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> = Some(
-            anyproxy_group::AnyproxyGroup::new(self.group_version_add())?,
+            anyproxy_group::AnyproxyGroup::new(self.group_version_add(), ms)?,
         );
         anyproxy_group
             .as_mut()
             .unwrap()
-            .start(
-                Some(config),
-                peer_stream_max_len.clone(),
-                tunnels.clone(),
-                #[cfg(feature = "anyproxy-ebpf")]
-                ebpf_add_sock_hash.clone(),
-                session_id.clone(),
-            )
+            .start()
             .await
             .map_err(|e| anyhow!("err:anyproxy start => e:{}", e))?;
 
@@ -187,34 +153,27 @@ impl Anyproxy {
                         shutdown_timeout,
                     )
                     .await;
-                    #[cfg(feature = "anyproxy-ebpf")]
-                    ebpf_group.stop().await;
                     log::info!("signal: quit");
                     break;
                 }
                 AnyproxyState::Stop => {
                     self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true, shutdown_timeout)
                         .await;
-                    #[cfg(feature = "anyproxy-ebpf")]
-                    ebpf_group.stop().await;
                     log::info!("signal: quit");
                     break;
                 }
                 AnyproxyState::Reload => {
                     anyproxy_group
-                        .as_ref()
+                        .as_mut()
                         .unwrap()
-                        .reload(
-                            peer_stream_max_len.clone(),
-                            self.executor_local_spawn.executors(),
-                        )
+                        .reload(self.executor.executors())
                         .await;
                     continue;
                 }
                 AnyproxyState::Check => {
                     let _ = anyproxy_group::AnyproxyGroup::check(
                         self.group_version,
-                        self.executor_local_spawn.executors(),
+                        self.executor.executors(),
                     )
                     .await;
                     continue;
@@ -227,19 +186,14 @@ impl Anyproxy {
                     }
                     #[cfg(unix)]
                     {
-                        let mut new_anyproxy_group = anyproxy_group::AnyproxyGroup::new(
-                            self.group_version_add(),
-                        )
-                        .map_err(|e| anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e))?;
+                        let ms = anyproxy_group.as_ref().unwrap().ms();
+                        let mut new_anyproxy_group =
+                            anyproxy_group::AnyproxyGroup::new(self.group_version_add(), ms)
+                                .map_err(|e| {
+                                    anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e)
+                                })?;
                         if let Err(e) = new_anyproxy_group
-                            .start(
-                                None,
-                                peer_stream_max_len.clone(),
-                                tunnels.clone(),
-                                #[cfg(feature = "anyproxy-ebpf")]
-                                ebpf_add_sock_hash.clone(),
-                                session_id.clone(),
-                            )
+                            .start()
                             .await
                             .map_err(|e| anyhow!("err:anyproxy start => e:{}", e))
                         {
@@ -279,7 +233,7 @@ impl Anyproxy {
         is_fast_shutdown: bool,
         shutdown_timeout: u64,
     ) {
-        self.executor_local_spawn._start(
+        self.executor._start(
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
             move |_| async move {
@@ -293,9 +247,7 @@ impl Anyproxy {
 
     pub async fn wait_anyproxy_groups(&mut self) -> Result<()> {
         log::info!("anyproxy wait_anyproxy_groups");
-        self.executor_local_spawn
-            .wait("anyproxy wait anyproxy_groups")
-            .await?;
+        self.executor.wait("anyproxy wait anyproxy_groups").await?;
         Ok(())
     }
 
@@ -303,54 +255,33 @@ impl Anyproxy {
         let anyproxy_pid = unsafe { libc::getpid() };
         log::info!("anyproxy pid:{}", anyproxy_pid);
         std::fs::write(
-            default_config::ANYPROXY_PID_FULL_PATH
-                .lock()
-                .unwrap()
-                .as_str(),
+            default_config::ANYPROXY_PID_FULL_PATH.get().as_str(),
             format!("{}", anyproxy_pid),
         )
         .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;
         Ok(())
     }
     pub fn remove_pid_file() {
-        let _ = std::fs::remove_file(
-            default_config::ANYPROXY_PID_FULL_PATH
-                .lock()
-                .unwrap()
-                .as_str(),
-        );
+        let _ = std::fs::remove_file(default_config::ANYPROXY_PID_FULL_PATH.get().as_str());
     }
 
     pub fn read_pid_file() -> Result<String> {
-        let pid = std::fs::read_to_string(
-            default_config::ANYPROXY_PID_FULL_PATH
-                .lock()
-                .unwrap()
-                .as_str(),
-        )
-        .map_err(|e| anyhow!("err:std::fs::read_to_string => e:{}", e))?;
+        let pid = std::fs::read_to_string(default_config::ANYPROXY_PID_FULL_PATH.get().as_str())
+            .map_err(|e| anyhow!("err:std::fs::read_to_string => e:{}", e))?;
         Ok(pid)
     }
 
     pub fn remove_signal_file() {
-        let _ = std::fs::remove_file(
-            default_config::ANYPROXY_SIGNAL_FULL_PATH
-                .lock()
-                .unwrap()
-                .as_str(),
-        );
+        let _ = std::fs::remove_file(default_config::ANYPROXY_SIGNAL_FULL_PATH.get().as_str());
     }
 
     pub fn load_signal_file() -> AnyproxyState {
-        let sig = match std::fs::read_to_string(
-            default_config::ANYPROXY_SIGNAL_FULL_PATH
-                .lock()
-                .unwrap()
-                .as_str(),
-        ) {
-            Err(_) => "".to_string(),
-            Ok(sig) => sig.trim().to_string(),
-        };
+        let sig =
+            match std::fs::read_to_string(default_config::ANYPROXY_SIGNAL_FULL_PATH.get().as_str())
+            {
+                Err(_) => "".to_string(),
+                Ok(sig) => sig.trim().to_string(),
+            };
         Anyproxy::remove_signal_file();
 
         match &sig[..] {
@@ -400,10 +331,7 @@ impl Anyproxy {
         };
         if is_sig {
             std::fs::write(
-                default_config::ANYPROXY_SIGNAL_FULL_PATH
-                    .lock()
-                    .unwrap()
-                    .as_str(),
+                default_config::ANYPROXY_SIGNAL_FULL_PATH.get().as_str(),
                 sig,
             )
             .map_err(|e| anyhow!("err:std::fs::write => e:{}", e))?;

@@ -1,18 +1,19 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::typ::ArcMutex;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct PushStream {
-    r: Box<dyn AsyncRead + Send + Unpin>,
-    w: Box<dyn AsyncWrite + Send + Unpin>,
+    r: ArcMutex<Box<dyn AsyncRead + Send + Sync + Unpin>>,
+    w: ArcMutex<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
 }
 
 impl PushStream {
     pub fn new(
-        r: Box<dyn AsyncRead + Send + Unpin>,
-        w: Box<dyn AsyncWrite + Send + Unpin>,
+        r: ArcMutex<Box<dyn AsyncRead + Send + Sync + Unpin>>,
+        w: ArcMutex<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
     ) -> PushStream {
         PushStream { r, w }
     }
@@ -50,28 +51,28 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for PushStream {
 
 impl tokio::io::AsyncRead for PushStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.r).poll_read(cx, buf)
+        Pin::new(&mut *self.r.get_mut()).poll_read(cx, buf)
     }
 }
 
 impl tokio::io::AsyncWrite for PushStream {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.w).poll_write(cx, buf)
+        Pin::new(&mut *self.w.get_mut()).poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.w).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w.get_mut()).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.w).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w.get_mut()).poll_shutdown(cx)
     }
 }

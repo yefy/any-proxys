@@ -1,89 +1,90 @@
 use super::anyproxy_work;
-use crate::config::config;
-use crate::config::config_toml;
-use crate::config::config_toml::ConfigToml;
-#[cfg(feature = "anyproxy-ebpf")]
-use crate::ebpf::any_ebpf;
-use crate::proxy::domain_config;
-use crate::proxy::port_config;
-use crate::proxy::proxy;
-use crate::upstream::upstream;
-use crate::TunnelClients;
-use crate::Tunnels;
+use crate::util::default_config;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::executor_local_spawn::_block_on;
+use any_base::module::module;
 use any_base::thread_pool::ThreadPool;
-use any_tunnel::client;
-use any_tunnel2::client as client2;
-use any_tunnel2::tunnel as tunnel2;
 use anyhow::anyhow;
 use anyhow::Result;
 #[cfg(unix)]
 use rlimit::{setrlimit, Resource};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct AnyproxyGroup {
     group_version: i32,
-    config_tx: Option<broadcast::Sender<config_toml::ConfigToml>>,
+    config_tx: Option<broadcast::Sender<module::Modules>>,
     thread_pool: Option<ThreadPool>,
+    ms: module::Modules,
 }
 
 impl AnyproxyGroup {
-    pub fn new(group_version: i32) -> Result<AnyproxyGroup> {
+    pub fn new(group_version: i32, ms: module::Modules) -> Result<AnyproxyGroup> {
         Ok(AnyproxyGroup {
             group_version,
             config_tx: None,
             thread_pool: None,
+            ms,
         })
     }
-
+    pub fn ms(&self) -> module::Modules {
+        self.ms.clone()
+    }
     pub fn group_version(&self) -> i32 {
         self.group_version
     }
 
-    pub async fn start(
-        &mut self,
-        config: Option<ConfigToml>,
-        peer_stream_max_len: Arc<AtomicUsize>,
-        tunnels: Tunnels,
-        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Arc<any_ebpf::AddSockHash>,
-        session_id: Arc<AtomicU64>,
-    ) -> Result<()> {
-        let config = if config.is_none() {
-            config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e))?
-        } else {
-            config.unwrap()
-        };
+    pub async fn start(&mut self) -> Result<()> {
+        log::trace!("anyproxy_group start");
+        let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+        let mut ms = module::Modules::new(Some(self.ms.clone()));
+        ms.parse_module_config(&file_name, None)
+            .await
+            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+        self.ms = ms.clone();
+        use crate::config::common_core;
+        let common_conf = common_core::main_conf(&ms).await;
 
         #[cfg(unix)]
         {
-            let soft = config.common.max_open_file_limit;
+            let soft = common_conf.max_open_file_limit;
             let hard = soft;
             setrlimit(Resource::NOFILE, soft, hard)
                 .map_err(|e| anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e))?;
 
             use crate::util::util;
-            let memlock_rlimit = config.common.memlock_rlimit.clone();
-            util::memlock_rlimit(memlock_rlimit.curr, memlock_rlimit.max)
-                .map_err(|e| anyhow!("err:setrlimit => e:{}", e))?;
+            util::memlock_rlimit(
+                common_conf.memlock_rlimit_curr,
+                common_conf.memlock_rlimit_max,
+            )
+            .map_err(|e| anyhow!("err:setrlimit => e:{}", e))?;
         }
 
-        //reload 的时候不能改变peer_stream_max_len 使用swap获取最新的值
-        peer_stream_max_len.swap(config.tunnel2.tunnel2_max_connect, Ordering::Relaxed);
-
         let (_config_tx, _) = broadcast::channel(100);
-        log::info!("tunnel2_max_connect:{}", config.tunnel2.tunnel2_max_connect);
+        let mut _worker_threads = common_conf.worker_threads;
+        let mut _block_on_worker_threads = common_conf.worker_threads;
+        #[cfg(windows)]
+        {
+            _worker_threads = 1;
+        }
 
+        #[cfg(unix)]
+        {
+            if common_conf.reuseport {
+                _block_on_worker_threads = 1;
+            } else {
+                _worker_threads = 1;
+            }
+        }
+        let worker_threads_blocking = common_conf.worker_threads_blocking;
+        log::info!("worker_threads:{}", _worker_threads);
+        log::info!("block_on_worker_threads:{}", _block_on_worker_threads);
+        log::info!("worker_threads_blocking:{}", worker_threads_blocking);
         let config_tx = _config_tx.clone();
         let thread_pool = ThreadPool::new(
-            config.common.worker_threads,
-            config.common.cpu_affinity,
+            _worker_threads,
+            common_conf.cpu_affinity,
             self.group_version,
         );
-        let worker_threads_blocking = config.common.worker_threads_blocking;
         let mut thread_pool_wait_run = thread_pool.thread_pool_wait_run();
         thread_pool_wait_run._start(move |async_context| {
             log::debug!(
@@ -93,19 +94,14 @@ impl AnyproxyGroup {
                 async_context.thread_id
             );
             _block_on(
+                _block_on_worker_threads,
                 worker_threads_blocking,
-                move |executor_local_spawn| async move {
+                move |executor| async move {
                     let mut anyproxy_work =
-                        anyproxy_work::AnyproxyWork::new(executor_local_spawn, tunnels, config_tx)
+                        anyproxy_work::AnyproxyWork::new(executor, config_tx)
                             .map_err(|e| anyhow!("err:AnyproxyWork::new => e:{}", e))?;
                     anyproxy_work
-                        .start(
-                            config,
-                            async_context,
-                            #[cfg(feature = "anyproxy-ebpf")]
-                            ebpf_add_sock_hash,
-                            session_id,
-                        )
+                        .start(async_context, ms)
                         .await
                         .map_err(|e| anyhow!("err:anyproxy_work.start => e:{}", e))?;
                     Ok(())
@@ -125,9 +121,16 @@ impl AnyproxyGroup {
         Ok(())
     }
 
-    pub async fn reload(&self, peer_stream_max_len: Arc<AtomicUsize>, executors: ExecutorsLocal) {
-        let config = AnyproxyGroup::check(self.group_version, executors).await;
-        let config = match config {
+    pub async fn reload(&mut self, _executors: ExecutorsLocal) {
+        let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
+        let file_name = anyproxy_conf_full_path.as_str();
+
+        let mut ms = module::Modules::new(Some(self.ms.clone()));
+        let ret = ms
+            .parse_module_config(file_name, None)
+            .await
+            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e));
+        match ret {
             Err(e) => {
                 log::error!(
                     "err:reload config => group_version:{} e:{}",
@@ -136,19 +139,18 @@ impl AnyproxyGroup {
                 );
                 return;
             }
-            Ok(config) => config,
+            _ => {}
         };
-        peer_stream_max_len.swap(config.tunnel2.tunnel2_max_connect, Ordering::Relaxed);
-        // log::info!(
-        //     "reload group_version:{} config:{:?}",
-        //     self.group_version,
-        //     config
-        // );
+        self.ms = ms.clone();
+
         log::info!("reload ok group_version:{}", self.group_version);
 
         #[cfg(unix)]
         {
-            let soft = config.common.max_open_file_limit;
+            use crate::config::common_core;
+            let common_conf = common_core::main_conf(&ms).await;
+
+            let soft = common_conf.max_open_file_limit;
             let hard = soft;
             if let Err(e) = setrlimit(Resource::NOFILE, soft, hard)
                 .map_err(|e| anyhow!("err:setrlimit => soft:{}, hard:{}, e:{}", soft, hard, e))
@@ -156,63 +158,7 @@ impl AnyproxyGroup {
                 log::error!(":{}", e);
             }
         }
-        let _ = self.config_tx.as_ref().unwrap().send(config);
-    }
-
-    pub async fn check(
-        group_version: i32,
-        executors: ExecutorsLocal,
-    ) -> Result<config_toml::ConfigToml> {
-        let config = config::Config::new().map_err(|e| anyhow!("err:Config::new() => e:{}", e));
-        let config = match config {
-            Err(e) => {
-                log::error!(
-                    "err:check config => group_version:{} e:{}",
-                    group_version,
-                    e
-                );
-                return Err(e);
-            }
-            Ok(config) => config,
-        };
-
-        let client2 = tunnel2::Tunnel::start_thread(1).await;
-        let client2 = client2::Client::new(client2, Arc::new(AtomicUsize::new(1)));
-        let client = client::Client::new();
-
-        let proxy_configs: Vec<Box<dyn proxy::Config>> = vec![
-            Box::new(port_config::PortConfig::new()?),
-            Box::new(domain_config::DomainConfig::new()?),
-        ];
-
-        let tunnel_clients = TunnelClients { client, client2 };
-
-        let mut ups = upstream::Upstream::new(executors, tunnel_clients.clone())
-            .map_err(|e| anyhow!("err:Upstream::new => e:{}", e))?;
-        ups.parse_config(&config)
-            .await
-            .map_err(|e| anyhow!("err:Upstream::new => e:{}", e))?;
-
-        let ups = Rc::new(ups);
-
-        for proxy_config in proxy_configs.iter() {
-            if let Err(e) = proxy_config
-                .parse(&config, ups.clone(), tunnel_clients.clone())
-                .await
-            {
-                log::error!(
-                    "err:check => group_version:{} config:{:?} e:{}",
-                    group_version,
-                    config,
-                    e
-                );
-                return Err(e);
-            }
-        }
-
-        //log::info!("check group_version:{} config:{:?}", group_version, config);
-        log::info!("check ok group_version:{}", group_version);
-        Ok(config)
+        let _ = self.config_tx.as_ref().unwrap().send(ms);
     }
 
     pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
@@ -221,5 +167,34 @@ impl AnyproxyGroup {
             .unwrap()
             .stop(is_fast_shutdown, shutdown_timeout)
             .await
+    }
+
+    pub async fn check(group_version: i32, _executors: ExecutorsLocal) -> Result<()> {
+        let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
+        let file_name = anyproxy_conf_full_path.as_str();
+
+        let mut ms = module::Modules::new(None);
+        let ret = ms
+            .parse_module_config(&file_name, None)
+            .await
+            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e));
+        match ret {
+            Err(e) => {
+                log::error!(
+                    "err:check config => group_version:{} e:{}",
+                    group_version,
+                    e
+                );
+                return Err(anyhow::anyhow!(
+                    "err:check config => group_version:{} e:{}",
+                    group_version,
+                    e
+                ));
+            }
+            _ => {}
+        };
+
+        log::info!("check ok group_version:{}", group_version);
+        Ok(())
     }
 }

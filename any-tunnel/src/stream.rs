@@ -8,6 +8,7 @@ use crate::get_flag;
 use crate::protopack::DynamicPoolTunnelData;
 use crate::PeerClientToStreamReceiver;
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::typ::ArcMutex;
 use awaitgroup::WorkerInner;
 #[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
@@ -16,7 +17,6 @@ use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 struct StreamBuf {
@@ -74,18 +74,20 @@ pub struct Stream {
             Box<
                 dyn Future<
                         Output = std::result::Result<DynamicTunnelData, async_channel::RecvError>,
-                    > + std::marker::Send,
+                    > + std::marker::Send
+                    + Sync,
             >,
         >,
     >,
-    stream_tx: Option<Arc<Mutex<RoundAsyncChannel<TunnelPack>>>>,
+    stream_tx: Option<ArcMutex<RoundAsyncChannel<TunnelPack>>>,
     stream_tx_data_size: usize,
     stream_tx_buffer_pool: DynamicPoolTunnelData,
     stream_tx_future: Option<
         Pin<
             Box<
                 dyn Future<Output = std::result::Result<(), async_channel::SendError<TunnelPack>>>
-                    + std::marker::Send,
+                    + std::marker::Send
+                    + Sync,
             >,
         >,
     >,
@@ -99,7 +101,7 @@ impl Stream {
     pub fn new(
         is_client: bool,
         stream_rx: PeerClientToStreamReceiver,
-        stream_tx: Arc<Mutex<RoundAsyncChannel<TunnelPack>>>,
+        stream_tx: ArcMutex<RoundAsyncChannel<TunnelPack>>,
         _max_stream_size: usize,
         _channel_size: usize,
         _session_id: String,
@@ -171,7 +173,7 @@ impl Stream {
             log::debug!("stream write_close");
             let stream_tx = stream_tx.unwrap();
             {
-                let stream_tx = &mut *stream_tx.lock().unwrap();
+                let stream_tx = &mut *stream_tx.get_mut();
                 stream_tx.close();
             }
 
@@ -299,13 +301,13 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
             log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
 
             let (sender, lock) = {
-                let stream_tx = self.stream_tx.as_ref().unwrap().lock().unwrap();
+                let stream_tx = self.stream_tx.as_ref().unwrap().get();
 
                 (stream_tx.round_sender_clone(), stream_tx.get_lock())
             };
 
             Box::pin(async move {
-                let mut lock = lock.lock().await;
+                let mut lock = lock.get_mut().await;
                 let ret = sender.send(TunnelPack::TunnelData(tunnel_data)).await;
                 *lock = true;
                 ret
@@ -404,13 +406,13 @@ impl tokio::io::AsyncWrite for Stream {
             log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
 
             let (sender, lock) = {
-                let stream_tx = self.stream_tx.as_ref().unwrap().lock().unwrap();
+                let stream_tx = self.stream_tx.as_ref().unwrap().get();
 
                 (stream_tx.round_sender_clone(), stream_tx.get_lock())
             };
 
             Box::pin(async move {
-                let mut lock = lock.lock().await;
+                let mut lock = lock.get_mut().await;
                 let ret = sender.send(TunnelPack::TunnelData(tunnel_data)).await;
                 *lock = true;
                 ret

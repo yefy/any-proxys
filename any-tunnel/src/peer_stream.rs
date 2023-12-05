@@ -16,6 +16,8 @@ use crate::get_flag;
 use crate::peer_client::PeerStreamToPeerClientTx;
 use crate::protopack::{TunnelClose, TunnelHello};
 use crate::server::{AcceptSenderType, ServerRecvHello};
+use any_base::executor_local_spawn::Runtime;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 #[cfg(feature = "anypool-dynamic-pool")]
@@ -146,7 +148,11 @@ impl PeerStream {
         self.context.peer_stream_key.clone()
     }
 
-    pub async fn start(mut peer_stream: PeerStream, stream: StreamFlow) -> Result<()> {
+    pub async fn start(
+        mut peer_stream: PeerStream,
+        stream: StreamFlow,
+        run_time: Arc<Box<dyn Runtime>>,
+    ) -> Result<()> {
         if peer_stream.context.is_client {
             let async_ = Box::pin(async move {
                 peer_stream
@@ -155,11 +161,15 @@ impl PeerStream {
                     .map_err(|e| anyhow!("err:PeerStream::do_start => e:{}", e))
             });
             if cfg!(feature = "anyruntime-tokio-spawn-local") {
-                any_base::executor_local_spawn::_start_and_free2(
+                any_base::executor_local_spawn::_start_and_free(
                     move || async move { async_.await },
                 );
-            } else {
+            } else if cfg!(feature = "anyruntime-tokio-spawn") {
                 any_base::executor_spawn::_start_and_free(move || async move { async_.await });
+            } else {
+                run_time.spawn(Box::pin(async move {
+                    let _ = async_.await;
+                }));
             }
         } else {
             let ret: Result<()> = async {
@@ -179,7 +189,7 @@ impl PeerStream {
         &mut self,
         r: &mut R,
         w: &mut W,
-        stream_info: Arc<Mutex<StreamFlowInfo>>,
+        stream_info: ArcMutex<StreamFlowInfo>,
     ) -> Result<bool> {
         let ret: Result<(Option<PeerStreamRecv>, bool)> = async {
             tokio::select! {
@@ -214,8 +224,8 @@ impl PeerStream {
     }
 
     pub async fn do_start(&mut self, mut stream: StreamFlow) -> Result<()> {
-        let stream_info = Arc::new(std::sync::Mutex::new(StreamFlowInfo::new()));
-        stream.set_stream_info(Some(stream_info.clone()));
+        let stream_info = ArcMutex::new(StreamFlowInfo::new());
+        stream.set_stream_info(stream_info.clone());
         let (mut r, mut w) = tokio::io::split(stream);
         loop {
             #[cfg(feature = "anydebug")]
@@ -230,7 +240,7 @@ impl PeerStream {
             self.context.once.init();
             let ret = self.stream(&mut r, &mut w, stream_info.clone()).await;
             if let Err(e) = ret {
-                let err = { stream_info.lock().unwrap().err.clone() };
+                let err = { stream_info.get().err.clone() };
                 if err as i32 >= StreamFlowErr::WriteTimeout as i32 {
                     return Err(anyhow!("err:do_stream => e:{}", e))?;
                 }
@@ -294,7 +304,7 @@ impl PeerStream {
         r: &mut R,
         w: &mut W,
         msg: PeerStreamRecvHello,
-        stream_info: Arc<Mutex<StreamFlowInfo>>,
+        stream_info: ArcMutex<StreamFlowInfo>,
     ) -> Result<bool> {
         let PeerStreamRecvHello {
             stream_to_peer_stream_rx,
@@ -388,7 +398,7 @@ impl PeerStream {
         if let Err(e) = ret {
             let tx_pack_id = self.context.once.tx_pack_id.load(Ordering::SeqCst);
             let rx_pack_id = self.context.once.rx_pack_id.load(Ordering::SeqCst);
-            let err = { stream_info.lock().unwrap().err.clone() };
+            let err = { stream_info.get().err.clone() };
             if err.clone() as i32 >= StreamFlowErr::WriteTimeout as i32 {
                 _err_num = 1;
                 peer_stream_to_peer_client_tx.close();

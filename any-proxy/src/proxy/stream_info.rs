@@ -1,11 +1,12 @@
 use super::StreamConfigContext;
-use crate::config::config_toml::UpstreamDispatch;
 use crate::protopack::anyproxy::AnyproxyHello;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::Protocol77;
-use std::rc::Rc;
+use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::future_wait::FutureWait;
+use any_base::typ::{ArcMutex, Share, ShareRw};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -121,6 +122,7 @@ impl ErrStatus200 for ErrStatusUpstream {
 }
 
 pub struct StreamInfo {
+    pub executors: Option<ExecutorsLocal>,
     pub server_stream_info: Arc<ServerStreamInfo>,
     pub ssl_domain: Option<String>,
     pub local_domain: Option<String>,
@@ -128,25 +130,24 @@ pub struct StreamInfo {
     pub session_time: f32,
     pub debug_is_open_print: bool,
     pub request_id: String,
-    pub protocol_hello: std::sync::Arc<std::sync::Mutex<Option<Arc<AnyproxyHello>>>>,
+    pub protocol_hello: ArcMutex<Arc<AnyproxyHello>>,
     pub protocol_hello_size: usize,
     pub err_status: ErrStatus,
     pub err_status_str: Option<String>,
-    pub client_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
-    pub upstream_connect_flow_info: std::sync::Arc<tokio::sync::Mutex<StreamFlowInfo>>,
-    pub upstream_stream_flow_info: std::sync::Arc<std::sync::Mutex<StreamFlowInfo>>,
+    pub client_stream_flow_info: ArcMutex<StreamFlowInfo>,
+    pub upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
+    pub upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
     pub stream_work_times: Vec<(String, f32)>,
     pub stream_work_time: Option<Instant>,
     pub is_discard_flow: bool,
     pub is_open_ebpf: bool,
-    pub ups_dispatch: Option<UpstreamDispatch>,
+    pub ups_dispatch: Option<String>,
     pub is_proxy_protocol_hello: bool,
-    pub stream_config_context: Option<Rc<StreamConfigContext>>,
+    pub scc: ShareRw<StreamConfigContext>,
     pub is_discard_timeout: bool,
-    pub buffer_cache: Option<String>,
-    pub upstream_connect_info: Option<Rc<ConnectInfo>>,
+    pub buffer_cache: Option<Arc<String>>,
+    pub upstream_connect_info: Share<ConnectInfo>,
     pub debug_is_open_stream_work_times: bool,
-    pub is_break_stream_write: bool,
     pub close_num: usize,
     pub write_max_block_time_ms: u128,
     pub client_protocol_hello_size: usize,
@@ -154,14 +155,20 @@ pub struct StreamInfo {
     pub total_read_size: u64,
     pub total_write_size: u64,
     pub protocol77: Option<Protocol77>,
+    pub upload_read: FutureWait,
+    pub download_read: FutureWait,
+    pub upload_close: FutureWait,
+    pub download_close: FutureWait,
 }
 
 impl StreamInfo {
     pub fn new(
         server_stream_info: Arc<ServerStreamInfo>,
         debug_is_open_stream_work_times: bool,
+        executors: Option<ExecutorsLocal>,
     ) -> StreamInfo {
         StreamInfo {
+            executors,
             server_stream_info,
             ssl_domain: None,
             local_domain: None,
@@ -169,31 +176,24 @@ impl StreamInfo {
             session_time: 0.0,
             debug_is_open_print: false,
             request_id: "".to_string(),
-            protocol_hello: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            protocol_hello: ArcMutex::default(),
             protocol_hello_size: 0,
             err_status: ErrStatus::ClientProtoErr,
             err_status_str: None,
-            client_stream_flow_info: std::sync::Arc::new(std::sync::Mutex::new(
-                StreamFlowInfo::new(),
-            )),
-            upstream_connect_flow_info: std::sync::Arc::new(tokio::sync::Mutex::new(
-                StreamFlowInfo::new(),
-            )),
-            upstream_stream_flow_info: std::sync::Arc::new(std::sync::Mutex::new(
-                StreamFlowInfo::new(),
-            )),
+            client_stream_flow_info: ArcMutex::new(StreamFlowInfo::new()),
+            upstream_connect_flow_info: ArcMutex::new(StreamFlowInfo::new()),
+            upstream_stream_flow_info: ArcMutex::new(StreamFlowInfo::new()),
             stream_work_times: Vec::new(),
             stream_work_time: Some(Instant::now()),
             is_discard_flow: false,
             is_open_ebpf: false,
             ups_dispatch: None,
             is_proxy_protocol_hello: false,
-            stream_config_context: None,
+            scc: ShareRw::default(),
             is_discard_timeout: false,
             buffer_cache: None,
-            upstream_connect_info: None,
+            upstream_connect_info: Share::default(),
             debug_is_open_stream_work_times,
-            is_break_stream_write: false,
             close_num: 0,
             write_max_block_time_ms: 0,
             client_protocol_hello_size: 0,
@@ -201,6 +201,10 @@ impl StreamInfo {
             total_read_size: 0,
             total_write_size: 0,
             protocol77: None,
+            upload_read: FutureWait::new(),
+            download_read: FutureWait::new(),
+            upload_close: FutureWait::new(),
+            download_close: FutureWait::new(),
         }
     }
 

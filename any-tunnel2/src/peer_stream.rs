@@ -9,6 +9,7 @@ use super::stream_flow::StreamFlowInfo;
 use super::DEFAULT_PRINT_NUM;
 use crate::anychannel::AnyAsyncSender;
 use crate::{PeerStreamToPeerClientSender, PeerStreamTunnelData};
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -39,7 +40,7 @@ impl PeerStream {
             });
 
             if cfg!(feature = "anyruntime-tokio-spawn-local") {
-                any_base::executor_local_spawn::_start_and_free2(
+                any_base::executor_local_spawn::_start_and_free(
                     move || async move { async_.await },
                 );
             } else {
@@ -65,11 +66,11 @@ impl PeerStream {
         mut pack_to_peer_stream_rx: async_channel::Receiver<TunnelArcPack>,
     ) -> Result<()> {
         peer_stream_len.fetch_add(1, Ordering::Relaxed);
-        let stream_info = Arc::new(std::sync::Mutex::new(StreamFlowInfo::new()));
+        let stream_info = ArcMutex::new(StreamFlowInfo::new());
         stream.set_config(
             tokio::time::Duration::from_secs(60 * 10),
             tokio::time::Duration::from_secs(60 * 10),
-            Some(stream_info.clone()),
+            stream_info.clone(),
         );
         let (r, w) = stream.split();
         let r = any_base::io::buf_reader::BufReader::new(r);
@@ -95,7 +96,7 @@ impl PeerStream {
 
         peer_stream_len.fetch_sub(1, Ordering::Relaxed);
         if let Err(e) = ret {
-            let err = { stream_info.lock().unwrap().err.clone() };
+            let err = { stream_info.get().err.clone() };
             if err as i32 >= StreamFlowErr::WriteTimeout as i32 {
                 return Err(e)?;
             }

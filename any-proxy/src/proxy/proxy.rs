@@ -1,46 +1,18 @@
-use crate::config::config_toml;
 use crate::proxy::stream_info::StreamInfo;
-use crate::stream::stream_flow;
-use crate::upstream::upstream;
 use crate::util::var;
-use crate::TunnelClients;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::Share;
 use anyhow::Result;
 use async_trait::async_trait;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::fs::File;
+use std::sync::Arc;
 
-#[async_trait(?Send)]
-pub trait Proxy {
-    async fn start(
-        &mut self,
-        config: &config_toml::ConfigToml,
-        ups: Rc<upstream::Upstream>,
-    ) -> Result<()>;
-    async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) -> Result<()>;
-    async fn send(&self, flag: &str, is_fast_shutdown: bool) -> Result<()>;
-    async fn wait(&self, flag: &str) -> Result<()>;
-}
-
-#[async_trait(?Send)]
-pub trait Config {
-    async fn parse(
-        &self,
-        config: &config_toml::ConfigToml,
-        ups: Rc<upstream::Upstream>,
-        tunnel_clients: TunnelClients,
-    ) -> Result<()>;
-}
-
-#[async_trait(?Send)]
-pub trait Stream {
-    async fn do_start(
-        &mut self,
-        stream_info: Rc<RefCell<StreamInfo>>,
-        stream: stream_flow::StreamFlow,
-    ) -> Result<()>;
+#[async_trait]
+pub trait Stream: Send + Sync {
+    async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()>;
 }
 
 pub struct AccessContext {
     pub access_format_vars: var::Var,
-    pub access_log_file: std::sync::Arc<std::fs::File>,
+    pub access_log_file: Arc<File>,
 }

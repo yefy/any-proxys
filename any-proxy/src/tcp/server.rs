@@ -2,10 +2,11 @@ use super::util as tcp_util;
 use crate::config::config_toml::TcpConfig as Config;
 use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
-use crate::stream::stream_flow;
 use crate::tcp::stream::Stream;
 use crate::util;
 use crate::Protocol7;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -32,7 +33,7 @@ impl Server {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Server for Server {
     fn stream_send_timeout(&self) -> usize {
         return self.config.tcp_send_timeout;
@@ -77,7 +78,7 @@ impl Listener {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Listener for Listener {
     async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         let ret: Result<(TcpStream, SocketAddr)> = async {
@@ -125,9 +126,9 @@ impl Connection {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Connection for Connection {
-    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
+    async fn stream(&mut self) -> Result<Option<(StreamFlow, ServerStreamInfo)>> {
         if self.stream.is_none() {
             return Ok(None);
         }
@@ -141,10 +142,11 @@ impl server::Connection for Connection {
 
         let stream = Stream::new(tcp_stream);
         let (r, w) = any_base::io::split::split(stream);
-        let mut stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
+        let mut stream =
+            StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
-        stream.set_config(read_timeout, write_timeout, None);
+        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
         Ok(Some((
             stream,
             ServerStreamInfo {

@@ -1,11 +1,11 @@
+use any_base::typ::ArcMutexTokio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 pub struct RoundAsyncChannel<T> {
     index: AtomicUsize,
     senders: Vec<async_channel::Sender<T>>,
     is_close: AtomicBool,
-    lock: Arc<tokio::sync::Mutex<bool>>,
+    lock: ArcMutexTokio<bool>,
 }
 
 impl<T> RoundAsyncChannel<T> {
@@ -14,11 +14,11 @@ impl<T> RoundAsyncChannel<T> {
             index: AtomicUsize::new(0),
             senders: Vec::new(),
             is_close: AtomicBool::new(false),
-            lock: Arc::new(tokio::sync::Mutex::new(false)),
+            lock: ArcMutexTokio::new(false),
         }
     }
 
-    pub fn get_lock(&self) -> Arc<tokio::sync::Mutex<bool>> {
+    pub fn get_lock(&self) -> ArcMutexTokio<bool> {
         self.lock.clone()
     }
 

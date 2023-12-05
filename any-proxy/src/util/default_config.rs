@@ -1,39 +1,39 @@
+use any_base::typ::ArcRwLock;
 use lazy_static::lazy_static;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 
 lazy_static! {
-    pub static ref ANYPROXY_PID_FULL_PATH: Mutex<String> =
-        Mutex::new("./logs/anyproxy.pid".to_string());
+    pub static ref ANYPROXY_PID_FULL_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./logs/anyproxy.pid".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_SIGNAL_FULL_PATH: Mutex<String> =
-        Mutex::new("./logs/anyproxy.signal".to_string());
+    pub static ref ANYPROXY_SIGNAL_FULL_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./logs/anyproxy.signal".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_LOG_FULL_PATH: Mutex<String> =
-        Mutex::new("./conf/log4rs.yaml".to_string());
+    pub static ref ANYPROXY_LOG_FULL_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./conf/log4rs.yaml".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_CONF_FULL_PATH: Mutex<String> =
-        Mutex::new("./conf/anyproxy.conf".to_string());
+    pub static ref ANYPROXY_CONF_FULL_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./conf/anyproxy.conf".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_CONF_PATH: Mutex<String> = Mutex::new("./conf/".to_string());
+    pub static ref ANYPROXY_CONF_PATH: ArcRwLock<String> = ArcRwLock::new("./conf/".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_CONF_LOG_RAW_PATH: Mutex<String> =
-        Mutex::new("./logs/anyproxy.conf".to_string());
+    pub static ref ANYPROXY_CONF_LOG_RAW_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./logs/anyproxy.conf".to_string());
 }
 
 lazy_static! {
-    pub static ref ANYPROXY_CONF_LOG_FULL_PATH: Mutex<String> =
-        Mutex::new("./logs/anyproxy.toml".to_string());
+    pub static ref ANYPROXY_CONF_LOG_FULL_PATH: ArcRwLock<String> =
+        ArcRwLock::new("./logs/anyproxy.toml".to_string());
 }
 
 lazy_static! {
@@ -41,5 +41,5 @@ lazy_static! {
 }
 
 lazy_static! {
-    pub static ref MIN_CACHE_BUFFER_NUM: usize = 4;
+    pub static ref MIN_CACHE_BUFFER_NUM: usize = 2;
 }

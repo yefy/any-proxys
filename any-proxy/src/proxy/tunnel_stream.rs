@@ -3,23 +3,23 @@ use crate::protopack;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::typ::ArcMutex;
+use any_base::typ::Share;
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 
 pub struct TunnelStream {}
 
 impl TunnelStream {
     pub async fn tunnel_stream(
-        tunnel_publish: tunnel_server::Publish,
-        tunnel2_publish: tunnel2_server::Publish,
+        tunnel_publish: Option<tunnel_server::Publish>,
+        tunnel2_publish: Option<tunnel2_server::Publish>,
         server_stream_info: Arc<ServerStreamInfo>,
         mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
-        stream_info: Rc<RefCell<StreamInfo>>,
+        stream_info: Share<StreamInfo>,
         executors: ExecutorsLocal,
     ) -> Result<Option<any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>>> {
         log::debug!(
@@ -35,10 +35,13 @@ impl TunnelStream {
             .map_err(|e| anyhow!("err:read_tunnel_hello => e:{}", e))?;
 
         if tunnel_hello.is_some() {
+            if tunnel_publish.is_none() {
+                return Err(anyhow::anyhow!("tunnel_publish nil"));
+            }
             let tunnel_hello = tunnel_hello.unwrap();
             log::debug!("tunnel_hello:{:?}", tunnel_hello);
-            stream_info.borrow_mut().is_discard_flow = true;
-            stream_info.borrow_mut().is_discard_timeout = true;
+            stream_info.get_mut().is_discard_flow = true;
+            stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
                 any_base::io::buf_writer::BufWriter::new(client_buf_reader),
             );
@@ -54,13 +57,14 @@ impl TunnelStream {
             //     .map_err(|e| anyhow!("err:self.tunnel_publish.push_peer_stream => e:{}", e))?;
 
             let mut shutdown_thread_rx = executors.shutdown_thread_tx.subscribe();
+            let tunnel_publish = tunnel_publish.unwrap();
             executors._start_and_free(move |_| async move {
                 async {
                     tokio::select! {
                         biased;
                         ret = tunnel_publish.push_peer_stream(
-                            Box::new(r),
-                            Box::new(w),
+                            ArcMutex::new(Box::new(r)),
+                            ArcMutex::new(Box::new(w)),
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
                             server_stream_info.domain.clone(),
@@ -86,10 +90,13 @@ impl TunnelStream {
             .map_err(|e| anyhow!("err:anyproxy::read_tunnel2_hello => e:{}", e))?;
 
         if tunnel_hello.is_some() {
+            if tunnel2_publish.is_none() {
+                return Err(anyhow::anyhow!("tunnel2_publish nil"));
+            }
             let tunnel_hello = tunnel_hello.unwrap();
             log::debug!("tunnel_hello:{:?}", tunnel_hello);
-            stream_info.borrow_mut().is_discard_flow = true;
-            stream_info.borrow_mut().is_discard_timeout = true;
+            stream_info.get_mut().is_discard_flow = true;
+            stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
                 any_base::io::buf_writer::BufWriter::new(client_buf_reader),
             );
@@ -105,13 +112,14 @@ impl TunnelStream {
             //     .map_err(|e| anyhow!("err:self.tunnel2_publish.push_peer_stream => e:{}", e))?;
 
             let mut shutdown_thread_rx = executors.shutdown_thread_tx.subscribe();
+            let tunnel2_publish = tunnel2_publish.unwrap();
             executors._start_and_free(move |_| async move {
                 async {
                     tokio::select! {
                         biased;
                         ret = tunnel2_publish.push_peer_stream(
-                            Box::new(r),
-                            Box::new(w),
+                            ArcMutex::new(Box::new(r)),
+                            ArcMutex::new(Box::new(w)),
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
                         ) => {

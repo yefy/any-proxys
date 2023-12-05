@@ -1,25 +1,42 @@
 #port模式
 ````
-[[_server]]
-    domain = "www.example.cn"
-    [[listen]]
-        type = "tcp"
-        address = "0.0.0.0:11135"
-    [[listen]]
-        type = "quic"
-        address = "0.0.0.0:[11135~11139]"
+server {
+    stream_cache_size  usize = 131072;
+    domain str = "www.example.cn";
+    port_listen_tcp raw = r```
+        address = "0.0.0.0:10001"
+    ```r;
+    port_listen_ssl raw = r```
+        address = "0.0.0.0:10011"
         ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem", ssl_domain = "www.example.cn"}
+    ```r;
+    port_listen_quic raw = r```
+        address = "0.0.0.0:10011"
+        ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem", ssl_domain = "www.example.cn"}
+    ```r;
+    proxy_pass_upstream str = "upstream_tcp_http";
+    local {
+    }
+}
 
 #domain模式
-[[_server]]
-    domain = "www.example.cn $$(...).i4.cn"
-    [[listen]]
-        type = "tcp"
-        address = "0.0.0.0:11152"
-    [[listen]]
-        type = "quic"
-        address = "0.0.0.0:[11152~11159]"
+server {
+    domain str = "www.example.cn";
+     domain_listen_tcp raw = r```
+        address = "0.0.0.0:10101"
+    ```r;
+    domain_listen_ssl raw = r```
+        address = "0.0.0.0:10111"
         ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem"}
+    ```r;
+    domain_listen_quic raw = r```
+        address = "0.0.0.0:10111"
+        ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem"}
+    ```r;
+    proxy_pass_upstream str = "upstream_tcp_https";
+    local {
+    }
+}
 ````
 
 #启动监听

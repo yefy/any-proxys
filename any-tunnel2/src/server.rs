@@ -6,6 +6,7 @@ use super::tunnel::Tunnel;
 use super::Protocol4;
 use crate::peer_client::PeerClientSender;
 use crate::push_stream::PushStream;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -46,8 +47,8 @@ impl Publish {
 
     pub async fn push_peer_stream(
         &self,
-        r: Box<dyn AsyncRead + Send + Unpin>,
-        w: Box<dyn AsyncWrite + Send + Unpin>,
+        r: ArcMutex<Box<dyn AsyncRead + Send + Sync + Unpin>>,
+        w: ArcMutex<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
@@ -56,7 +57,7 @@ impl Publish {
         self.server
             .insert_peer_stream(
                 self.tunnel_key.clone(),
-                StreamFlow::new(0, Box::new(r), Box::new(w)),
+                StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w))),
                 local_addr,
                 remote_addr,
             )

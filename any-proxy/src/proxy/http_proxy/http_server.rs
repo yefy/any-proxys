@@ -1,13 +1,11 @@
 use super::http_hyper_connector::HttpHyperConnector;
 use super::util;
 use super::HyperExecutorLocal;
+use crate::config::config_toml::HttpServerProxyConfig;
 use crate::config::config_toml::HttpVersion;
-use crate::config::config_toml::{HttpServerConfig, HttpServerProxyConfig, ServerConfig};
 use crate::protopack::anyproxy::AnyproxyHello;
-use crate::proxy::http_proxy::http_echo_server::HttpEchoServer;
-use crate::proxy::http_proxy::http_static_server::HttpStaticServer;
 use crate::proxy::http_proxy::stream::Stream;
-use crate::proxy::http_proxy::HTTP_HELLO_KEY;
+use crate::proxy::http_proxy::{Handle, HTTP_HELLO_KEY};
 use crate::proxy::ServerArg;
 use crate::proxy::{util as proxy_util, StreamConfigContext};
 use crate::stream::connect::{Connect, ConnectInfo};
@@ -19,13 +17,14 @@ use anyhow::Result;
 use crate::proxy::http_proxy::http_stream::HttpStream;
 use crate::proxy::stream_info::StreamInfo;
 use crate::{Protocol7, Protocol77};
+use any_base::executor_local_spawn::ThreadRuntime;
+use any_base::io::buf_reader::BufReader;
+use any_base::typ::{ArcMutex, Share, ShareRw};
 use base64::{engine::general_purpose, Engine as _};
 use hyper::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Version};
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -33,14 +32,18 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub async fn http_connection<RW: AsyncRead + AsyncWrite + Unpin + 'static>(
     arg: ServerArg,
     stream: RW,
+    handle: Handle,
 ) -> Result<()> {
-    arg.stream_info.borrow_mut().is_discard_flow = true;
-    arg.stream_info.borrow_mut().is_discard_timeout = true;
+    arg.stream_info.get_mut().is_discard_flow = true;
+    arg.stream_info.get_mut().is_discard_timeout = true;
     let conn = Http::new()
         .with_executor(HyperExecutorLocal(arg.executors.clone()))
         .http2_only(false)
         .http1_keep_alive(true)
-        .serve_connection(stream, service_fn(move |req| handle(arg.clone(), req)));
+        .serve_connection(
+            stream,
+            service_fn(move |req| http_handle(arg.clone(), req, handle.clone())),
+        );
     let _ = conn.await;
     // if let Err(e) = conn.await {
     //     if !(e.is_closed() || e.is_canceled()) {
@@ -50,11 +53,15 @@ pub async fn http_connection<RW: AsyncRead + AsyncWrite + Unpin + 'static>(
     Ok(())
 }
 
-pub async fn handle(arg: ServerArg, req: Request<Body>) -> Result<Response<Body>> {
+pub async fn http_handle(
+    arg: ServerArg,
+    req: Request<Body>,
+    handle: Handle,
+) -> Result<Response<Body>> {
     let mut shutdown_thread_rx = arg.executors.shutdown_thread_tx.subscribe();
     tokio::select! {
         biased;
-        ret = do_handle(arg, req) => {
+        ret = do_http_handle(arg, req, handle) => {
             return ret;
         }
         _ = shutdown_thread_rx.recv() => {
@@ -70,32 +77,37 @@ pub async fn handle(arg: ServerArg, req: Request<Body>) -> Result<Response<Body>
     }
 }
 
-pub async fn do_handle(arg: ServerArg, mut req: Request<Body>) -> Result<Response<Body>> {
+pub async fn do_http_handle(
+    arg: ServerArg,
+    mut req: Request<Body>,
+    handle: Handle,
+) -> Result<Response<Body>> {
     let http_host = util::get_http_host(&mut req)?;
     let (domain, _) = host_and_port(&http_host);
     let domain = domain.to_string();
     let hello_str = req.headers().get(&*HTTP_HELLO_KEY).cloned();
 
+    use crate::config::http_core;
+    let http_core_conf = http_core::main_conf(&arg.ms).await;
+
     let stream_info = StreamInfo::new(
         arg.server_stream_info.clone(),
-        arg.domain_config_listen
-            .stream
-            .debug_is_open_stream_work_times,
+        http_core_conf.debug_is_open_stream_work_times,
+        Some(arg.executors.clone()),
     );
-    let stream_info = Rc::new(RefCell::new(stream_info));
-    stream_info.borrow_mut().protocol77 = Some(Protocol77::Http);
+    let stream_info = Share::new(stream_info);
+    stream_info.get_mut().protocol77 = Some(Protocol77::Http);
 
     let http_arg = ServerArg {
+        ms: arg.ms.clone(),
         executors: arg.executors.clone(),
         stream_info,
         domain_config_listen: arg.domain_config_listen.clone(),
         server_stream_info: arg.server_stream_info.clone(),
-        session_id: arg.session_id.clone(),
         http_context: arg.http_context.clone(),
-        tmp_file_id: arg.tmp_file_id.clone(),
     };
 
-    let stream_config_context = proxy_util::parse_proxy_domain(
+    let scc = proxy_util::parse_proxy_domain(
         &http_arg,
         move || async move {
             let hello = {
@@ -115,32 +127,29 @@ pub async fn do_handle(arg: ServerArg, mut req: Request<Body>) -> Result<Respons
     )
     .await?;
 
-    if stream_config_context.server.is_none() {
-        return Err(anyhow!("err:stream_config_context.server.is_none"));
-    }
+    (handle)(arg, http_arg, scc, req).await
+}
 
-    match stream_config_context.clone().server.as_ref().unwrap() {
-        &ServerConfig::HttpServer(ref http_server_config) => match &http_server_config.http {
-            &HttpServerConfig::EchoServer(ref config) => {
-                return HttpEchoServer::new(arg.executors.clone(), req, &config.body)
-                    .run()
-                    .await;
-            }
-            &HttpServerConfig::StaticServer(ref config) => {
-                return HttpStaticServer::new(arg.executors.clone(), req, &config.path)
-                    .run()
-                    .await;
-            }
-            &HttpServerConfig::ProxyServer(ref config) => {
-                return HttpServer::new(http_arg)
-                    .run(config, stream_config_context, req)
-                    .await;
-            }
-        },
-        &ServerConfig::WebsocketServer(_) => {
-            return Err(anyhow!("ServerConfig::WebsocketServer"));
-        }
-    }
+pub async fn http_server_handle(
+    arg: ServerArg,
+    client_buf_reader: BufReader<StreamFlow>,
+) -> Result<()> {
+    let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+        any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+    );
+    http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
+        Box::pin(http_server_run_handle(arg, http_arg, scc, req))
+    })
+    .await
+}
+
+pub async fn http_server_run_handle(
+    _arg: ServerArg,
+    http_arg: ServerArg,
+    scc: ShareRw<StreamConfigContext>,
+    req: Request<Body>,
+) -> Result<Response<Body>> {
+    HttpServer::new(http_arg).run(scc, req).await
 }
 
 pub struct HttpServer {
@@ -154,11 +163,10 @@ impl HttpServer {
 
     pub async fn run(
         &mut self,
-        config: &HttpServerProxyConfig,
-        stream_config_context: Rc<StreamConfigContext>,
+        scc: ShareRw<StreamConfigContext>,
         req: Request<Body>,
     ) -> Result<Response<Body>> {
-        let ret = self.do_run(config, stream_config_context, req).await;
+        let ret = self.do_run(scc, req).await;
         if let Err(e) = ret {
             log::error!("err:run => e:{}", e);
             return Ok(Response::builder()
@@ -170,27 +178,24 @@ impl HttpServer {
 
     pub async fn do_run(
         &mut self,
-        config: &HttpServerProxyConfig,
-        stream_config_context: Rc<StreamConfigContext>,
+        scc: ShareRw<StreamConfigContext>,
         mut req: Request<Body>,
     ) -> Result<Response<Body>> {
-        let (is_proxy_protocol_hello, connect_func) = proxy_util::upsteam_connect_info(
-            self.http_arg.stream_info.clone(),
-            &stream_config_context,
-        )
-        .await?;
+        let (is_proxy_protocol_hello, connect_func) =
+            proxy_util::upsteam_connect_info(self.http_arg.stream_info.clone(), scc.clone())
+                .await?;
 
         let hello = proxy_util::get_proxy_hello(
             is_proxy_protocol_hello,
             self.http_arg.stream_info.clone(),
-            &stream_config_context,
+            scc.clone(),
         )
         .await;
 
         if hello.is_some() {
             let hello_str = toml::to_string(&*hello.unwrap())?;
             let hello_str = general_purpose::STANDARD.encode(hello_str);
-            self.http_arg.stream_info.borrow_mut().protocol_hello_size = hello_str.len();
+            self.http_arg.stream_info.get_mut().protocol_hello_size = hello_str.len();
             req.headers_mut().insert(
                 HeaderName::from_bytes(HTTP_HELLO_KEY.as_bytes())?,
                 HeaderValue::from_bytes(hello_str.as_bytes())?,
@@ -204,7 +209,14 @@ impl HttpServer {
         let version = req.version();
         log::trace!("client req = {:#?}", req);
 
-        let upstream_version = match config.proxy_pass.version {
+        let proxy = {
+            let scc = scc.get();
+            use crate::config::http_server_proxy;
+            let http_server_proxy_conf = http_server_proxy::currs_conf(scc.http_server_confs());
+            http_server_proxy_conf.proxy.clone()
+        };
+
+        let upstream_version = match proxy.proxy_pass.version {
             HttpVersion::Http1_1 => Version::HTTP_11,
             HttpVersion::Http2_0 => Version::HTTP_2,
             HttpVersion::Auto => match version {
@@ -239,7 +251,7 @@ impl HttpServer {
             .get_client(
                 upstream_version,
                 connect_func.clone(),
-                config,
+                &proxy,
                 self.http_arg.stream_info.clone(),
                 &protocol7,
             )
@@ -247,7 +259,7 @@ impl HttpServer {
             .map_err(|e| {
                 anyhow!(
                     "err:get_client => request_id:{}, protocol7:{}, e:{}",
-                    self.http_arg.stream_info.borrow().request_id,
+                    self.http_arg.stream_info.get().request_id,
                     protocol7,
                     e
                 )
@@ -256,7 +268,7 @@ impl HttpServer {
         let client_res = client.request(client_req).await.map_err(|e| {
             anyhow!(
                 "err:client.request => request_id:{}, protocol7:{}, e:{}",
-                self.http_arg.stream_info.borrow().request_id,
+                self.http_arg.stream_info.get().request_id,
                 protocol7,
                 e
             )
@@ -280,23 +292,20 @@ impl HttpServer {
             move |_| async move {
                 let client_stream = Stream::new(req_body, res_sender);
                 let (r, w) = any_base::io::split::split(client_stream);
-                let client_stream = StreamFlow::new(0, Box::new(r), Box::new(w));
+                let client_stream =
+                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
 
                 let upstream_stream = Stream::new(client_res_body, client_req_sender);
                 let (r, w) = any_base::io::split::split(upstream_stream);
-                let mut upstream_stream = StreamFlow::new(0, Box::new(r), Box::new(w));
-                upstream_stream.set_stream_info(Some(
-                    http_arg
-                        .stream_info
-                        .borrow()
-                        .upstream_stream_flow_info
-                        .clone(),
-                ));
+                let mut upstream_stream =
+                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                upstream_stream
+                    .set_stream_info(http_arg.stream_info.get().upstream_stream_flow_info.clone());
 
                 let mut shutdown_thread_rx = http_arg.executors.shutdown_thread_tx.subscribe();
                 tokio::select! {
                     biased;
-                    ret = HttpStream::new(http_arg, stream_config_context, upstream_stream)
+                    ret = HttpStream::new(http_arg, scc, upstream_stream)
                                 .start(client_stream) => {
                         return ret;
                     }
@@ -308,7 +317,7 @@ impl HttpServer {
                     }
                 }
 
-                // HttpStream::new(http_arg, stream_config_context, upstream_stream)
+                // HttpStream::new(http_arg, scc, upstream_stream)
                 //     .start(client_stream)
                 //     .await
             },
@@ -322,9 +331,9 @@ impl HttpServer {
         version: Version,
         connect_func: Arc<Box<dyn Connect>>,
         config: &HttpServerProxyConfig,
-        stream_info: Rc<RefCell<StreamInfo>>,
+        stream_info: Share<StreamInfo>,
         protocol7: &str,
-    ) -> Result<Rc<hyper::Client<HttpHyperConnector>>> {
+    ) -> Result<Arc<hyper::Client<HttpHyperConnector>>> {
         let addr = connect_func.addr().await?;
         let is_http2 = match &version {
             &hyper::http::Version::HTTP_11 => false,
@@ -347,32 +356,46 @@ impl HttpServer {
             min_stream_cache_size: None,
             channel_size: None,
         };
-        stream_info.borrow_mut().upstream_connect_info = Some(Rc::new(upstream_connect_info));
+        stream_info
+            .get_mut()
+            .upstream_connect_info
+            .set(upstream_connect_info);
+
+        let http_context = {
+            let stream_info = self.http_arg.stream_info.get();
+            let scc = stream_info.scc.get();
+            use crate::config::http_core;
+            let http_core_conf = http_core::currs_conf(scc.http_server_confs());
+
+            if http_core_conf.is_disable_share_http_context {
+                self.http_arg.http_context.clone()
+            } else {
+                http_core_conf.http_context.clone()
+            }
+        };
 
         let key = format!("{}-{}-{}", protocol7, addr, is_http2);
-        let client = self
-            .http_arg
-            .http_context
-            .client_map
-            .borrow()
-            .get(&key)
-            .cloned();
+        let client = http_context.client_map.get().get(&key).cloned();
         if client.is_some() {
             return Ok(client.unwrap());
         }
 
-        let request_id = self.http_arg.stream_info.borrow().request_id.clone();
-        let upstream_connect_flow_info =
-            std::sync::Arc::new(tokio::sync::Mutex::new(StreamFlowInfo::new()));
-        let upstream_stream_flow_info =
-            std::sync::Arc::new(std::sync::Mutex::new(StreamFlowInfo::new()));
-
+        let request_id = self.http_arg.stream_info.get().request_id.clone();
+        let upstream_connect_flow_info = ArcMutex::new(StreamFlowInfo::new());
+        let upstream_stream_flow_info = ArcMutex::new(StreamFlowInfo::new());
+        use crate::config::common_core;
+        let common_core_conf = common_core::main_conf_mut(&self.http_arg.ms).await;
         let http = HttpHyperConnector::new(
             upstream_connect_flow_info,
             request_id,
             upstream_stream_flow_info,
             connect_func,
-            self.http_arg.session_id.clone(),
+            common_core_conf.session_id.clone(),
+            //___wait___
+            //HttpHyperConnector 和 any-tunnel 不能同时使用localspawn， 分别都使用spawn_local和spawn是没问题的
+            //spawn_local` called from outside of a `task::LocalSet`, form tunnel peer_stream.rs
+            //self.http_arg.executors.run_time.clone(),
+            Arc::new(Box::new(ThreadRuntime)),
         );
 
         let client = hyper::Client::builder()
@@ -381,12 +404,11 @@ impl HttpServer {
             .http2_only(is_http2)
             //.set_host(false)
             .build(http);
-        let client = Rc::new(client);
+        let client = Arc::new(client);
 
-        self.http_arg
-            .http_context
+        http_context
             .client_map
-            .borrow_mut()
+            .get_mut()
             .insert(key, client.clone());
 
         Ok(client)

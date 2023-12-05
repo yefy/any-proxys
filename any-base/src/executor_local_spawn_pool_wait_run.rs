@@ -1,6 +1,6 @@
+use super::executor_local_spawn::AsyncLocalContext;
+use super::executor_local_spawn::ExecutorsLocal;
 use super::executor_local_spawn_wait_run::ExecutorLocalSpawnWaitRun;
-use crate::executor_local_spawn::AsyncLocalContext;
-use crate::executor_local_spawn::ExecutorsLocal;
 use anyhow::Result;
 use std::future::Future;
 
@@ -20,12 +20,25 @@ impl ExecutorLocalSpawnPoolWaitRun {
 
     pub fn _start<S, F>(&mut self, service: S) -> Result<()>
     where
-        S: FnOnce(AsyncLocalContext) -> F + 'static + Clone,
-        F: Future<Output = Result<()>> + 'static,
+        S: FnOnce(AsyncLocalContext) -> F + 'static + Clone + Send,
+        F: Future<Output = Result<()>> + 'static + Send,
     {
         for _ in 0..self.worker_threads {
             self.executor_local_spawn_wait_run
                 ._start::<S, F>(service.clone());
+        }
+
+        Ok(())
+    }
+
+    pub fn _start_and_free<S, F>(&mut self, worker_threads: usize, service: S) -> Result<()>
+    where
+        S: FnOnce(AsyncLocalContext) -> F + 'static + Clone + Send,
+        F: Future<Output = Result<()>> + 'static + Send,
+    {
+        for _ in 0..worker_threads {
+            self.executor_local_spawn_wait_run
+                ._start_and_free::<S, F>(service.clone());
         }
 
         Ok(())

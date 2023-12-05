@@ -540,7 +540,7 @@ impl PeerClient {
         });
 
         if cfg!(feature = "anyruntime-tokio-spawn-local") {
-            any_base::executor_local_spawn::_start_and_free2(move || async move { async_.await });
+            any_base::executor_local_spawn::_start_and_free(move || async move { async_.await });
         } else {
             any_base::executor_spawn::_start_and_free(move || async move { async_.await });
         }

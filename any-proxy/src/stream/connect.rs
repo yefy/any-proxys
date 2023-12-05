@@ -1,5 +1,7 @@
-use super::stream_flow;
 use crate::Protocol7;
+use any_base::executor_local_spawn::Runtime;
+use any_base::stream_flow::{StreamFlow, StreamFlowInfo};
+use any_base::typ::ArcMutex;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
@@ -23,8 +25,9 @@ pub trait Connect: Send + Sync {
     async fn connect(
         &self,
         request_id: Option<String>,
-        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> Result<(stream_flow::StreamFlow, ConnectInfo)>;
+        stream_info: ArcMutex<StreamFlowInfo>,
+        run_time: Option<Arc<Box<dyn Runtime>>>,
+    ) -> Result<(StreamFlow, ConnectInfo)>;
     async fn addr(&self) -> Result<SocketAddr>;
     async fn host(&self) -> Result<String>;
     async fn is_tls(&self) -> bool;

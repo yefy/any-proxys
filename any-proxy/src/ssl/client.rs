@@ -2,8 +2,9 @@ use super::util;
 use crate::config::config_toml::TcpConfig as Config;
 use crate::ssl::stream::{Stream, StreamData};
 use crate::stream::client;
-use crate::stream::stream_flow;
 use crate::Protocol7;
+use any_base::stream_flow::{StreamFlow, StreamFlowErr, StreamFlowInfo};
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -39,11 +40,11 @@ impl Client {
 impl client::Client for Client {
     async fn connect(
         &self,
-        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
+        info: ArcMutex<StreamFlowInfo>,
     ) -> Result<Box<dyn client::Connection + Send>> {
-        let stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
+        let stream_err: StreamFlowErr = StreamFlowErr::Init;
         if info.is_some() {
-            info.as_mut().unwrap().err = stream_err;
+            info.get_mut().err = stream_err;
         }
         Ok(Box::new(Connection::new(
             self.addr.clone(),
@@ -81,23 +82,23 @@ impl Connection {
 impl client::Connection for Connection {
     async fn stream(
         &self,
-        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> Result<(Protocol7, stream_flow::StreamFlow, SocketAddr, SocketAddr)> {
-        let mut stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
+        info: ArcMutex<StreamFlowInfo>,
+    ) -> Result<(Protocol7, StreamFlow, SocketAddr, SocketAddr)> {
+        let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let ret: Result<TcpStream> = async {
             match tokio::time::timeout(self.timeout, TcpStream::connect(&self.addr)).await {
                 Ok(ret) => match ret {
                     Ok(stream) => Ok(stream),
                     Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                        stream_err = stream_flow::StreamFlowErr::WriteTimeout;
+                        stream_err = StreamFlowErr::WriteTimeout;
                         Err(anyhow!("err:client.stream timeout => addr:{}", self.addr))
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::ConnectionReset => {
-                        stream_err = stream_flow::StreamFlowErr::WriteErr;
+                        stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!("err:client.stream reset => addr:{}", self.addr))
                     }
                     Err(e) => {
-                        stream_err = stream_flow::StreamFlowErr::WriteErr;
+                        stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!(
                             "err:client.stream => addr:{}, kind:{:?}, e:{}",
                             self.addr,
@@ -107,7 +108,7 @@ impl client::Connection for Connection {
                     }
                 },
                 Err(_) => {
-                    stream_err = stream_flow::StreamFlowErr::WriteTimeout;
+                    stream_err = StreamFlowErr::WriteTimeout;
                     Err(anyhow!("err:client.stream timeout => addr:{}", self.addr))
                 }
             }
@@ -117,7 +118,7 @@ impl client::Connection for Connection {
         match ret {
             Err(e) => {
                 if info.is_some() {
-                    info.as_mut().unwrap().err = stream_err;
+                    info.get_mut().err = stream_err;
                 }
                 Err(e)
             }
@@ -142,7 +143,6 @@ impl client::Connection for Connection {
                     use crate::util::cache as util_cache;
                     use crate::util::openssl as util_openssl;
                     use openssl::ssl::SslSessionCacheMode;
-                    use parking_lot::Mutex;
                     use tokio_openssl::SslStream;
                     let is_insecure = true;
                     let mut ssl_verify_mode = openssl::ssl::SslVerifyMode::PEER;
@@ -155,7 +155,7 @@ impl client::Connection for Connection {
                     //ssl.set_verify(SslVerifyMode::FAIL_IF_NO_PEER_CERT);
                     //ssl.set_ca_file("cert/www.yefyyun.cn.pem")?;
                     //ssl.set_alpn_protos(alpn_protos.as_bytes())?;
-                    let cache = Arc::new(Mutex::new(util_cache::SessionCache::new()));
+                    let cache = ArcMutex::new(util_cache::SessionCache::new());
                     ssl.set_session_cache_mode(SslSessionCacheMode::CLIENT);
                     ssl.set_new_session_callback({
                         let cache = cache.clone();
@@ -164,13 +164,13 @@ impl client::Connection for Connection {
                                 .ok()
                                 .and_then(|idx| ssl.ex_data(idx))
                             {
-                                cache.lock().insert(key.clone(), session);
+                                cache.get_mut().insert(key.clone(), session);
                             }
                         }
                     });
                     ssl.set_remove_session_callback({
                         let cache = cache.clone();
-                        move |_, session| cache.lock().remove(session)
+                        move |_, session| cache.get_mut().remove(session)
                     });
                     let ssl = ssl.build();
                     let mut conf = ssl.configure()?;
@@ -178,7 +178,7 @@ impl client::Connection for Connection {
                         host: self.ssl_domain.clone(),
                         port: self.addr.port(),
                     };
-                    if let Some(session) = cache.lock().get(&key) {
+                    if let Some(session) = cache.get_mut().get(&key) {
                         unsafe {
                             conf.set_session(&session)?;
                         }
@@ -190,7 +190,8 @@ impl client::Connection for Connection {
                     std::pin::Pin::new(&mut ssl_stream).connect().await?;
                     let stream = Stream::new(StreamData::Openssl(ssl_stream));
                     let (r, w) = any_base::io::split::split(stream);
-                    let stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
+                    let stream =
+                        StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
 
@@ -224,7 +225,8 @@ impl client::Connection for Connection {
 
                     let stream = Stream::new(StreamData::C(ssl_stream));
                     let (r, w) = any_base::io::split::split(stream);
-                    let stream = stream_flow::StreamFlow::new(fd, Box::new(r), Box::new(w));
+                    let stream =
+                        StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
             }

@@ -212,7 +212,7 @@ pub struct Tunnel2Config {
     pub tunnel2_max_connect: usize,
 }
 
-fn default_tcp() -> Vec<TcpConfig> {
+pub fn default_tcp() -> Vec<TcpConfig> {
     vec![TcpConfig {
         tcp_name: default_tcp_name(),
         tcp_send_buffer: default_tcp_send_buffer(),
@@ -224,7 +224,7 @@ fn default_tcp() -> Vec<TcpConfig> {
     }]
 }
 
-fn default_quic() -> Vec<QuicConfig> {
+pub fn default_quic() -> Vec<QuicConfig> {
     vec![QuicConfig {
         quic_name: default_quic_name(),
         quic_default: default_quic_default(),
@@ -582,7 +582,8 @@ pub enum DomainListenType {
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcpTunnel2 {
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -594,7 +595,8 @@ pub struct ProxyPassTcpTunnel2 {
 pub struct ProxyPassQuicTunnel2 {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub quic: Option<String>,
+    #[serde(default = "default_quic_name")]
+    pub quic: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -606,7 +608,8 @@ pub struct ProxyPassQuicTunnel2 {
 pub struct ProxyPassSslTunnel2 {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -649,7 +652,8 @@ pub struct Tunnel {
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcp {
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -661,7 +665,8 @@ pub struct ProxyPassTcp {
 pub struct ProxyPassTcpTunnel {
     pub tunnel: Tunnel,
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -673,7 +678,8 @@ pub struct ProxyPassTcpTunnel {
 pub struct ProxyPassSsl {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -686,7 +692,8 @@ pub struct ProxyPassSslTunnel {
     pub tunnel: Tunnel,
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub tcp: Option<String>,
+    #[serde(default = "default_tcp_name")]
+    pub tcp: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -698,7 +705,8 @@ pub struct ProxyPassSslTunnel {
 pub struct ProxyPassQuic {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub quic: Option<String>,
+    #[serde(default = "default_quic_name")]
+    pub quic: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -711,7 +719,8 @@ pub struct ProxyPassQuicTunnel {
     pub tunnel: Tunnel,
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    pub quic: Option<String>,
+    #[serde(default = "default_quic_name")]
+    pub quic: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -754,7 +763,7 @@ pub enum ProxyPass {
     Upstream(ProxyPassUpstream),
 }
 
-fn default_access() -> Vec<AccessConfig> {
+pub fn default_access() -> Vec<AccessConfig> {
     vec![AccessConfig {
         access_log: default_access_log(),
         access_log_file: default_access_log_file(),

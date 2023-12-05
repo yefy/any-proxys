@@ -4,6 +4,7 @@ use super::peer_stream_connect::PeerStreamConnect;
 use super::stream::Stream;
 use super::tunnel::Tunnel;
 use super::Protocol4;
+use any_base::typ::ArcMutexTokio;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::prelude::*;
@@ -12,7 +13,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 lazy_static! {
     static ref CLIENT_ID: AtomicU32 = AtomicU32::new(1);
@@ -28,7 +28,7 @@ pub struct ClientContext {
 
 #[derive(Clone)]
 pub struct Client {
-    context: Arc<Mutex<ClientContext>>,
+    context: ArcMutexTokio<ClientContext>,
 }
 
 impl Client {
@@ -40,12 +40,12 @@ impl Client {
             peer_stream_max_len.store(1, Ordering::Relaxed);
         }
         Client {
-            context: Arc::new(Mutex::new(ClientContext {
+            context: ArcMutexTokio::new(ClientContext {
                 tunnel,
                 pid,
                 client_id,
                 peer_stream_max_len,
-            })),
+            }),
         }
     }
 
@@ -54,7 +54,7 @@ impl Client {
     }
 
     pub async fn get_peer_client(&self, register_id: &String) -> Option<PeerClientSender> {
-        let context = self.context.lock().await;
+        let context = self.context.get().await;
         let tunnel_key = context.client_id.to_string();
         context
             .tunnel
@@ -70,7 +70,7 @@ impl Client {
         remote_addr: SocketAddr,
         peer_stream_connect: (Arc<Box<dyn PeerStreamConnect>>, SocketAddr),
     ) -> Result<PeerClientSender> {
-        let context = self.context.lock().await;
+        let context = self.context.get().await;
         let tunnel_key = context.client_id.to_string();
         let peer_stream_max_len = context.peer_stream_max_len.clone();
         let peer_client_sender = context
@@ -110,7 +110,7 @@ impl Client {
                     .await
                     .map_err(|e| anyhow!("err:peer_stream_connect.connect => e:{}", e))?;
                 let session_id = {
-                    let context = self.context.lock().await;
+                    let context = self.context.get().await;
                     format!(
                         "{}{:?}{}{}{}{}",
                         context.pid,

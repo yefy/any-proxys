@@ -1,17 +1,17 @@
 use super::http_hyper_connector::HttpHyperConnector;
-use std::cell::RefCell;
+use any_base::typ::ShareRw;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct HttpContext {
     //protocol addr http_version
-    pub client_map: RefCell<HashMap<String, Rc<hyper::Client<HttpHyperConnector>>>>,
+    pub client_map: ShareRw<HashMap<String, Arc<hyper::Client<HttpHyperConnector>>>>,
 }
 
 impl HttpContext {
     pub fn new() -> HttpContext {
         HttpContext {
-            client_map: RefCell::new(HashMap::new()),
+            client_map: ShareRw::new(HashMap::new()),
         }
     }
 }

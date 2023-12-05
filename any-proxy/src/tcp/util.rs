@@ -57,11 +57,12 @@ pub fn set_stream(tcp_stream: &TcpStream, config: &Config) {
         }
     }
 
-    if let Err(e) = socket.set_nodelay(config.tcp_nodelay) {
+    if let Err(_e) = socket.set_nodelay(config.tcp_nodelay) {
+        #[cfg(unix)]
         log::error!(
             "err:set_nodelay => tcp_nodelay:{}, e:{}",
             config.tcp_nodelay,
-            e
+            _e
         );
     }
 }

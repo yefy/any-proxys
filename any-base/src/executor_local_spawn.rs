@@ -1,24 +1,46 @@
-use crate::executor_local_spawn_wait_run::ExecutorLocalSpawnWaitRun;
+use super::executor_local_spawn_wait_run::ExecutorLocalSpawnWaitRun;
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
 use awaitgroup::Worker;
-use futures_util::task::LocalSpawnExt;
 use std::future::Future;
 use std::thread;
 use tokio::sync::broadcast;
 
 #[cfg(feature = "anyspawn-count")]
 use lazy_static::lazy_static;
+use std::pin::Pin;
+use std::sync::Arc;
 #[cfg(feature = "anyspawn-count")]
 lazy_static! {
     pub static ref LOCAL_SPAWN_COUNT_MAP: std::sync::Mutex<std::collections::HashMap<String, i64>> =
         std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
+pub trait Runtime: Send + Sync + 'static {
+    /// Drive `future` to completion in the background
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>);
+}
+
+pub struct LocalRuntime;
+
+impl Runtime for LocalRuntime {
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        tokio::task::spawn_local(future);
+    }
+}
+
+pub struct ThreadRuntime;
+
+impl Runtime for ThreadRuntime {
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+        tokio::spawn(future);
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutorsLocal {
-    pub executor: async_executors::TokioCt,
+    pub run_time: Arc<Box<dyn Runtime>>,
     pub group_version: i32,
     pub thread_id: std::thread::ThreadId,
     pub cpu_affinity: bool,
@@ -29,22 +51,29 @@ pub struct ExecutorsLocal {
 impl ExecutorsLocal {
     pub fn _start<S, F>(&self, #[cfg(feature = "anyspawn-count")] name: String, service: S)
     where
-        S: FnOnce(ExecutorsLocal) -> F + 'static,
-        F: Future<Output = Result<()>> + 'static,
+        S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
+        F: Future<Output = Result<()>> + Send + 'static,
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
             name,
+            true,
             self.clone(),
             service,
         )
     }
     pub fn _start_and_free<S, F>(&self, service: S)
     where
-        S: FnOnce(ExecutorsLocal) -> F + 'static,
-        F: Future<Output = Result<()>> + 'static,
+        S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
+        F: Future<Output = Result<()>> + Send + 'static,
     {
-        _start_and_free(self.clone(), service)
+        _start(
+            #[cfg(feature = "anyspawn-count")]
+            name,
+            false,
+            self.clone(),
+            service,
+        )
     }
 
     pub fn error(&self, err: anyhow::Error) {
@@ -93,7 +122,7 @@ impl ExecutorLocalSpawn {
         self.executors.clone()
     }
     pub fn default(
-        executor: async_executors::TokioCt,
+        run_time: Arc<Box<dyn Runtime>>,
         cpu_affinity: bool,
         version: i32,
     ) -> ExecutorLocalSpawn {
@@ -103,7 +132,7 @@ impl ExecutorLocalSpawn {
         let wait_group_worker = wait_group.worker();
 
         let executors = ExecutorsLocal {
-            executor,
+            run_time,
             group_version: version,
             thread_id,
             cpu_affinity,
@@ -122,7 +151,7 @@ impl ExecutorLocalSpawn {
         let wait_group = WaitGroup::new();
         let wait_group_worker = wait_group.worker();
         let executors = ExecutorsLocal {
-            executor: executors.executor.clone(),
+            run_time: executors.run_time.clone(),
             group_version: executors.group_version,
             thread_id: executors.thread_id,
             cpu_affinity: executors.cpu_affinity,
@@ -138,12 +167,27 @@ impl ExecutorLocalSpawn {
 
     pub fn _start<S, F>(&mut self, #[cfg(feature = "anyspawn-count")] name: String, service: S)
     where
-        S: FnOnce(ExecutorsLocal) -> F + 'static,
-        F: Future<Output = Result<()>> + 'static,
+        S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
+        F: Future<Output = Result<()>> + Send + 'static,
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
             name,
+            true,
+            self.executors.clone(),
+            service,
+        )
+    }
+
+    pub fn _start_and_free<S, F>(&self, service: S)
+    where
+        S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
+        F: Future<Output = Result<()>> + Send + 'static,
+    {
+        _start(
+            #[cfg(feature = "anyspawn-count")]
+            name,
+            false,
             self.executors.clone(),
             service,
         )
@@ -235,11 +279,12 @@ impl ExecutorLocalSpawn {
 
 pub fn _start<S, F>(
     #[cfg(feature = "anyspawn-count")] name: String,
+    is_wait: bool,
     executors: ExecutorsLocal,
     service: S,
 ) where
-    S: FnOnce(ExecutorsLocal) -> F + 'static,
-    F: Future<Output = Result<()>> + 'static,
+    S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
+    F: Future<Output = Result<()>> + Send + 'static,
 {
     let version = executors.group_version;
     log::debug!(
@@ -248,90 +293,63 @@ pub fn _start<S, F>(
         executors.wait_group_worker.count(),
     );
 
-    let wait_group_worker_inner = executors.wait_group_worker.add();
+    let wait_group_worker_inner = if is_wait {
+        Some(executors.wait_group_worker.add())
+    } else {
+        None
+    };
 
-    executors
-        .executor
-        .clone()
-        .spawn_local(async move {
-            scopeguard::defer! {
-                log::debug!("stop executor version:{}", version);
-                wait_group_worker_inner.done();
-
-                #[cfg(feature = "anyspawn-count")]
-                {
-                    let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
-                    let count = count_map.get_mut(&name);
-                    if count.is_none() {
-                        log::error!("_start name {} nil", name);
-                    } else {
-                        let count = count.unwrap();
-                        *count -= 1;
-                        log::info!("_start name {} count:{}", name, count);
-                    }
-                }
+    executors.run_time.clone().spawn(Box::pin(async move {
+        scopeguard::defer! {
+            log::debug!("stop executor version:{}", version);
+            if wait_group_worker_inner.is_some() {
+                wait_group_worker_inner.unwrap().done();
             }
-            log::debug!("start executor version:{}", version);
 
             #[cfg(feature = "anyspawn-count")]
             {
                 let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
                 let count = count_map.get_mut(&name);
                 if count.is_none() {
-                    count_map.insert(name.to_string(), 1);
-                    log::info!("-start name {} count:{}", name, 1);
+                    log::error!("_start name {} nil", name);
                 } else {
                     let count = count.unwrap();
-                    *count += 1;
-                    log::info!("-start name {} count:{}", name, count);
+                    *count -= 1;
+                    log::info!("_start name {} count:{}", name, count);
                 }
             }
+        }
+        log::debug!("start executor version:{}", version);
 
-            let ret: Result<()> = async {
-                service(executors)
-                    .await
-                    .map_err(|e| anyhow!("err:start service => e:{}", e))?;
-                Ok(())
+        #[cfg(feature = "anyspawn-count")]
+        {
+            let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+            let count = count_map.get_mut(&name);
+            if count.is_none() {
+                count_map.insert(name.to_string(), 1);
+                log::info!("-start name {} count:{}", name, 1);
+            } else {
+                let count = count.unwrap();
+                *count += 1;
+                log::info!("-start name {} count:{}", name, count);
             }
-            .await;
-            ret.unwrap_or_else(|e| log::error!("err:start spawn_local => e:{}", e));
-        })
-        .unwrap_or_else(|e| log::error!("{}", e));
+        }
+
+        let ret: Result<()> = async {
+            service(executors)
+                .await
+                .map_err(|e| anyhow!("err:start service => e:{}", e))?;
+            Ok(())
+        }
+        .await;
+        ret.unwrap_or_else(|e| log::error!("err:start spawn_local => e:{}", e));
+    }));
 }
 
-pub fn _start_and_free<S, F>(executors: ExecutorsLocal, service: S)
+pub fn _start_and_free<S, F>(service: S)
 where
-    S: FnOnce(ExecutorsLocal) -> F + 'static,
+    S: FnOnce() -> F + 'static,
     F: Future<Output = Result<()>> + 'static,
-{
-    let version = executors.group_version;
-    log::debug!(
-        "start version:{}, worker_threads:{}",
-        version,
-        executors.wait_group_worker.count(),
-    );
-
-    executors
-        .executor
-        .clone()
-        .spawn_local(async move {
-            log::debug!("start executor version:{}", version);
-            let ret: Result<()> = async {
-                service(executors)
-                    .await
-                    .map_err(|e| anyhow!("err:start service => e:{}", e))?;
-                Ok(())
-            }
-            .await;
-            ret.unwrap_or_else(|e| log::error!("err:start spawn_local => e:{}", e));
-        })
-        .unwrap_or_else(|e| log::error!("{}", e));
-}
-
-pub fn _start_and_free2<S, F>(service: S)
-where
-    S: FnOnce() -> F + 'static + Send,
-    F: Future<Output = Result<()>> + 'static + Send,
 {
     tokio::task::spawn_local(async move {
         let ret: Result<()> = async {
@@ -345,45 +363,44 @@ where
     });
 }
 
-pub fn _block_on<S, F>(worker_threads: usize, service: S) -> Result<()>
+pub fn _block_on<S, F>(thread_num: usize, worker_threads_blocking: usize, service: S) -> Result<()>
 where
     S: FnOnce(ExecutorLocalSpawn) -> F + 'static,
     F: Future<Output = Result<()>> + 'static,
 {
-    let executor = async_executors::TokioCtBuilder::new()
-        .build(worker_threads)
-        .unwrap();
-    executor
-        .clone()
-        .block_on(async {
-            let executor_local_spawn = ExecutorLocalSpawn::default(executor, false, 0);
-            service(executor_local_spawn)
-                .await
-                .map_err(|e| anyhow!("err:block_on service => e:{}", e))
-        })
-        .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
+    if thread_num > 1 {
+        log::trace!("new_multi_thread thread_num:{}", thread_num);
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(thread_num)
+            .max_blocking_threads(worker_threads_blocking)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let executor_spawn =
+                    ExecutorLocalSpawn::default(Arc::new(Box::new(ThreadRuntime)), false, 0);
+                service(executor_spawn)
+                    .await
+                    .map_err(|e| anyhow!("err:block_on service => e:{}", e))
+            })
+            .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
+    } else {
+        log::trace!("new_current_thread thread_num:{}", thread_num);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(worker_threads_blocking)
+            .enable_all()
+            .build()
+            .unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .block_on(&rt, async {
+                let executor_local_spawn =
+                    ExecutorLocalSpawn::default(Arc::new(Box::new(LocalRuntime)), false, 0);
+                service(executor_local_spawn)
+                    .await
+                    .map_err(|e| anyhow!("err:block_on service => e:{}", e))
+            })
+            .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
+    }
     Ok(())
 }
-
-// pub fn _block_on<S, F, E>(thread_num: usize, executor: E, service: S) -> Result<()>
-//     where
-//         S: FnOnce(ExecutorSpawn<E>) -> F + 'static + Send,
-//         F: Future<Output = Result<()>> + 'static + Send,
-//         E: SpawnExec<F>,
-// {
-//     let rt = tokio::runtime::Builder::new_current_thread()
-//         .worker_threads(thread_num)
-//         .enable_all()
-//         .build()
-//         .unwrap();
-//     let local = tokio::task::LocalSet::new();
-//     local
-//         .block_on(&rt, async {
-//             let executor_spawn = ExecutorSpawn::default(executor, false, 0);
-//             service(executor_spawn)
-//                 .await
-//                 .map_err(|e| anyhow!("err:block_on service => e:{}", e))
-//         })
-//         .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
-//     Ok(())
-// }

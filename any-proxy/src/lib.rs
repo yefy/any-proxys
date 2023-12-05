@@ -13,27 +13,9 @@ pub mod upstream;
 pub mod util;
 
 use any_base::io;
-use any_tunnel::client;
-use any_tunnel::server;
-use any_tunnel2::client as client2;
-use any_tunnel2::server as server2;
 use any_tunnel2::Protocol4;
 use anyhow::anyhow;
 use anyhow::Result;
-
-#[derive(Clone)]
-pub struct Tunnels {
-    client: client::Client,
-    server: server::Server,
-    client2: client2::Client,
-    server2: server2::Server,
-}
-
-#[derive(Clone)]
-pub struct TunnelClients {
-    client: client::Client,
-    client2: client2::Client,
-}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Protocol7 {

@@ -15,51 +15,74 @@ pub mod sendfile;
 pub mod stream_info;
 pub mod stream_start;
 pub mod stream_stream;
-pub mod stream_stream_cache_or_file;
+pub mod stream_stream_cache;
 pub mod stream_stream_memory;
+pub mod stream_stream_tmp_file;
+pub mod stream_stream_write;
 pub mod stream_var;
 pub mod tunnel_stream;
 pub mod util;
 pub mod websocket_proxy;
 
-use crate::config::config_toml;
-use crate::config::config_toml::{ServerConfig, ServerConfigType};
+use crate::config::common_core;
+use crate::config::http_core;
+use crate::config::http_core::ConfStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
+#[cfg(unix)]
+use crate::proxy::sendfile::SendFile;
 use crate::proxy::stream_info::StreamInfo;
 use crate::stream::server::ServerStreamInfo;
-use crate::upstream::UpstreamData;
 use crate::util::default_config;
 use any_base::executor_local_spawn::ExecutorsLocal;
-use dynamic_pool::{DynamicPoolItem, DynamicReset};
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use any_base::module::module;
+use any_base::module::module::Modules;
+use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
+use any_base::typ;
+use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
+use anyhow::Result;
+use dynamic_pool::{DynamicPool, DynamicPoolItem, DynamicReset};
+use std::collections::LinkedList;
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 pub struct StreamConfigContext {
-    pub common: config_toml::CommonConfig,
-    pub tcp: config_toml::TcpConfig,
-    pub quic: config_toml::QuicConfig,
-    pub stream: config_toml::StreamConfig,
-    pub rate: config_toml::RateLimit,
-    pub tmp_file: config_toml::TmpFile,
-    pub fast_conf: config_toml::FastConf,
-    pub access: Vec<config_toml::AccessConfig>,
-    pub access_context: Vec<proxy::AccessContext>,
-    pub domain: Option<String>,
-    pub is_proxy_protocol_hello: Option<bool>,
-    pub ups_data: Arc<Mutex<UpstreamData>>,
-    pub stream_var: Rc<stream_var::StreamVar>,
-    pub server: Option<ServerConfig>,
+    ms: module::Modules,
+    http_confs: Vec<typ::ArcUnsafeAny>,
+    server_confs: Vec<typ::ArcUnsafeAny>,
+    curr_conf: ArcUnsafeAny,
+    common_conf: ArcUnsafeAny,
 }
 
 impl StreamConfigContext {
-    pub fn server_type(&self) -> ServerConfigType {
-        if self.server.is_none() {
-            return ServerConfigType::Nil;
+    pub fn new(
+        ms: module::Modules,
+        http_confs: Vec<typ::ArcUnsafeAny>,
+        server_confs: Vec<typ::ArcUnsafeAny>,
+        curr_conf: ArcUnsafeAny,
+        common_conf: ArcUnsafeAny,
+    ) -> Self {
+        StreamConfigContext {
+            ms,
+            http_confs,
+            server_confs,
+            curr_conf,
+            common_conf,
         }
-        self.server.as_ref().unwrap().server_type()
+    }
+    pub fn ms(&self) -> module::Modules {
+        self.ms.clone()
+    }
+    pub fn common_core_conf(&self) -> &common_core::Conf {
+        common_core::curr_conf(&self.common_conf)
+    }
+    pub fn http_core_conf(&self) -> &http_core::Conf {
+        http_core::curr_conf(&self.curr_conf)
+    }
+    pub fn http_main_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+        &self.http_confs
+    }
+    pub fn http_server_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+        &self.server_confs
     }
 }
 
@@ -99,16 +122,16 @@ impl DynamicReset for StreamCacheBuffer {
 
 impl StreamCacheBuffer {
     fn new() -> Self {
-        let min_size = StreamCacheBuffer::min_size();
+        let buffer_size = StreamCacheBuffer::buffer_size();
         StreamCacheBuffer {
-            data: Vec::with_capacity(min_size),
+            data: Vec::with_capacity(buffer_size),
             start: 0,
             size: 0,
             is_cache: false,
             seek: 0,
             file_fd: 0,
             read_size: 0,
-            min_size,
+            min_size: buffer_size,
             msg: None,
         }
     }
@@ -131,7 +154,7 @@ impl StreamCacheBuffer {
         return self.data.as_slice()[start..end].to_vec();
     }
 
-    pub fn min_size() -> usize {
+    pub fn buffer_size() -> usize {
         default_config::PAGE_SIZE.load(Ordering::Relaxed) * *default_config::MIN_CACHE_BUFFER_NUM
     }
 
@@ -163,40 +186,154 @@ impl StreamCacheBuffer {
     }
 }
 
-pub struct StreamStreamContext {
+#[derive(Clone)]
+pub struct StreamStreamData {
     pub stream_cache_size: i64,
     pub tmp_file_size: i64,
     pub limit_rate_after: i64,
-    pub max_limit_rate: u64,
-    pub curr_limit_rate: Arc<AtomicI64>,
-    pub max_stream_cache_size: u64,
-    pub max_tmp_file_size: u64,
-    pub is_tmp_file_io_page: bool,
-    pub page_size: usize,
-    pub min_merge_cache_buffer_size: u64,
-    pub min_cache_buffer_size: usize,
-    pub min_read_buffer_size: usize,
-    pub min_cache_file_size: usize,
     pub total_read_size: u64,
     pub total_write_size: u64,
 }
 
 #[derive(Clone)]
-pub struct StreamLimit {
-    pub tmp_file_size: u64,
-    pub limit_rate_after: u64,
-    pub max_limit_rate: u64,
+pub struct StreamStreamContext {
+    pub cs: Arc<ConfStream>,
     pub curr_limit_rate: Arc<AtomicI64>,
+    pub ssd: ArcRwLock<StreamStreamData>,
 }
-impl StreamLimit {
-    pub fn new(tmp_file_size: u64, limit_rate_after: u64, limit_rate: u64) -> StreamLimit {
-        StreamLimit {
-            tmp_file_size,
-            limit_rate_after,
-            max_limit_rate: limit_rate,
-            curr_limit_rate: Arc::new(AtomicI64::new(limit_rate as i64)),
+
+const LIMIT_SLEEP_TIME_MILLIS: u64 = 100;
+const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 5;
+const NOT_SLEEP_TIME_MILLIS: u64 = 2;
+const MIN_SLEEP_TIME_MILLIS: u64 = 10;
+const SENDFILE_FULL_SLEEP_TIME_MILLIS: u64 = 30;
+
+pub fn get_flag(is_client: bool) -> &'static str {
+    if is_client {
+        "client -> upstream"
+    } else {
+        "upstream -> client"
+    }
+}
+
+pub struct StreamStreamShare {
+    ssc: StreamStreamContext,
+    _scc: ShareRw<StreamConfigContext>,
+    stream_info: Share<StreamInfo>,
+    r: ArcMutexTokio<StreamFlowRead>,
+    w: ArcMutexTokio<StreamFlowWrite>,
+    #[cfg(unix)]
+    sendfile: ArcMutexTokio<SendFile>,
+    is_client: bool,
+    is_fast_close: bool,
+    write_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
+    write_err: Option<Result<()>>,
+    read_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
+    read_buffer_ret: Option<std::io::Result<usize>>,
+    read_err: Option<Result<()>>,
+    stream_status: StreamStatus,
+    caches: LinkedList<StreamCache>,
+    buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
+    plugins: Vec<Option<ArcUnsafeAny>>,
+}
+
+impl StreamStreamShare {
+    pub fn is_read_empty(&self) -> bool {
+        if self.read_buffer.is_none()
+            || (self.read_buffer.is_some()
+                && self.read_buffer.as_ref().unwrap().read_size == 0
+                && self.read_buffer_ret.is_none())
+        {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn is_write_empty(&self) -> bool {
+        if self.caches.len() <= 0 && self.write_buffer.is_none() {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.is_read_empty() && self.is_write_empty()
+    }
+
+    pub async fn is_sendfile_close(_sss: ShareRw<StreamStreamShare>) -> bool {
+        #[cfg(unix)]
+        {
+            let sendfile = _sss.get().sendfile.clone();
+            let is_sendfile_some = sendfile.get().await.is_some();
+            let _sss = _sss.get();
+            let is_stream_full = if let StreamStatus::Full(_) = _sss.stream_status {
+                true
+            } else {
+                false
+            };
+            if is_stream_full && _sss.stream_info.get().close_num >= 1 && is_sendfile_some {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub async fn stream_status_sleep(stream_status: StreamStatus) {
+        match stream_status {
+            StreamStatus::Limit => {
+                //___test___
+                //log::warn!("StreamStatus::Limit");
+                tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
+            }
+            StreamStatus::Full(info) => {
+                let sleep_time = if info.is_sendfile {
+                    SENDFILE_FULL_SLEEP_TIME_MILLIS
+                } else {
+                    LIMIT_SLEEP_TIME_MILLIS
+                };
+                //___test___
+                //log::warn!("StreamStatus::StreamFull");
+                tokio::time::sleep(std::time::Duration::from_millis(sleep_time)).await;
+            }
+            StreamStatus::Ok(_) => {
+                log::error!("err:StreamStatus::Ok");
+                tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
+            }
+            StreamStatus::DataEmpty => {
+                log::error!("err:StreamStatus::DataEmpty");
+                tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
+            }
+        };
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamStatusFull {
+    pub is_sendfile: bool,
+    _write_size: u64,
+}
+
+impl Default for StreamStatusFull {
+    fn default() -> Self {
+        StreamStatusFull::new(false, 0)
+    }
+}
+
+impl StreamStatusFull {
+    pub fn new(is_sendfile: bool, _write_size: u64) -> StreamStatusFull {
+        StreamStatusFull {
+            is_sendfile,
+            _write_size,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum StreamStatus {
+    Limit,
+    Full(StreamStatusFull),
+    Ok(u64),
+    DataEmpty,
 }
 
 #[derive(Clone)]
@@ -222,11 +359,10 @@ impl StreamTimeout {
 
 #[derive(Clone)]
 pub struct ServerArg {
+    ms: Modules,
     executors: ExecutorsLocal,
-    stream_info: Rc<RefCell<StreamInfo>>,
-    domain_config_listen: Rc<domain_config::DomainConfigListen>,
+    stream_info: Share<StreamInfo>,
+    domain_config_listen: Arc<domain_config::DomainConfigListen>,
     server_stream_info: Arc<ServerStreamInfo>,
-    session_id: Arc<AtomicU64>,
-    http_context: Rc<HttpContext>,
-    tmp_file_id: Rc<RefCell<u64>>,
+    http_context: Arc<HttpContext>,
 }

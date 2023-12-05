@@ -5,23 +5,23 @@ use crate::ebpf::any_ebpf;
 use crate::quic::stream::Stream;
 use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
-use crate::stream::stream_flow;
 use crate::util;
 use crate::Protocol7;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
-use std::cell::RefCell;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct Server {
     config: Arc<Config>,
     reuseport: bool,
     addr: SocketAddr,
-    sni: RefCell<util::Sni>,
+    sni: Mutex<util::Sni>,
     #[cfg(feature = "anyproxy-ebpf")]
-    ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
+    ebpf_add_sock_hash: Option<any_ebpf::AddSockHash>,
 }
 
 impl Server {
@@ -30,20 +30,20 @@ impl Server {
         reuseport: bool,
         config: Config,
         sni: util::Sni,
-        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<Arc<any_ebpf::AddSockHash>>,
+        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<any_ebpf::AddSockHash>,
     ) -> Result<Server> {
         Ok(Server {
-            config: std::sync::Arc::new(config),
+            config: Arc::new(config),
             reuseport,
             addr,
-            sni: RefCell::new(sni),
+            sni: Mutex::new(sni),
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_add_sock_hash,
         })
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Server for Server {
     fn stream_send_timeout(&self) -> usize {
         return self.config.quic_send_timeout;
@@ -52,11 +52,12 @@ impl server::Server for Server {
         return self.config.quic_recv_timeout;
     }
     async fn listen(&self) -> Result<Box<dyn server::Listener>> {
+        let sni = self.sni.lock().unwrap().clone();
         let endpoint = quic_util::listen(
             &self.config,
             self.reuseport,
             &self.addr,
-            self.sni.borrow().clone(),
+            sni,
             #[cfg(feature = "anyproxy-ebpf")]
             &self.ebpf_add_sock_hash,
         )
@@ -73,10 +74,10 @@ impl server::Server for Server {
         Ok(self.addr.clone())
     }
     fn sni(&self) -> Option<util::Sni> {
-        Some(self.sni.borrow().clone())
+        Some(self.sni.lock().unwrap().clone())
     }
     fn set_sni(&self, sni: util::Sni) {
-        *self.sni.borrow_mut() = sni;
+        *self.sni.lock().unwrap() = sni;
     }
 
     fn protocol7(&self) -> Protocol7 {
@@ -162,7 +163,7 @@ impl Listener {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Listener for Listener {
     async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         loop {
@@ -202,9 +203,9 @@ impl Connection {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl server::Connection for Connection {
-    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
+    async fn stream(&mut self) -> Result<Option<(StreamFlow, ServerStreamInfo)>> {
         let stream = self.conn.accept_bi().await;
         match stream {
             Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
@@ -240,12 +241,13 @@ impl server::Connection for Connection {
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
                 let (r, w) = any_base::io::split::split(stream);
-                let mut stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
-                let read_timeout =
-                    tokio::time::Duration::from_secs(self.config.quic_recv_timeout as u64);
-                let write_timeout =
-                    tokio::time::Duration::from_secs(self.config.quic_send_timeout as u64);
-                stream.set_config(read_timeout, write_timeout, None);
+                let mut stream =
+                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let quic_recv_timeout = self.config.quic_recv_timeout as u64;
+                let read_timeout = tokio::time::Duration::from_secs(quic_recv_timeout);
+                let quic_send_timeout = self.config.quic_send_timeout as u64;
+                let write_timeout = tokio::time::Duration::from_secs(quic_send_timeout);
+                stream.set_config(read_timeout, write_timeout, ArcMutex::default());
                 return Ok(Some((
                     stream,
                     ServerStreamInfo {

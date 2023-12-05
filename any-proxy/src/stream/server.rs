@@ -1,10 +1,10 @@
-use crate::stream::stream_flow;
 use crate::tunnel::server as tunnel_server;
 use crate::tunnel2::server as tunnel2_server;
 use crate::util;
 use crate::Protocol7;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::stream_flow::StreamFlow;
 use any_tunnel::server as any_tunnel_server;
 use any_tunnel2::server as any_tunnel2_server;
 use anyhow::anyhow;
@@ -12,7 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::rc::Rc;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Debug)]
@@ -24,8 +24,8 @@ pub struct ServerStreamInfo {
     pub is_tls: bool,
 }
 
-#[async_trait(?Send)]
-pub trait Server {
+#[async_trait]
+pub trait Server: Send + Sync {
     async fn listen(&self) -> Result<Box<dyn Listener>>;
     fn listen_addr(&self) -> Result<SocketAddr>;
     fn sni(&self) -> Option<util::Sni>;
@@ -36,14 +36,14 @@ pub trait Server {
     fn is_tls(&self) -> bool;
 }
 
-#[async_trait(?Send)]
-pub trait Listener {
+#[async_trait]
+pub trait Listener: Send + Sync {
     async fn accept(&mut self) -> Result<(Box<dyn Connection>, bool)>;
 }
 
-#[async_trait(?Send)]
-pub trait Connection {
-    async fn stream(&mut self) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>>;
+#[async_trait]
+pub trait Connection: Send {
+    async fn stream(&mut self) -> Result<Option<(StreamFlow, ServerStreamInfo)>>;
 }
 
 pub async fn accept<A: Listener + ?Sized>(
@@ -77,7 +77,7 @@ pub async fn stream<C: Connection + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
     shutdown_rx2: &mut broadcast::Receiver<()>,
     connection: &mut Box<C>,
-) -> Result<Option<(stream_flow::StreamFlow, ServerStreamInfo)>> {
+) -> Result<Option<(StreamFlow, ServerStreamInfo)>> {
     tokio::select! {
         biased;
         stream = connection.stream() => {
@@ -97,34 +97,38 @@ pub async fn stream<C: Connection + ?Sized>(
 }
 
 pub async fn get_listens(
-    tunnel_listen: any_tunnel_server::Listener,
-    tunnel2_listen: any_tunnel2_server::Listener,
-    listen_server: Rc<Box<dyn Server>>,
+    tunnel_listen: Option<any_tunnel_server::Listener>,
+    tunnel2_listen: Option<any_tunnel2_server::Listener>,
+    listen_server: Arc<Box<dyn Server>>,
 ) -> Result<Vec<Box<dyn Listener>>> {
     let mut listens = Vec::with_capacity(5);
-    let tunnel_listen: Box<dyn Listener> = Box::new(tunnel_server::Listener::new(
-        listen_server.protocol7().to_tunnel_protocol7()?,
-        tunnel_listen,
-        listen_server.stream_send_timeout(),
-        listen_server.stream_recv_timeout(),
-        listen_server.is_tls(),
-    )?);
+    if tunnel_listen.is_some() {
+        let tunnel_listen: Box<dyn Listener> = Box::new(tunnel_server::Listener::new(
+            listen_server.protocol7().to_tunnel_protocol7()?,
+            tunnel_listen.unwrap(),
+            listen_server.stream_send_timeout(),
+            listen_server.stream_recv_timeout(),
+            listen_server.is_tls(),
+        )?);
+        listens.push(tunnel_listen);
+    }
 
-    let tunnel2_listen: Box<dyn Listener> = Box::new(tunnel2_server::Listener::new(
-        listen_server.protocol7().to_tunnel2_protocol7()?,
-        tunnel2_listen,
-        listen_server.stream_send_timeout(),
-        listen_server.stream_recv_timeout(),
-        listen_server.is_tls(),
-    )?);
+    if tunnel2_listen.is_some() {
+        let tunnel2_listen: Box<dyn Listener> = Box::new(tunnel2_server::Listener::new(
+            listen_server.protocol7().to_tunnel2_protocol7()?,
+            tunnel2_listen.unwrap(),
+            listen_server.stream_send_timeout(),
+            listen_server.stream_recv_timeout(),
+            listen_server.is_tls(),
+        )?);
+        listens.push(tunnel2_listen);
+    }
 
     let listen = listen_server
         .listen()
         .await
         .map_err(|e| anyhow!("err:listen_server.listen => e:{}", e))?;
 
-    listens.push(tunnel_listen);
-    listens.push(tunnel2_listen);
     listens.push(listen);
     return Ok(listens);
 }
@@ -134,15 +138,15 @@ pub async fn listen<S, F>(
     executors: ExecutorsLocal,
     shutdown_timeout: u64,
     listen_shutdown_tx: broadcast::Sender<()>,
-    listen_server: Rc<Box<dyn Server>>,
+    listen_server: Arc<Box<dyn Server>>,
     mut listen: Box<dyn Listener>,
     service: S,
 ) -> Result<()>
 where
-    S: FnOnce(stream_flow::StreamFlow, ServerStreamInfo, ExecutorsLocal) -> F + 'static + Clone,
-    F: Future<Output = Result<()>> + 'static,
+    S: FnOnce(StreamFlow, ServerStreamInfo, ExecutorsLocal) -> F + 'static + Clone + Send,
+    F: Future<Output = Result<()>> + 'static + Send,
 {
-    let mut executor_local_spawn = ExecutorLocalSpawn::new(executors.clone());
+    let mut executor = ExecutorLocalSpawn::new(executors.clone());
 
     let local_addr = listen_server
         .listen_addr()
@@ -166,7 +170,7 @@ where
         .map_err(|e| anyhow!("err:accept => e:{}", e))?;
         if accept.is_none() {
             if is_fast_shutdown {
-                executor_local_spawn.send("listen send", is_fast_shutdown)
+                executor.send("listen send", is_fast_shutdown)
             }
             break is_fast_shutdown;
         }
@@ -176,7 +180,7 @@ where
             #[cfg(feature = "anyspawn-count")]
             let name = name.clone();
             let service = service.clone();
-            executor_local_spawn._start(
+            executor._start(
                 #[cfg(feature = "anyspawn-count")]
                 format!("{}:{} => {}:{}", file!(), line!(), name, local_addr),
                 move |executors| async move {
@@ -204,7 +208,7 @@ where
             let service = service.clone();
             let connection_shutdown_thread_tx = executors.shutdown_thread_tx.clone();
             let connection_listen_shutdown_tx = listen_shutdown_tx.clone();
-            executor_local_spawn._start(
+            executor._start(
                 #[cfg(feature = "anyspawn-count")]
                 format!("{}:{} => {}:{}", file!(), line!(), name, local_addr),
                 move |executors| async move {
@@ -246,7 +250,7 @@ where
         }
     };
 
-    executor_local_spawn
+    executor
         .stop("listen stop", is_fast_shutdown, shutdown_timeout)
         .await;
     log::debug!(

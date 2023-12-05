@@ -3,6 +3,7 @@
 use super::cache;
 use super::domain_index::DomainIndex;
 use super::SniContext;
+use any_base::typ::ArcRwLock;
 use anyhow::anyhow;
 use anyhow::Result;
 use once_cell::sync::OnceCell;
@@ -14,7 +15,7 @@ use openssl::ssl::{self, AlpnError};
 use openssl::ssl::{SslContext, SslContextBuilder};
 use openssl::ssl::{SslFiletype, SslMethod};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub fn key_index() -> Result<Index<Ssl, cache::SessionKey>, ErrorStack> {
     static IDX: OnceCell<Index<Ssl, cache::SessionKey>> = OnceCell::new();
@@ -23,10 +24,10 @@ pub fn key_index() -> Result<Index<Ssl, cache::SessionKey>, ErrorStack> {
 
 /// opensll sni对象
 pub struct OpensslSni {
-    pub default_key: std::sync::RwLock<Option<String>>,
-    pub default_cert: std::sync::RwLock<Option<String>>,
-    pub sni_map: std::sync::Arc<std::sync::RwLock<Option<HashMap<i32, SslContext>>>>,
-    pub domain_index: std::sync::Arc<std::sync::RwLock<Option<DomainIndex>>>,
+    pub default_key: ArcRwLock<String>,
+    pub default_cert: ArcRwLock<String>,
+    pub sni_map: ArcRwLock<HashMap<i32, SslContext>>,
+    pub domain_index: ArcRwLock<DomainIndex>,
 }
 
 impl OpensslSni {
@@ -75,34 +76,31 @@ impl OpensslSni {
         }
 
         Ok(OpensslSni {
-            default_key: std::sync::RwLock::new(Some(default_key)),
-            default_cert: std::sync::RwLock::new(Some(default_cert)),
-            sni_map: std::sync::Arc::new(std::sync::RwLock::new(Some(sni_map))),
-            domain_index: std::sync::Arc::new(std::sync::RwLock::new(Some(domain_index))),
+            default_key: ArcRwLock::new(default_key),
+            default_cert: ArcRwLock::new(default_cert),
+            sni_map: ArcRwLock::new(sni_map),
+            domain_index: ArcRwLock::new(domain_index),
         })
     }
 
     /// reload的时候，clone新配置
     pub fn take_from(&self, other: &OpensslSni) {
-        *self.default_key.write().unwrap() = other.default_key.write().unwrap().take();
-        *self.default_cert.write().unwrap() = other.default_cert.write().unwrap().take();
-        *self.sni_map.write().unwrap() = other.sni_map.write().unwrap().take();
-        *self.domain_index.write().unwrap() = other.domain_index.write().unwrap().take();
+        self.default_key.set(unsafe { other.default_key.take() });
+        self.default_cert.set(unsafe { other.default_cert.take() });
+        self.sni_map.set(unsafe { other.sni_map.take() });
+        self.domain_index.set(unsafe { other.domain_index.take() });
     }
 
     ///openssl 加密accept
-    pub fn tls_acceptor(&self, prototol: &str) -> Result<Rc<SslAcceptor>> {
+    pub fn tls_acceptor(&self, prototol: &str) -> Result<Arc<SslAcceptor>> {
         let sni_map = self.sni_map.clone();
         let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())
             .map_err(|e| anyhow!("err:SslAcceptor::mozilla_modern => e:{}", e))?;
         acceptor
-            .set_certificate_chain_file(self.default_cert.read().unwrap().as_ref().unwrap())
+            .set_certificate_chain_file(self.default_cert.get().as_str())
             .map_err(|e| anyhow!("err:set_certificate_chain_file => e:{}", e))?;
         acceptor
-            .set_private_key_file(
-                &self.default_key.read().unwrap().as_ref().unwrap(),
-                SslFiletype::PEM,
-            )
+            .set_private_key_file(self.default_key.get().as_str(), SslFiletype::PEM)
             .map_err(|e| anyhow!("err:set_private_key_file => e:{}", e))?;
         if prototol.len() > 0 {
             let prototol = prototol.to_string();
@@ -127,29 +125,18 @@ impl OpensslSni {
                     })?;
 
                 log::debug!("domain:{}", domain);
-                let domain_index = domain_index
-                    .read()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .index(domain)
-                    .map_err(|_| {
-                        log::error!("{}", "err:openssl cert nil");
-                        *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
-                        openssl::ssl::SniError::ALERT_FATAL
-                    })?;
+                let domain_index = domain_index.get().index(domain).map_err(|_| {
+                    log::error!("{}", "err:openssl cert nil");
+                    *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
+                    openssl::ssl::SniError::ALERT_FATAL
+                })?;
 
                 log::debug!("domain_index:{}", domain_index);
-                let sni_map = sni_map.read().unwrap();
-                let ssl_context =
-                    sni_map
-                        .as_ref()
-                        .unwrap()
-                        .get(&domain_index)
-                        .ok_or_else(|| {
-                            *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
-                            openssl::ssl::SniError::ALERT_FATAL
-                        })?;
+                let sni_map = sni_map.get();
+                let ssl_context = sni_map.get(&domain_index).ok_or_else(|| {
+                    *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
+                    openssl::ssl::SniError::ALERT_FATAL
+                })?;
 
                 // {
                 //     ssl.servername(openssl::ssl::NameType::HOST_NAME)
@@ -185,7 +172,7 @@ impl OpensslSni {
                 Ok(())
             },
         );
-        let tls_acceptor = Rc::new(acceptor.build());
+        let tls_acceptor = Arc::new(acceptor.build());
         Ok(tls_acceptor)
     }
 }

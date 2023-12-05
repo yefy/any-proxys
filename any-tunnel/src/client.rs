@@ -2,6 +2,8 @@ use super::peer_client::PeerClient;
 use super::peer_stream_connect::PeerStreamConnect;
 use super::stream::Stream;
 use crate::peer_stream::PeerStreamKey;
+use any_base::executor_local_spawn::Runtime;
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -10,7 +12,6 @@ use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 lazy_static! {
     static ref CLIENT_ID: AtomicU32 = AtomicU32::new(1);
@@ -18,13 +19,13 @@ lazy_static! {
 
 #[derive(Clone)]
 pub struct ClientContext {
-    peer_stream_key_map: Arc<Mutex<HashMap<String, VecDeque<(Arc<PeerStreamKey>, i64)>>>>,
+    peer_stream_key_map: ArcMutex<HashMap<String, VecDeque<(Arc<PeerStreamKey>, i64)>>>,
 }
 
 impl ClientContext {
     pub fn new() -> ClientContext {
         ClientContext {
-            peer_stream_key_map: Arc::new(Mutex::new(HashMap::new())),
+            peer_stream_key_map: ArcMutex::new(HashMap::new()),
         }
     }
 
@@ -40,7 +41,7 @@ impl ClientContext {
         }
 
         let curr_time = Local::now().timestamp();
-        let mut peer_stream_key_map = self.peer_stream_key_map.lock().unwrap();
+        let mut peer_stream_key_map = self.peer_stream_key_map.get_mut();
         let values = peer_stream_key_map.get_mut(&key);
         if values.is_none() {
             let mut values = VecDeque::with_capacity(30);
@@ -77,7 +78,7 @@ impl ClientContext {
             return None;
         }
         let curr_time = Local::now().timestamp();
-        let mut peer_stream_key_map = self.peer_stream_key_map.lock().unwrap();
+        let mut peer_stream_key_map = self.peer_stream_key_map.get_mut();
         let values = peer_stream_key_map.get_mut(key);
         if values.is_none() {
             return None;
@@ -134,8 +135,9 @@ impl Client {
         request_id: Option<String>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
-        self.do_connect(request_id, peer_stream_connect, peer_stream_size)
+        self.do_connect(request_id, peer_stream_connect, peer_stream_size, run_time)
             .await
             .map_err(|e| anyhow!("err:connect => e:{}", e))
     }
@@ -145,6 +147,7 @@ impl Client {
         request_id: Option<String>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
+        run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
         let client_id = CLIENT_ID.fetch_add(1, Ordering::Relaxed);
         let max_stream_size = peer_stream_connect.max_stream_size().await;
@@ -163,6 +166,7 @@ impl Client {
             None,
             channel_size,
             None,
+            run_time,
         )
         .await
         .map_err(|e| anyhow!("err:create_client => e:{}", e))?;

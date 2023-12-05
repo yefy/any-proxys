@@ -1,7 +1,8 @@
 use crate::quic::stream::Stream;
 use crate::stream::client;
-use crate::stream::stream_flow;
 use crate::Protocol7;
+use any_base::stream_flow::{StreamFlow, StreamFlowErr, StreamFlowInfo};
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -34,13 +35,13 @@ impl Client {
 impl client::Client for Client {
     async fn connect(
         &self,
-        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
+        info: ArcMutex<StreamFlowInfo>,
     ) -> Result<Box<dyn client::Connection + Send>> {
         let local_addr = self
             .endpoint
             .local_addr()
             .map_err(|e| anyhow!("err:endpoint.local_addr => e:{}", e))?;
-        let mut stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
+        let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let ret: Result<quinn::Connection> = async {
             let connect = self
                 .endpoint
@@ -49,7 +50,7 @@ impl client::Client for Client {
             match tokio::time::timeout(self.timeout, connect).await {
                 Ok(ret) => match ret {
                     Err(e) => {
-                        stream_err = stream_flow::StreamFlowErr::WriteErr;
+                        stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!(
                             "err:client.connect =>  addr:{}, ssl_domain:{}, e:{}",
                             self.addr,
@@ -60,7 +61,7 @@ impl client::Client for Client {
                     Ok(connection) => Ok(connection),
                 },
                 Err(_) => {
-                    stream_err = stream_flow::StreamFlowErr::WriteTimeout;
+                    stream_err = StreamFlowErr::WriteTimeout;
                     Err(anyhow!(
                         "err:client.connect timeout =>  addr:{}, ssl_domain:{}",
                         self.addr,
@@ -74,7 +75,7 @@ impl client::Client for Client {
         match ret {
             Err(e) => {
                 if info.is_some() {
-                    info.as_mut().unwrap().err = stream_err;
+                    info.get_mut().err = stream_err;
                 }
                 Err(e)
             }
@@ -119,17 +120,17 @@ impl Connection {
 impl client::Connection for Connection {
     async fn stream(
         &self,
-        info: &mut Option<&mut stream_flow::StreamFlowInfo>,
-    ) -> Result<(Protocol7, stream_flow::StreamFlow, SocketAddr, SocketAddr)> {
+        info: ArcMutex<StreamFlowInfo>,
+    ) -> Result<(Protocol7, StreamFlow, SocketAddr, SocketAddr)> {
         let local_addr = self.local_addr.clone();
         let remote_addr = self.connection.remote_address();
-        let mut stream_err: stream_flow::StreamFlowErr = stream_flow::StreamFlowErr::Init;
+        let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let ret: Result<(quinn::SendStream, quinn::RecvStream)> = async {
             match tokio::time::timeout(self.timeout, self.connection.open_bi()).await {
                 Ok(ret) => match ret {
                     Ok(stream) => Ok(stream),
                     Err(e) => {
-                        stream_err = stream_flow::StreamFlowErr::WriteErr;
+                        stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!(
                             "err:client.stream =>  addr:{}, ssl_domain:{}, e:{}",
                             self.addr,
@@ -139,7 +140,7 @@ impl client::Connection for Connection {
                     }
                 },
                 Err(_) => {
-                    stream_err = stream_flow::StreamFlowErr::WriteTimeout;
+                    stream_err = StreamFlowErr::WriteTimeout;
                     Err(anyhow!(
                         "err:client.stream timeout => addr:{}, ssl_domain:{}",
                         self.addr,
@@ -152,14 +153,15 @@ impl client::Connection for Connection {
         match ret {
             Err(e) => {
                 if info.is_some() {
-                    info.as_mut().unwrap().err = stream_err;
+                    info.get_mut().err = stream_err;
                 }
                 Err(e)
             }
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
                 let (r, w) = any_base::io::split::split(stream);
-                let stream = stream_flow::StreamFlow::new(0, Box::new(r), Box::new(w));
+                let stream =
+                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }
         }

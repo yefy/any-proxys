@@ -5,11 +5,10 @@ use chrono::Local;
 use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+use crate::typ::ArcMutex;
 use std::io;
 use std::io::ErrorKind;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 //use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -21,11 +20,11 @@ pub type StreamFlowWrite = crate::io::split::WriteHalf<StreamFlow>;
 // pub trait AsyncReadAsyncWrite: AsyncRead + AsyncWrite + Send + Unpin {}
 // impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadAsyncWrite for T {}
 
-pub trait StreamRead: AsyncRead + AsyncReadMsg + AsyncStream + Send + Unpin {}
-impl<T: AsyncRead + AsyncReadMsg + AsyncStream + Send + Unpin> StreamRead for T {}
+pub trait StreamRead: AsyncRead + AsyncReadMsg + AsyncStream + Send + Sync + Unpin {}
+impl<T: AsyncRead + AsyncReadMsg + AsyncStream + Send + Sync + Unpin> StreamRead for T {}
 
-pub trait StreamWrite: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Unpin {}
-impl<T: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Unpin> StreamWrite for T {}
+pub trait StreamWrite: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Sync + Unpin {}
+impl<T: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Sync + Unpin> StreamWrite for T {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamFlowErr {
@@ -60,14 +59,21 @@ impl StreamFlowInfo {
             err_time_millis: 0,
         }
     }
+
+    pub fn is_close(&self) -> bool {
+        if self.err == StreamFlowErr::WriteClose || self.err == StreamFlowErr::ReadClose {
+            return true;
+        }
+        return false;
+    }
 }
 
 pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
-    info: Option<Arc<Mutex<StreamFlowInfo>>>,
-    r: Box<dyn StreamRead + Send + Unpin>,
-    w: Box<dyn StreamWrite + Send + Unpin>,
+    info: ArcMutex<StreamFlowInfo>,
+    r: ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
+    w: ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
     fd: i32,
 }
 
@@ -80,9 +86,9 @@ impl StreamFlow {
     ) -> (
         tokio::time::Duration,
         tokio::time::Duration,
-        Option<Arc<Mutex<StreamFlowInfo>>>,
-        Box<dyn StreamRead + Send + Unpin>,
-        Box<dyn StreamWrite + Send + Unpin>,
+        ArcMutex<StreamFlowInfo>,
+        ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
+        ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
         i32,
     ) {
         let StreamFlow {
@@ -98,13 +104,13 @@ impl StreamFlow {
 
     pub fn new(
         fd: i32,
-        r: Box<dyn StreamRead + Send + Unpin>,
-        w: Box<dyn StreamWrite + Send + Unpin>,
+        r: ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
+        w: ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
     ) -> StreamFlow {
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             write_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
-            info: None,
+            info: ArcMutex::default(),
             r,
             w,
             fd,
@@ -123,16 +129,16 @@ impl StreamFlow {
         &mut self,
         read_timeout: tokio::time::Duration,
         write_timeout: tokio::time::Duration,
-        info: Option<Arc<Mutex<StreamFlowInfo>>>,
+        info: ArcMutex<StreamFlowInfo>,
     ) {
         self.read_timeout = read_timeout;
         self.write_timeout = write_timeout;
         self.set_stream_info(info)
     }
 
-    pub fn set_stream_info(&mut self, mut info: Option<Arc<Mutex<StreamFlowInfo>>>) {
+    pub fn set_stream_info(&mut self, info: ArcMutex<StreamFlowInfo>) {
         if info.is_some() {
-            let mut info = info.as_mut().unwrap().lock().unwrap();
+            let mut info = info.get_mut();
             info.write_timeout = self.get_write_timeout();
             info.read_timeout = self.get_read_timeout();
         }
@@ -250,7 +256,7 @@ impl StreamFlow {
         match ret {
             Err(e) => {
                 if self.info.is_some() {
-                    let mut info = self.info.as_ref().unwrap().lock().unwrap();
+                    let mut info = self.info.get_mut();
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
@@ -259,7 +265,7 @@ impl StreamFlow {
             }
             Ok(usize) => {
                 if self.info.is_some() {
-                    self.info.as_ref().unwrap().lock().unwrap().read += usize as i64;
+                    self.info.get_mut().read += usize as i64;
                 }
                 Ok(())
             }
@@ -382,7 +388,7 @@ impl StreamFlow {
         match ret {
             Err(e) => {
                 if self.info.is_some() {
-                    let mut info = self.info.as_ref().unwrap().lock().unwrap();
+                    let mut info = self.info.get_mut();
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
@@ -391,7 +397,7 @@ impl StreamFlow {
             }
             Ok(usize) => {
                 if self.info.is_some() {
-                    self.info.as_ref().unwrap().lock().unwrap().write += usize as i64;
+                    self.info.get_mut().write += usize as i64;
                 }
                 Ok(usize)
             }
@@ -400,14 +406,14 @@ impl StreamFlow {
 }
 
 impl crate::io::async_stream::AsyncStream for StreamFlow {
-    fn poll_is_single(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut self.r).poll_is_single(cx)
+    fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.r.get_mut()).poll_is_single(cx)
     }
 }
 
 impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
     fn poll_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
-        let ret = Pin::new(&mut self.r).poll_read_msg(cx);
+        let ret = Pin::new(&mut *self.r.get_mut()).poll_read_msg(cx);
         match ret {
             Poll::Ready(ret) => match ret {
                 Err(e) => {
@@ -423,8 +429,8 @@ impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
         }
     }
 
-    fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut self.r).poll_is_read_msg(cx)
+    fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.r.get_mut()).poll_is_read_msg(cx)
     }
 }
 
@@ -434,15 +440,15 @@ impl crate::io::async_write_msg::AsyncWriteMsg for StreamFlow {
         cx: &mut Context<'_>,
         buf: &mut AsyncWriteBuf,
     ) -> Poll<io::Result<usize>> {
-        let ret = Pin::new(&mut self.w).poll_write_msg(cx, buf);
+        let ret = Pin::new(&mut *self.w.get_mut()).poll_write_msg(cx, buf);
         match ret {
             Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
             Poll::Pending => Poll::Pending,
         }
     }
 
-    fn poll_is_write_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut self.w).poll_is_write_msg(cx)
+    fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.w.get_mut()).poll_is_write_msg(cx)
     }
 }
 
@@ -452,7 +458,7 @@ impl tokio::io::AsyncRead for StreamFlow {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let ret = Pin::new(&mut self.r).poll_read(cx, buf);
+        let ret = Pin::new(&mut *self.r.get_mut()).poll_read(cx, buf);
         match ret {
             Poll::Ready(ret) => {
                 let ret = if let Err(e) = ret {
@@ -479,7 +485,7 @@ impl tokio::io::AsyncWrite for StreamFlow {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let ret = Pin::new(&mut self.w).poll_write(cx, buf);
+        let ret = Pin::new(&mut *self.w.get_mut()).poll_write(cx, buf);
         match ret {
             Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
             Poll::Pending => Poll::Pending,
@@ -492,11 +498,11 @@ impl tokio::io::AsyncWrite for StreamFlow {
         // }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.w).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w.get_mut()).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.w).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w.get_mut()).poll_shutdown(cx)
     }
 }

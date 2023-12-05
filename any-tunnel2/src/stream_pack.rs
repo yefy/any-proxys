@@ -14,6 +14,7 @@ use super::DEFAULT_WINDOW_LEN;
 use crate::anychannel::AnyAsyncSender;
 use crate::protopack::TunnelHeartbeat;
 use crate::{PeerClientToStreamPackReceiver, StreamPackToStreamSender, DEFAULT_MERGE_ACK_SIZE};
+use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::prelude::*;
@@ -33,7 +34,7 @@ use tokio::sync::Mutex;
 struct SendWindowWait {
     max_send_pack_len: Arc<AtomicUsize>,
     curr_send_pack_len: Arc<AtomicUsize>,
-    waker: Arc<std::sync::Mutex<Option<Waker>>>,
+    waker: ArcMutex<Waker>,
     curr_pack_id: Arc<AtomicU32>,
 }
 
@@ -42,7 +43,7 @@ impl SendWindowWait {
         SendWindowWait {
             max_send_pack_len: Arc::new(AtomicUsize::new(DEFAULT_WINDOW_LEN)),
             curr_send_pack_len: Arc::new(AtomicUsize::new(0)),
-            waker: Arc::new(std::sync::Mutex::new(None)),
+            waker: ArcMutex::default(),
             curr_pack_id: Arc::new(AtomicU32::new(0)),
         }
     }
@@ -56,9 +57,9 @@ impl SendWindowWait {
     pub fn waker(&self, sub_window_size: usize) {
         self.curr_send_pack_len
             .fetch_sub(sub_window_size, Ordering::Relaxed);
-        let waker = self.waker.lock().unwrap().take();
-        if waker.is_some() {
-            waker.unwrap().wake();
+        if self.waker.is_some() {
+            let waker = unsafe { self.waker.take() };
+            waker.wake();
         }
     }
 }
@@ -69,7 +70,7 @@ impl Future for SendWindowWait {
         let curr_send_pack_len = self.curr_send_pack_len.load(Ordering::Relaxed);
         let max_send_pack_len = self.max_send_pack_len.load(Ordering::Relaxed);
         if curr_send_pack_len >= max_send_pack_len {
-            *self.waker.lock().unwrap() = Some(cx.waker().clone());
+            self.waker.set(cx.waker().clone());
             Poll::Pending
         } else {
             Poll::Ready(())

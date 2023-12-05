@@ -206,7 +206,7 @@ pub async fn listen(
     reuseport: bool,
     addr: &SocketAddr,
     sni: util::Sni,
-    #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: &Option<Arc<any_ebpf::AddSockHash>>,
+    #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: &Option<any_ebpf::AddSockHash>,
 ) -> Result<quinn::Endpoint> {
     let udp_socket = bind(
         addr,

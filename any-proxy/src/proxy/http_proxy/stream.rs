@@ -1,4 +1,5 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::typ::ArcMutexTokio;
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
@@ -8,7 +9,6 @@ use hyper::Body;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 struct StreamBuf {
@@ -53,18 +53,19 @@ impl StreamBuf {
 }
 
 pub struct Stream {
-    stream_rx: Option<Arc<tokio::sync::Mutex<Body>>>,
+    stream_rx: Option<ArcMutexTokio<Body>>,
     stream_rx_buf: Option<StreamBuf>,
-    stream_rx_future: Option<Pin<Box<dyn Future<Output = Result<Bytes>> + std::marker::Send>>>,
-    stream_tx: Option<Arc<tokio::sync::Mutex<Sender>>>,
+    stream_rx_future:
+        Option<Pin<Box<dyn Future<Output = Result<Bytes>> + std::marker::Send + Sync>>>,
+    stream_tx: Option<ArcMutexTokio<Sender>>,
     stream_tx_data_size: usize,
-    stream_tx_future: Option<Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send>>>,
+    stream_tx_future: Option<Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + Sync>>>,
 }
 
 impl Stream {
     pub fn new(stream_rx: Body, stream_tx: Sender) -> Stream {
-        let stream_rx = Arc::new(tokio::sync::Mutex::new(stream_rx));
-        let stream_tx = Arc::new(tokio::sync::Mutex::new(stream_tx));
+        let stream_rx = ArcMutexTokio::new(stream_rx);
+        let stream_tx = ArcMutexTokio::new(stream_tx);
         Stream {
             stream_rx: Some(stream_rx),
             stream_rx_buf: None,
@@ -160,7 +161,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         } else {
             let stream_rx = self.stream_rx.clone().unwrap();
             Box::pin(async move {
-                let data = stream_rx.lock().await.data().await;
+                let data = stream_rx.get_mut().await.data().await;
                 if data.is_none() {
                     return Err(anyhow!("err:stream_rx close"));
                 }
@@ -221,7 +222,7 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
             let stream_tx = self.stream_tx.clone().unwrap();
             Box::pin(async move {
                 stream_tx
-                    .lock()
+                    .get_mut()
                     .await
                     .send_data(data)
                     .await
@@ -269,7 +270,7 @@ impl tokio::io::AsyncRead for Stream {
         } else {
             let stream_rx = self.stream_rx.clone().unwrap();
             Box::pin(async move {
-                let data = stream_rx.lock().await.data().await;
+                let data = stream_rx.get_mut().await.data().await;
                 if data.is_none() {
                     return Err(anyhow!("err:stream_rx close"));
                 }
@@ -329,7 +330,7 @@ impl tokio::io::AsyncWrite for Stream {
             let stream_tx = self.stream_tx.clone().unwrap();
             Box::pin(async move {
                 stream_tx
-                    .lock()
+                    .get_mut()
                     .await
                     .send_data(data)
                     .await

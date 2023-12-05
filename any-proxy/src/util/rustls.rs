@@ -1,5 +1,6 @@
 use super::domain_index::DomainIndex;
 use super::SniContext;
+use any_base::typ::ArcRwLock;
 use anyhow::anyhow;
 use anyhow::Result;
 use rustls::server::ClientHello;
@@ -7,7 +8,6 @@ use rustls::server::ResolvesServerCert;
 use rustls::sign;
 use std::collections::HashMap;
 use std::fs;
-use std::rc::Rc;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 
@@ -40,8 +40,8 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
 /// Something that resolves do different cert chains/keys based
 /// on client-supplied server name (via SNI).
 pub struct ResolvesServerCertUsingSNI {
-    pub domain_index: std::sync::RwLock<Option<DomainIndex>>,
-    pub by_name: std::sync::RwLock<Option<HashMap<i32, Arc<sign::CertifiedKey>>>>,
+    pub domain_index: ArcRwLock<DomainIndex>,
+    pub by_name: ArcRwLock<HashMap<i32, Arc<sign::CertifiedKey>>>,
 }
 
 impl ResolvesServerCertUsingSNI {
@@ -51,8 +51,8 @@ impl ResolvesServerCertUsingSNI {
         domain_index: DomainIndex,
     ) -> Result<ResolvesServerCertUsingSNI> {
         let mut sni_rustls_map = ResolvesServerCertUsingSNI {
-            domain_index: std::sync::RwLock::new(Some(domain_index)),
-            by_name: std::sync::RwLock::new(Some(HashMap::new())),
+            domain_index: ArcRwLock::new(domain_index),
+            by_name: ArcRwLock::new(HashMap::new()),
         };
 
         for ctx in ctxs.iter() {
@@ -96,22 +96,17 @@ impl ResolvesServerCertUsingSNI {
         //     .map_err(|_| TLSError::General("Bad DNS name".into()))?;
         //
         // ck.cross_check_end_entity_cert(Some(checked_name))?;
-        self.by_name
-            .write()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .insert(index, Arc::new(ck));
+        self.by_name.get_mut().insert(index, Arc::new(ck));
         Ok(())
     }
     /// reload的时候，clone新配置
     pub fn take_from(&self, other: &ResolvesServerCertUsingSNI) {
-        *self.domain_index.write().unwrap() = other.domain_index.write().unwrap().take();
-        *self.by_name.write().unwrap() = other.by_name.write().unwrap().take();
+        self.domain_index.set(unsafe { other.domain_index.take() });
+        self.by_name.set(unsafe { other.by_name.take() });
     }
 
     pub fn is_empty(&self) -> bool {
-        self.by_name.read().unwrap().as_ref().unwrap().is_empty()
+        self.by_name.is_none()
     }
 }
 
@@ -119,25 +114,12 @@ impl ResolvesServerCert for ResolvesServerCertUsingSNI {
     fn resolve(&self, client_hello: ClientHello) -> Option<Arc<sign::CertifiedKey>> {
         if let Some(domain) = client_hello.server_name() {
             log::trace!("domain:{}", domain);
-            let domain_index = match self
-                .domain_index
-                .read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .index(domain)
-            {
+            let domain_index = match self.domain_index.get().index(domain) {
                 Err(_) => return None,
                 Ok(domain_index) => domain_index,
             };
             log::trace!("domain_index:{}", domain_index);
-            self.by_name
-                .read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .get(&domain_index)
-                .cloned()
+            self.by_name.get().get(&domain_index).cloned()
         } else {
             // This kind of resolver requires SNI
             None
@@ -193,7 +175,7 @@ pub fn tls_acceptor(
     sni_rustls_map: std::sync::Arc<ResolvesServerCertUsingSNI>,
     //alpn_protocols: &[Vec<u8>],
     alpn_protocols: Vec<Vec<u8>>,
-) -> Rc<TlsAcceptor> {
+) -> Arc<TlsAcceptor> {
     let tls_cfg = {
         let mut server_crypto = rustls::ServerConfig::builder()
             .with_safe_defaults()
@@ -208,5 +190,5 @@ pub fn tls_acceptor(
         }
         std::sync::Arc::new(server_crypto)
     };
-    Rc::new(TlsAcceptor::from(tls_cfg))
+    Arc::new(TlsAcceptor::from(tls_cfg))
 }

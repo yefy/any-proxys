@@ -1,21 +1,54 @@
+use super::http_server;
+use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::io::buf_reader::BufReader;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::ShareRw;
 use anyhow::Result;
 use hyper::http::header::HeaderValue;
 use hyper::http::{Request, Response, StatusCode, Version};
 use hyper::Body;
 
-pub struct HttpEchoServer<'a> {
-    _executors: ExecutorsLocal,
-    req: Request<Body>,
-    body: &'a str,
+pub async fn http_server_handle(
+    arg: ServerArg,
+    client_buf_reader: BufReader<StreamFlow>,
+) -> Result<()> {
+    let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+        any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+    );
+    http_server::http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
+        Box::pin(http_server_run_handle(arg, http_arg, scc, req))
+    })
+    .await
 }
 
-impl HttpEchoServer<'_> {
-    pub fn new(executors: ExecutorsLocal, req: Request<Body>, body: &str) -> HttpEchoServer {
+pub async fn http_server_run_handle(
+    arg: ServerArg,
+    _http_arg: ServerArg,
+    scc: ShareRw<StreamConfigContext>,
+    req: Request<Body>,
+) -> Result<Response<Body>> {
+    HttpEchoServer::new(arg.executors.clone(), req, scc)
+        .run()
+        .await
+}
+
+pub struct HttpEchoServer {
+    _executors: ExecutorsLocal,
+    req: Request<Body>,
+    scc: ShareRw<StreamConfigContext>,
+}
+
+impl HttpEchoServer {
+    pub fn new(
+        executors: ExecutorsLocal,
+        req: Request<Body>,
+        scc: ShareRw<StreamConfigContext>,
+    ) -> HttpEchoServer {
         HttpEchoServer {
             _executors: executors,
             req,
-            body,
+            scc,
         }
     }
 
@@ -31,7 +64,11 @@ impl HttpEchoServer<'_> {
     }
 
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
-        let mut res = Response::new(self.body.to_string().into());
+        let scc = self.scc.get();
+        use crate::config::http_server_echo;
+        let http_server_echo_conf = http_server_echo::currs_conf(scc.http_server_confs());
+
+        let mut res = Response::new(http_server_echo_conf.body.clone().into());
         res.headers_mut().insert(
             "Server",
             HeaderValue::from_bytes("any-proxy/v1.0.0".as_bytes())?,

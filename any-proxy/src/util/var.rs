@@ -3,8 +3,7 @@
  */
 use anyhow::anyhow;
 use anyhow::Result;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 struct VarItem {
     is_var: bool,
@@ -12,27 +11,27 @@ struct VarItem {
 }
 
 pub struct VarData {
-    item: Rc<VarItem>,
-    var_data: RefCell<Option<String>>,
+    item: Arc<VarItem>,
+    var_data: Mutex<Option<String>>,
 }
 
 impl Clone for VarData {
     fn clone(&self) -> Self {
         Self {
             item: self.item.clone(),
-            var_data: RefCell::new(None),
+            var_data: Mutex::new(None),
         }
     }
 }
 
 pub struct VarContext {
     vars: String,
-    //items: Vec<Rc<VarItem>>,
-    pub default_str: Rc<Option<String>>,
+    //items: Vec<Arc<VarItem>>,
+    pub default_str: Arc<Option<String>>,
 }
 
 pub struct Var {
-    pub context: Rc<VarContext>,
+    pub context: Arc<VarContext>,
     pub datas: Vec<VarData>,
 }
 
@@ -51,14 +50,14 @@ impl Var {
         loop {
             let var_start_index = vars.find(var_start);
             if var_start_index.is_none() {
-                let item = Rc::new(VarItem {
+                let item = Arc::new(VarItem {
                     is_var: false,
                     data: vars.to_string(),
                 });
                 //items.push(item.clone());
                 let data = VarData {
                     item: item,
-                    var_data: RefCell::new(None),
+                    var_data: Mutex::new(None),
                 };
                 datas.push(data);
                 break;
@@ -66,14 +65,14 @@ impl Var {
             let var_start_index = var_start_index.unwrap();
             if var_start_index > 0 {
                 let data = &vars[..var_start_index];
-                let item = Rc::new(VarItem {
+                let item = Arc::new(VarItem {
                     is_var: false,
                     data: data.to_string(),
                 });
                 //items.push(item.clone());
                 let data = VarData {
                     item: item,
-                    var_data: RefCell::new(None),
+                    var_data: Mutex::new(None),
                 };
                 datas.push(data);
                 vars = &vars[var_start_index..];
@@ -83,14 +82,14 @@ impl Var {
             let var_end_index =
                 var_end_index.ok_or(anyhow!("err:var invalid => var:{}", vars_str))?;
             let data = &vars[..var_end_index + 1];
-            let item = Rc::new(VarItem {
+            let item = Arc::new(VarItem {
                 is_var: true,
                 data: data.to_string(),
             });
             //items.push(item.clone());
             let data = VarData {
                 item: item,
-                var_data: RefCell::new(None),
+                var_data: Mutex::new(None),
             };
             datas.push(data);
 
@@ -102,14 +101,14 @@ impl Var {
         }
 
         Ok(Var {
-            context: Rc::new(VarContext {
+            context: Arc::new(VarContext {
                 vars: vars_str.to_string(),
                 //items,
                 default_str: {
                     if default_str.is_none() {
-                        Rc::new(None)
+                        Arc::new(None)
                     } else {
-                        Rc::new(Some(default_str.unwrap().to_string()))
+                        Arc::new(Some(default_str.unwrap().to_string()))
                     }
                 },
             }),
@@ -129,13 +128,13 @@ impl Var {
         S: FnMut(&str) -> Result<Option<String>>,
     {
         for v in self.datas.iter_mut() {
-            if v.item.is_var && v.var_data.borrow().is_none() {
+            if v.item.is_var && v.var_data.lock().unwrap().is_none() {
                 let var_data = service(v.item.data.as_str());
                 match var_data {
                     Err(e) => return Err(e)?,
                     Ok(var_data) => {
                         if var_data.is_some() {
-                            *v.var_data.borrow_mut() = Some(var_data.unwrap());
+                            *v.var_data.lock().unwrap() = Some(var_data.unwrap());
                         }
                     }
                 }
@@ -147,7 +146,7 @@ impl Var {
     pub fn join(&self) -> Result<String> {
         let mut var_datas = String::with_capacity(128);
         for v in self.datas.iter() {
-            let var_data = v.var_data.borrow();
+            let var_data = v.var_data.lock().unwrap();
             let data = if v.item.is_var {
                 if let Some(data) = var_data.as_ref() {
                     data.as_str()
