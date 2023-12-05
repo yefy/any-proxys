@@ -1,5 +1,5 @@
 # anyproxy
-rust编写高性能、高度模块化四层,七层代理服务器，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、ebpf等
+rust编写高性能、高度模块化和插件化的四层,七层代理服务器，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、ebpf等
 
 # any-tunnel
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
@@ -8,8 +8,8 @@ rust编写高性能、高度模块化四层,七层代理服务器，支持tcp、
 底层tokio框架  
 多线程无锁并发  
 多线程有锁并发  
-类似nginx高度模块化框架，快速添加协议监听和代理回源（tcp、quic、ssl、http、websocket），动态添加模块，配置文件由各自模块独立解析    
-高性能  
+类似nginx高度模块化和插件化框架，快速添加协议监听和代理回源（tcp、quic、ssl、http、websocket），动态添加模块，配置文件由各自模块独立解析    
+高性能(代码参考any-proxys/any-proxy/src/config)  
 内存安全  
 tcp、quic、ssl、any-tunnel协议互转  
 热加载配置  
