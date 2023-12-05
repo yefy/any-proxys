@@ -18,8 +18,10 @@ server {
     local {
     }
 }
+````
 
 #domain模式
+````
 server {
     domain str = "www.example.cn";
      domain_listen_tcp raw = r```

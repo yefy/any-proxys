@@ -52,9 +52,11 @@ proxy_pass_tcp raw = r```
             address = "www.upstream.cn:10001"
             is_proxy_protocol_hello = true
 ```r;
+````
 
-upstream中的server配置中每一条就是proxy_pass
-每个配置项都包含, weight = 10, is_proxy_protocol_hello = true, heartbeat = {  interval = 10, timeout = 10, fail = 3}, dynamic_domain = {interval = 10}
+````
+upstream中的server配置中每一条就是proxy_pass  
+每个配置项都包含, weight = 10, is_proxy_protocol_hello = true, heartbeat = {  interval = 10, timeout = 10, fail = 3}, dynamic_domain = {interval = 10}  
 
 weight = 10 在dispatch = {type="weight"} 生效  
 is_proxy_protocol_hello = true 回源添加hello  
