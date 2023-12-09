@@ -509,7 +509,7 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
         let mut slice = [0u8; protopack::TUNNEL_MAX_HEADER_SIZE];
         let buffer_pool = TunnelDynamicPool {
             #[cfg(feature = "anypool-dynamic-pool")]
-            tunnel_data: DynamicPool::new(8, self.channel_size * 2, TunnelData::default),
+            tunnel_data: DynamicPool::new(1, self.channel_size * 2, TunnelData::default),
             #[cfg(not(feature = "anypool-dynamic-pool"))]
             tunnel_data: DynamicPoolTunnelData::new(),
         };

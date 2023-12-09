@@ -92,6 +92,7 @@ pub enum StreamCache {
 }
 
 pub struct StreamCacheFile {
+    pub file_fd: i32,
     pub seek: u64,
     pub size: u64,
 }
@@ -155,7 +156,8 @@ impl StreamCacheBuffer {
     }
 
     pub fn buffer_size() -> usize {
-        default_config::PAGE_SIZE.load(Ordering::Relaxed) * *default_config::MIN_CACHE_BUFFER_NUM
+        default_config::PAGE_SIZE.load(Ordering::Relaxed)
+            * default_config::MIN_CACHE_BUFFER_NUM.load(Ordering::Relaxed)
     }
 
     pub fn reset(&mut self) {
@@ -202,11 +204,13 @@ pub struct StreamStreamContext {
     pub ssd: ArcRwLock<StreamStreamData>,
 }
 
-const LIMIT_SLEEP_TIME_MILLIS: u64 = 100;
+const LIMIT_SLEEP_TIME_MILLIS: u64 = 300;
 const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 5;
-const NOT_SLEEP_TIME_MILLIS: u64 = 2;
+const NOT_SLEEP_TIME_MILLIS: u64 = 5;
 const MIN_SLEEP_TIME_MILLIS: u64 = 10;
-const SENDFILE_FULL_SLEEP_TIME_MILLIS: u64 = 30;
+const SENDFILE_FULL_SLEEP_TIME_MILLIS: u64 = 50;
+#[cfg(unix)]
+const SENDFILE_WRITEABLE_MILLIS: u64 = 10;
 
 pub fn get_flag(is_client: bool) -> &'static str {
     if is_client {
@@ -235,6 +239,7 @@ pub struct StreamStreamShare {
     caches: LinkedList<StreamCache>,
     buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
     plugins: Vec<Option<ArcUnsafeAny>>,
+    is_first_write: bool,
 }
 
 impl StreamStreamShare {

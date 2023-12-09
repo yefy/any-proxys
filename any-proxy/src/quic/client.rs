@@ -159,9 +159,7 @@ impl client::Connection for Connection {
             }
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
-                let (r, w) = any_base::io::split::split(stream);
-                let stream =
-                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let stream = StreamFlow::new(0, stream);
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }
         }

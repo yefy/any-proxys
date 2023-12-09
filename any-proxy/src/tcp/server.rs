@@ -141,9 +141,7 @@ impl server::Connection for Connection {
         let fd = 0;
 
         let stream = Stream::new(tcp_stream);
-        let (r, w) = any_base::io::split::split(stream);
-        let mut stream =
-            StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+        let mut stream = StreamFlow::new(fd, stream);
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, ArcMutex::default());

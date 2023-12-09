@@ -43,6 +43,7 @@ lazy_static! {
         map.insert("upstream_bytes_sent", upstream_bytes_sent);
         map.insert("upstream_bytes_received", upstream_bytes_received);
         map.insert("is_open_ebpf", is_open_ebpf);
+        map.insert("open_sendfile", open_sendfile);
         map.insert("upstream_dispatch", upstream_dispatch);
         map.insert("is_proxy_protocol_hello", is_proxy_protocol_hello);
         map.insert("buffer_cache", buffer_cache);
@@ -337,6 +338,13 @@ pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<String> {
 pub fn is_open_ebpf(stream_info: &StreamInfo) -> Option<String> {
     if stream_info.is_open_ebpf {
         return Some("ebpf".to_string());
+    }
+    return None;
+}
+
+pub fn open_sendfile(stream_info: &StreamInfo) -> Option<String> {
+    if stream_info.open_sendfile.is_some() {
+        return Some(format!("{:?}", stream_info.open_sendfile.as_ref().unwrap()));
     }
     return None;
 }

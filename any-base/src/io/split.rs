@@ -106,6 +106,10 @@ impl<T: AsyncStream> crate::io::async_stream::AsyncStream for ReadHalf<T> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_single(cx)
     }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_write_ready(cx)
+    }
 }
 
 impl<T: AsyncStream> crate::io::async_stream::AsyncStream for WriteHalf<T> {
@@ -113,12 +117,20 @@ impl<T: AsyncStream> crate::io::async_stream::AsyncStream for WriteHalf<T> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_single(cx)
     }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_write_ready(cx)
+    }
 }
 
 impl<T: AsyncReadMsg> crate::io::async_read_msg::AsyncReadMsg for ReadHalf<T> {
-    fn poll_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
         let mut inner = ready!(self.inner.poll_lock(cx));
-        inner.stream_pin().poll_read_msg(cx)
+        inner.stream_pin().poll_read_msg(cx, msg_size)
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {

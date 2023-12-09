@@ -100,9 +100,7 @@ impl server::Connection for Connection {
         }
         let stream = self.stream.take().unwrap();
         let remote_addr = self.remote_addr.take().unwrap();
-        let (r, w) = any_base::io::split::split(stream);
-        let mut stream =
-            stream_flow::StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+        let mut stream = stream_flow::StreamFlow::new(0, stream);
         let read_timeout = tokio::time::Duration::from_secs(self.stream_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, ArcMutex::default());

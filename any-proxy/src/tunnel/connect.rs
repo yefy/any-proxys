@@ -558,9 +558,7 @@ impl connect::Connect for Connect {
         let (stream, local_addr, remote_addr) = connect?;
         let elapsed = start_time.elapsed().as_secs_f32();
 
-        let (r, w) = any_base::io::split::split(stream);
-        let mut stream =
-            stream_flow::StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+        let mut stream = stream_flow::StreamFlow::new(0, stream);
 
         let read_timeout =
             tokio::time::Duration::from_secs(self.connect.stream_recv_timeout().await as u64);

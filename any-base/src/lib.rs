@@ -17,6 +17,7 @@ pub mod module;
 pub mod parking_lot;
 pub mod rt;
 pub mod std_sync;
+pub mod stream;
 pub mod stream_flow;
 pub mod thread_pool;
 pub mod thread_pool_wait_run;

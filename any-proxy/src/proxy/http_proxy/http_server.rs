@@ -291,14 +291,10 @@ impl HttpServer {
             format!("{}:{}", file!(), line!()),
             move |_| async move {
                 let client_stream = Stream::new(req_body, res_sender);
-                let (r, w) = any_base::io::split::split(client_stream);
-                let client_stream =
-                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let client_stream = StreamFlow::new(0, client_stream);
 
                 let upstream_stream = Stream::new(client_res_body, client_req_sender);
-                let (r, w) = any_base::io::split::split(upstream_stream);
-                let mut upstream_stream =
-                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let mut upstream_stream = StreamFlow::new(0, upstream_stream);
                 upstream_stream
                     .set_stream_info(http_arg.stream_info.get().upstream_stream_flow_info.clone());
 

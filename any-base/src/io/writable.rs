@@ -1,4 +1,4 @@
-use crate::io::async_read_msg::AsyncReadMsg;
+use crate::io::async_stream::AsyncStream;
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
@@ -12,13 +12,12 @@ use std::task::{Context, Poll};
 ///
 /// The returned future will resolve to both the I/O stream and the buffer
 /// as well as the number of bytes read once the read operation is completed.
-pub(crate) fn read_msg<'a, R>(reader: &'a mut R, msg_size: usize) -> ReadMsg<'a, R>
+pub(crate) fn writable<'a, R>(reader: &'a mut R) -> Writable<'a, R>
 where
-    R: AsyncReadMsg + Unpin + ?Sized,
+    R: AsyncStream + Unpin + ?Sized,
 {
-    ReadMsg {
+    Writable {
         reader,
-        msg_size,
         _pin: PhantomPinned,
     }
 }
@@ -30,23 +29,22 @@ pin_project! {
     /// Created by the [`read`] function.
     #[derive(Debug)]
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub struct ReadMsg<'a, R: ?Sized> {
+    pub struct Writable<'a, R: ?Sized> {
         reader: &'a mut R,
-        msg_size: usize,
         // Make this future `!Unpin` for compatibility with async trait methods.
         #[pin]
         _pin: PhantomPinned,
     }
 }
 
-impl<R> Future for ReadMsg<'_, R>
+impl<R> Future for Writable<'_, R>
 where
-    R: AsyncReadMsg + Unpin + ?Sized,
+    R: AsyncStream + Unpin + ?Sized,
 {
-    type Output = io::Result<Vec<u8>>;
+    type Output = io::Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let me = self.project();
-        Pin::new(me.reader).poll_read_msg(cx, *me.msg_size)
+        Pin::new(me.reader).poll_write_ready(cx)
     }
 }

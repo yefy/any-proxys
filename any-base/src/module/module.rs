@@ -1524,7 +1524,7 @@ impl Modules {
                             module_confs.clone(),
                         )
                         .await;
-                        ret_errs(ret, conf_arg, "")?;
+                        ret_errs(ret, conf_arg, &str_key)?;
                     } else {
                         conf_arg.curr_module_confs = module_confs.clone();
                         let module_conf = {
@@ -1538,14 +1538,14 @@ impl Modules {
                             module_conf.clone(),
                         )
                         .await;
-                        ret_errs(ret, conf_arg, "")?;
+                        ret_errs(ret, conf_arg, &str_key)?;
                     }
                     is_find = true;
                     break 'outer;
                 }
             }
             if !is_find {
-                return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
+                return ret_err(conf_arg, &str_key).map_err(|e| anyhow!("err:e:{}", e));
             }
         }
         return Ok(());

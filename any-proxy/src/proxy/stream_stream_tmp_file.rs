@@ -51,6 +51,7 @@ pub struct StreamStreamTmpFile {
     #[cfg(unix)]
     fr_fd: i32,
     fr: ArcMutex<File>,
+    is_first_buffer: bool,
 }
 
 impl StreamStreamTmpFile {
@@ -61,6 +62,7 @@ impl StreamStreamTmpFile {
             #[cfg(unix)]
             fr_fd: 0,
             fr: ArcMutex::default(),
+            is_first_buffer: true,
         }
     }
 }
@@ -116,7 +118,6 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     if sss.get_mut().read_buffer_ret.is_none() {
         return Ok(());
     }
-
     let read_buffer_ret = sss.get_mut().read_buffer_ret.take().unwrap();
     let mut buffer = sss.get_mut().read_buffer.take().unwrap();
     if let Err(ref e) = read_buffer_ret {
@@ -130,13 +131,11 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
             get_flag(sss.is_client),
             e
         )));
-        if buffer.read_size == 0 {
-            return Ok(());
-        }
     } else {
         let mut stream_info = stream_info.get_mut();
         let mut ssd = ssd.get_mut();
         let mut sss = sss.get_mut();
+        let plugin = plugin.get_mut::<StreamStreamTmpFile>();
 
         let size = read_buffer_ret? as u64;
         ssd.total_read_size += size;
@@ -151,7 +150,12 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
             buffer.read_size
         );
 
-        if buffer.msg.is_none() && buffer.size != buffer.read_size && cs.is_stream_cache_merge {
+        if sss.read_err.is_none()
+            && buffer.msg.is_none()
+            && buffer.size != buffer.read_size
+            && cs.is_stream_cache_merge
+            && !plugin.is_first_buffer
+        {
             if !sss.is_write_empty() {
                 if buffer.read_size < cs.min_read_buffer_size as u64 {
                     sss.read_buffer = Some(buffer);
@@ -164,6 +168,10 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
                 }
             }
         }
+        plugin.is_first_buffer = false;
+    }
+    if buffer.read_size == 0 {
+        return Ok(());
     }
 
     buffer.size = buffer.read_size;
@@ -253,6 +261,14 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         return Err(e);
     }
 
+    #[cfg(unix)]
+    let mut is_sendfile = false;
+    #[cfg(unix)]
+    let sendfile = sss.get().sendfile.clone();
+    #[cfg(unix)]
+    if sendfile.get().await.is_some() {
+        is_sendfile = true;
+    }
     let plugin = plugin.get_mut::<StreamStreamTmpFile>();
     let mut sss = sss.get_mut();
     if cs.is_tmp_file_io_page {
@@ -290,8 +306,16 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
                     }
                 }
             }
-            sss.caches
-                .push_back(StreamCache::File(StreamCacheFile { seek, size: w_size }));
+            let mut _file_fd = 0;
+            #[cfg(unix)]
+            if is_sendfile {
+                _file_fd = plugin.fr_fd;
+            }
+            sss.caches.push_back(StreamCache::File(StreamCacheFile {
+                file_fd: _file_fd,
+                seek,
+                size: w_size,
+            }));
         }
 
         return Ok(());
@@ -316,8 +340,16 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         }
     }
 
-    sss.caches
-        .push_back(StreamCache::File(StreamCacheFile { seek, size }));
+    let mut _file_fd = 0;
+    #[cfg(unix)]
+    if is_sendfile {
+        _file_fd = plugin.fr_fd;
+    }
+    sss.caches.push_back(StreamCache::File(StreamCacheFile {
+        file_fd: _file_fd,
+        seek,
+        size,
+    }));
 
     return Ok(());
 }
@@ -345,6 +377,7 @@ pub async fn read_buffer(
             StreamCache::File(file) => {
                 let mut buffer = sss.get_mut().buffer_pool.get_mut().take();
                 buffer.resize(Some(file.size as usize));
+                buffer.file_fd = file.file_fd;
                 buffer.size = file.size;
                 buffer.seek = file.seek;
 
@@ -352,8 +385,7 @@ pub async fn read_buffer(
                     #[cfg(unix)]
                     let sendfile = sss.get().sendfile.clone();
                     #[cfg(unix)]
-                    if sendfile.get().await.is_some() {
-                        buffer.file_fd = plugin.get::<StreamStreamTmpFile>().fr_fd;
+                    if sendfile.get().await.is_some() && buffer.file_fd > 0 {
                         break Ok(buffer);
                     }
 
@@ -404,7 +436,7 @@ pub async fn write(
         );
         sss.get_mut().write_buffer = Some(buffer);
 
-        let handle_next = &*handle.get_mut().await;
+        let handle_next = &*handle.get().await;
         (handle_next)(sss.clone())
             .await
             .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;

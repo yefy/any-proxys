@@ -1,30 +1,27 @@
-use anyhow::anyhow;
-use anyhow::Result;
-use chrono::Local;
-//use std::future::Future;
 use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
 use crate::typ::ArcMutex;
+use anyhow::anyhow;
+use anyhow::Result;
+use chrono::Local;
 use std::io;
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
-//use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub type StreamFlowRead = crate::io::split::ReadHalf<StreamFlow>;
 pub type StreamFlowWrite = crate::io::split::WriteHalf<StreamFlow>;
 
-//+ Sync
-// pub trait AsyncReadAsyncWrite: AsyncRead + AsyncWrite + Send + Unpin {}
-// impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncReadAsyncWrite for T {}
+pub trait StreamReadFlow: AsyncRead + AsyncReadMsg + AsyncStream + Unpin {}
+impl<T: AsyncRead + AsyncReadMsg + AsyncStream + Unpin> StreamReadFlow for T {}
 
-pub trait StreamRead: AsyncRead + AsyncReadMsg + AsyncStream + Send + Sync + Unpin {}
-impl<T: AsyncRead + AsyncReadMsg + AsyncStream + Send + Sync + Unpin> StreamRead for T {}
+pub trait StreamWriteFlow: AsyncWrite + AsyncWriteMsg + AsyncStream + Unpin {}
+impl<T: AsyncWrite + AsyncWriteMsg + AsyncStream + Unpin> StreamWriteFlow for T {}
 
-pub trait StreamWrite: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Sync + Unpin {}
-impl<T: AsyncWrite + AsyncWriteMsg + AsyncStream + Send + Sync + Unpin> StreamWrite for T {}
+pub trait StreamReadWriteFlow: StreamReadFlow + StreamWriteFlow + Unpin {}
+impl<T: StreamReadFlow + StreamWriteFlow + Unpin> StreamReadWriteFlow for T {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamFlowErr {
@@ -72,10 +69,13 @@ pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
     info: ArcMutex<StreamFlowInfo>,
-    r: ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
-    w: ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
+    r: Box<dyn StreamReadFlow>,
+    w: Box<dyn StreamWriteFlow>,
     fd: i32,
 }
+
+unsafe impl Send for StreamFlow {}
+unsafe impl Sync for StreamFlow {}
 
 impl StreamFlow {
     pub fn split(self) -> (StreamFlowRead, StreamFlowWrite) {
@@ -87,8 +87,8 @@ impl StreamFlow {
         tokio::time::Duration,
         tokio::time::Duration,
         ArcMutex<StreamFlowInfo>,
-        ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
-        ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
+        Box<dyn StreamReadFlow>,
+        Box<dyn StreamWriteFlow>,
         i32,
     ) {
         let StreamFlow {
@@ -102,17 +102,14 @@ impl StreamFlow {
         return (read_timeout, write_timeout, info, r, w, fd);
     }
 
-    pub fn new(
-        fd: i32,
-        r: ArcMutex<Box<dyn StreamRead + Send + Sync + Unpin>>,
-        w: ArcMutex<Box<dyn StreamWrite + Send + Sync + Unpin>>,
-    ) -> StreamFlow {
+    pub fn new<RW: StreamReadWriteFlow + 'static>(fd: i32, rw: RW) -> StreamFlow {
+        let (r, w) = crate::io::split::split(rw);
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             write_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             info: ArcMutex::default(),
-            r,
-            w,
+            r: Box::new(r),
+            w: Box::new(w),
             fd,
         }
     }
@@ -334,7 +331,7 @@ impl StreamFlow {
 
      */
 
-    fn write_flow(&mut self, ret: io::Result<usize>, buffer_len: usize) -> io::Result<usize> {
+    fn write_flow(&self, ret: io::Result<usize>, buffer_len: usize) -> io::Result<usize> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
         let mut parse_err = |ret: io::Result<usize>| -> Result<usize> {
@@ -406,14 +403,40 @@ impl StreamFlow {
 }
 
 impl crate::io::async_stream::AsyncStream for StreamFlow {
-    fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut *self.r.get_mut()).poll_is_single(cx)
+    fn poll_is_single(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.r).poll_is_single(cx)
+    }
+    fn poll_write_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let ret = Pin::new(&mut *self.w).poll_write_ready(cx);
+        match ret {
+            Poll::Ready(ret) => match ret {
+                Err(e) => {
+                    let ret = self.write_flow(io::Result::Err(e), 0);
+                    match ret {
+                        Err(e) => Poll::Ready(io::Result::Err(e)),
+                        Ok(_) => Poll::Ready(Ok(())),
+                    }
+                }
+                Ok(()) => {
+                    let ret = self.write_flow(io::Result::Ok(0), 0);
+                    match ret {
+                        Err(e) => Poll::Ready(io::Result::Err(e)),
+                        Ok(_) => Poll::Ready(Ok(())),
+                    }
+                }
+            },
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
 impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
-    fn poll_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
-        let ret = Pin::new(&mut *self.r.get_mut()).poll_read_msg(cx);
+    fn poll_read_msg(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
+        let ret = Pin::new(&mut *self.r).poll_read_msg(cx, msg_size);
         match ret {
             Poll::Ready(ret) => match ret {
                 Err(e) => {
@@ -429,8 +452,8 @@ impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
         }
     }
 
-    fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut *self.r.get_mut()).poll_is_read_msg(cx)
+    fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.r).poll_is_read_msg(cx)
     }
 }
 
@@ -440,15 +463,15 @@ impl crate::io::async_write_msg::AsyncWriteMsg for StreamFlow {
         cx: &mut Context<'_>,
         buf: &mut AsyncWriteBuf,
     ) -> Poll<io::Result<usize>> {
-        let ret = Pin::new(&mut *self.w.get_mut()).poll_write_msg(cx, buf);
+        let ret = Pin::new(&mut *self.w).poll_write_msg(cx, buf);
         match ret {
             Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
             Poll::Pending => Poll::Pending,
         }
     }
 
-    fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut *self.w.get_mut()).poll_is_write_msg(cx)
+    fn poll_is_write_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        Pin::new(&mut *self.w).poll_is_write_msg(cx)
     }
 }
 
@@ -458,7 +481,7 @@ impl tokio::io::AsyncRead for StreamFlow {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let ret = Pin::new(&mut *self.r.get_mut()).poll_read(cx, buf);
+        let ret = Pin::new(&mut *self.r).poll_read(cx, buf);
         match ret {
             Poll::Ready(ret) => {
                 let ret = if let Err(e) = ret {
@@ -485,7 +508,7 @@ impl tokio::io::AsyncWrite for StreamFlow {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let ret = Pin::new(&mut *self.w.get_mut()).poll_write(cx, buf);
+        let ret = Pin::new(&mut *self.w).poll_write(cx, buf);
         match ret {
             Poll::Ready(ret) => Poll::Ready(self.write_flow(ret, buf.len())),
             Poll::Pending => Poll::Pending,
@@ -498,11 +521,11 @@ impl tokio::io::AsyncWrite for StreamFlow {
         // }
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut *self.w.get_mut()).poll_flush(cx)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w).poll_flush(cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut *self.w.get_mut()).poll_shutdown(cx)
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.w).poll_shutdown(cx)
     }
 }

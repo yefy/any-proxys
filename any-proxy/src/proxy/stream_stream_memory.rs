@@ -45,16 +45,17 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         let buffer_pool = DynamicPool::new(1, 2, StreamCacheBuffer::default);
         sss.get_mut().buffer_pool.set(buffer_pool);
     }
+    let read_buffer_size = sss.get().ssc.cs.read_buffer_size;
 
     let mut _is_first = true;
     loop {
         if sss.get().read_err.is_none() {
-            let (ret, buffer) = read(sss.clone()).await?;
+            let (ret, buffer) = read(sss.clone(), read_buffer_size).await?;
             if _is_first {
                 _is_first = false;
                 stream_info
                     .get_mut()
-                    .add_work_time(get_flag(sss.get().is_client));
+                    .add_work_time(&format!("first read {}", get_flag(sss.get().is_client)));
             }
             sss.get_mut().read_buffer = Some(buffer);
             sss.get_mut().read_buffer_ret = Some(ret);
@@ -71,7 +72,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         loop {
             check_stream_close(sss.clone()).await?;
             if !sss.get().is_empty() {
-                let handle_next = &*MEMORY_HANDLE_NEXT.get_mut().await;
+                let handle_next = &*MEMORY_HANDLE_NEXT.get().await;
                 (handle_next)(sss.clone())
                     .await
                     .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
@@ -101,6 +102,7 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
 
 pub async fn read(
     sss: ShareRw<StreamStreamShare>,
+    read_buffer_size: usize,
 ) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
     let mut buffer = sss.get_mut().buffer_pool.get().take();
     buffer.reset();
@@ -112,7 +114,7 @@ pub async fn read(
 
     let ret: std::io::Result<usize> = async {
         if r.is_read_msg().await {
-            let msg = r.read_msg().await?;
+            let msg = r.read_msg(read_buffer_size).await?;
             let n = msg.len();
             buffer.msg = Some(msg);
             return Ok(n);

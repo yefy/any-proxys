@@ -3,8 +3,6 @@ use super::sendfile::SendFile;
 use super::stream_info::StreamInfo;
 use super::StreamConfigContext;
 use super::StreamStreamContext;
-#[cfg(feature = "anyproxy-ebpf")]
-use crate::ebpf::any_ebpf;
 use crate::protopack;
 use crate::proxy::{
     get_flag, util as proxy_util, StreamStatus, StreamStreamData, StreamStreamShare,
@@ -14,7 +12,6 @@ use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, Valu
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::LinkedList;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
@@ -28,11 +25,7 @@ impl StreamStream {
         scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client_buffer: &[u8],
-        #[cfg(feature = "anyproxy-ebpf")] mut client_stream: StreamFlow,
-        #[cfg(not(feature = "anyproxy-ebpf"))] client_stream: StreamFlow,
-        client_local_addr: SocketAddr,
-        client_remote_addr: SocketAddr,
-        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<any_ebpf::AddSockHash>,
+        client_stream: StreamFlow,
     ) -> Result<()> {
         let (is_proxy_protocol_hello, mut upstream_stream) =
             proxy_util::upsteam_connect(stream_info.clone(), scc.clone()).await?;
@@ -58,13 +51,62 @@ impl StreamStream {
                 .await
                 .map_err(|e| anyhow!("err:client_buf_reader.buffer => e:{}", e))?;
 
-            stream_info.get_mut().add_work_time(get_flag(true));
+            stream_info
+                .get_mut()
+                .add_work_time(&format!("first cache write {}", get_flag(true)));
         }
-        log::debug!(
-            "skip ebpf warning client_remote_addr.fd():{},  client_local_addr.fd():{}",
-            client_remote_addr,
-            client_local_addr
-        );
+
+        Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await
+    }
+
+    #[cfg(feature = "anyproxy-ebpf")]
+    pub async fn connect_and_ebpf(
+        scc: ShareRw<StreamConfigContext>,
+        stream_info: Share<StreamInfo>,
+        client_stream: StreamFlow,
+    ) -> Result<Option<StreamFlow>> {
+        use crate::config::any_ebpf_core;
+        use crate::Protocol7;
+        let ms = scc.get().ms.clone();
+        let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
+        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
+        if ebpf_add_sock_hash.is_none() {
+            return Ok(Some(client_stream));
+        }
+
+        let (_, connect_func) =
+            proxy_util::upsteam_connect_info(stream_info.clone(), scc.clone()).await?;
+        if connect_func.protocol7().await != Protocol7::Tcp.to_string() {
+            return Ok(Some(client_stream));
+        }
+        let upstream_stream =
+            proxy_util::upsteam_do_connect(stream_info.clone(), connect_func).await?;
+
+        use crate::proxy::stream_info::ErrStatus;
+        stream_info.get_mut().err_status = ErrStatus::Ok;
+        match Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await {
+            Ok(()) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub async fn ebpf_and_stream(
+        scc: ShareRw<StreamConfigContext>,
+        stream_info: Share<StreamInfo>,
+        #[cfg(feature = "anyproxy-ebpf")] mut client_stream: StreamFlow,
+        #[cfg(not(feature = "anyproxy-ebpf"))] client_stream: StreamFlow,
+        #[cfg(feature = "anyproxy-ebpf")] mut upstream_stream: StreamFlow,
+        #[cfg(not(feature = "anyproxy-ebpf"))] upstream_stream: StreamFlow,
+    ) -> Result<()> {
+        #[cfg(feature = "anyproxy-ebpf")]
+        let client_local_addr = stream_info
+            .get()
+            .server_stream_info
+            .local_addr
+            .clone()
+            .unwrap();
+        #[cfg(feature = "anyproxy-ebpf")]
+        let client_remote_addr = stream_info.get().server_stream_info.remote_addr;
 
         #[cfg(feature = "anyproxy-ebpf")]
         let ups_remote_addr = stream_info
@@ -81,6 +123,15 @@ impl StreamStream {
             .local_addr
             .clone();
 
+        #[cfg(feature = "anyproxy-ebpf")]
+        use crate::config::any_ebpf_core;
+        #[cfg(feature = "anyproxy-ebpf")]
+        let ms = scc.get().ms.clone();
+        #[cfg(feature = "anyproxy-ebpf")]
+        let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
+        #[cfg(feature = "anyproxy-ebpf")]
+        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
+
         let mut _is_open_ebpf = false;
         #[cfg(feature = "anyproxy-ebpf")]
         if scc.get().http_core_conf().is_open_ebpf
@@ -94,18 +145,18 @@ impl StreamStream {
 
             stream_info.get_mut().is_open_ebpf = true;
 
-            log::info!(
+            log::trace!(
                 "ebpf client_stream.fd():{},  upstream_stream.fd():{}",
                 client_stream.fd(),
                 upstream_stream.fd()
             );
-            log::info!(
+            log::trace!(
                 "ebpf client_remote_addr.fd():{},  client_local_addr.fd():{}",
                 client_remote_addr,
                 client_local_addr
             );
 
-            log::info!(
+            log::trace!(
                 "ebpf ups_remote_addr.fd():{},  ups_local_addr.fd():{}",
                 ups_remote_addr,
                 ups_local_addr
@@ -140,18 +191,30 @@ impl StreamStream {
         let _upstream_stream_fd = upstream_stream.fd();
 
         #[cfg(unix)]
-        let (client_sendfile, upstream_sendfile) =
-            if scc.get().http_core_conf().is_open_sendfile && !_is_open_ebpf {
-                let client_sendfile = if _client_stream_fd > 0 {
-                    ArcMutexTokio::new(SendFile::new(
-                        _client_stream_fd,
-                        stream_info.get().client_stream_flow_info.clone(),
-                    ))
-                } else {
-                    ArcMutexTokio::default()
-                };
+        let (client_sendfile, upstream_sendfile) = {
+            let scc = scc.get();
+            let http_core_conf = scc.http_core_conf();
+            if http_core_conf.is_open_sendfile && !_is_open_ebpf {
+                let client_sendfile =
+                    if _client_stream_fd > 0 && http_core_conf.upload_tmp_file_size > 0 {
+                        stream_info.get_mut().open_sendfile = Some("sendfile_upload".to_string());
+                        ArcMutexTokio::new(SendFile::new(
+                            _client_stream_fd,
+                            stream_info.get().client_stream_flow_info.clone(),
+                        ))
+                    } else {
+                        ArcMutexTokio::default()
+                    };
 
-                let upstream_sendfile = if _upstream_stream_fd > 0 {
+                let upstream_sendfile = if _upstream_stream_fd > 0
+                    && http_core_conf.download_tmp_file_size > 0
+                {
+                    if stream_info.get_mut().open_sendfile.is_none() {
+                        stream_info.get_mut().open_sendfile = Some("sendfile_upload".to_string());
+                    } else {
+                        let open_sendfile = stream_info.get_mut().open_sendfile.take().unwrap();
+                        stream_info.get_mut().open_sendfile = Some(open_sendfile + "_download");
+                    }
                     ArcMutexTokio::new(SendFile::new(
                         _upstream_stream_fd,
                         stream_info.get().upstream_stream_flow_info.clone(),
@@ -162,7 +225,8 @@ impl StreamStream {
                 (client_sendfile, upstream_sendfile)
             } else {
                 (ArcMutexTokio::default(), ArcMutexTokio::default())
-            };
+            }
+        };
 
         let ret = StreamStream::stream_to_stream(
             scc.clone(),
@@ -430,6 +494,7 @@ impl StreamStream {
             buffer_pool: ValueOption::default(),
             write_err: None,
             plugins,
+            is_first_write: true,
         };
         let sss = ShareRw::new(sss);
         let plugin_handle_stream = plugin_handle_stream.get().await;

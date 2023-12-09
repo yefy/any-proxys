@@ -1,29 +1,46 @@
-use any_base::io::async_write_msg::AsyncWriteBuf;
+use crate::io::async_write_msg::AsyncWriteBuf;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+
+pub trait StreamReadTokio: AsyncRead + Unpin {}
+impl<T: AsyncRead + Unpin> StreamReadTokio for T {}
+
+pub trait StreamWriteTokio: AsyncWrite + Unpin {}
+impl<T: AsyncWrite + Unpin> StreamWriteTokio for T {}
+
+pub trait StreamReadWriteTokio: StreamReadTokio + StreamWriteTokio + Unpin {}
+impl<T: StreamReadTokio + StreamWriteTokio + Unpin> StreamReadWriteTokio for T {}
 
 pub struct Stream {
-    s: TcpStream,
+    r: Box<dyn StreamReadTokio>,
+    w: Box<dyn StreamWriteTokio>,
 }
 
+unsafe impl Send for Stream {}
+unsafe impl Sync for Stream {}
+
 impl Stream {
-    pub fn new(s: TcpStream) -> Stream {
-        Stream { s }
+    pub fn new<RW: StreamReadWriteTokio + 'static>(rw: RW) -> Stream {
+        let (r, w) = tokio::io::split(rw);
+        Stream {
+            r: Box::new(r),
+            w: Box::new(w),
+        }
     }
 }
 
-impl any_base::io::async_stream::AsyncStream for Stream {
+impl crate::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&self.s).poll_write_ready(cx)
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
     }
 }
 
-impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+impl crate::io::async_read_msg::AsyncReadMsg for Stream {
     fn poll_read_msg(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -37,7 +54,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
     }
 }
 
-impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
+impl crate::io::async_write_msg::AsyncWriteMsg for Stream {
     fn poll_write_msg(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -57,7 +74,7 @@ impl tokio::io::AsyncRead for Stream {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.s).poll_read(cx, buf)
+        Pin::new(&mut *self.r).poll_read(cx, buf)
     }
 }
 
@@ -67,14 +84,14 @@ impl tokio::io::AsyncWrite for Stream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.s).poll_write(cx, buf)
+        Pin::new(&mut *self.w).poll_write(cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.s).poll_flush(cx)
+        Pin::new(&mut *self.w).poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.s).poll_shutdown(cx)
+        Pin::new(&mut *self.w).poll_shutdown(cx)
     }
 }

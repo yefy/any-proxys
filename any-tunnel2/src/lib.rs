@@ -3,7 +3,6 @@ pub mod peer_client;
 pub mod peer_stream;
 pub mod peer_stream_connect;
 pub mod protopack;
-pub mod push_stream;
 pub mod rt;
 pub mod server;
 pub mod stream;

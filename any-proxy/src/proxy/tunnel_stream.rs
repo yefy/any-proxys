@@ -3,7 +3,6 @@ use crate::protopack;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::ArcMutex;
 use any_base::typ::Share;
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
@@ -45,7 +44,7 @@ impl TunnelStream {
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
                 any_base::io::buf_writer::BufWriter::new(client_buf_reader),
             );
-            let (r, w) = tokio::io::split(client_buf_stream);
+            //let (r, w) = tokio::io::split(client_buf_stream);
             // tunnel_publish
             //     .push_peer_stream(
             //         Box::new(r),
@@ -62,9 +61,8 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel_publish.push_peer_stream(
-                            ArcMutex::new(Box::new(r)),
-                            ArcMutex::new(Box::new(w)),
+                        ret = tunnel_publish.push_peer_stream_tokio(
+                           client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
                             server_stream_info.domain.clone(),
@@ -100,7 +98,7 @@ impl TunnelStream {
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
                 any_base::io::buf_writer::BufWriter::new(client_buf_reader),
             );
-            let (r, w) = tokio::io::split(client_buf_stream);
+            //let (r, w) = tokio::io::split(client_buf_stream);
             // tunnel2_publish
             //     .push_peer_stream(
             //         Box::new(r),
@@ -117,9 +115,8 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel2_publish.push_peer_stream(
-                            ArcMutex::new(Box::new(r)),
-                            ArcMutex::new(Box::new(w)),
+                        ret = tunnel2_publish.push_peer_stream_tokio(
+                            client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
                         ) => {

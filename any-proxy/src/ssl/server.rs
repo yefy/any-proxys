@@ -207,9 +207,7 @@ impl server::Connection for Connection {
             let domain = domain.unwrap().to_string();
 
             let stream = Stream::new(StreamData::Openssl(ssl_stream));
-            let (r, w) = any_base::io::split::split(stream);
-            let mut stream =
-                StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+            let mut stream = StreamFlow::new(fd, stream);
             let read_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =
@@ -247,9 +245,7 @@ impl server::Connection for Connection {
             };
 
             let stream = Stream::new(StreamData::S(ssl_stream));
-            let (r, w) = any_base::io::split::split(stream);
-            let mut stream =
-                StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+            let mut stream = StreamFlow::new(fd, stream);
             let read_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =

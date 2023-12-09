@@ -112,6 +112,9 @@ impl Stream {
                 let split_at = std::cmp::min(expected, remain);
                 let data = cache_buf.split_to(split_at);
                 buf.put_slice(data);
+                if split_at == remain {
+                    self.stream_rx_buf = None;
+                }
                 true
             } else {
                 self.stream_rx_buf = None;
@@ -142,57 +145,103 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(true);
     }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
-    fn poll_read_msg(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll_read_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
         if self.is_read_close() {
             //log::error!("err:is_read_close");
             return Poll::Ready(Ok(Vec::new()));
         }
 
-        let datas = self.read_buf_take();
-        if datas.is_some() {
-            return Poll::Ready(Ok(datas.unwrap()));
-        }
-
-        let mut stream_rx_future = if self.stream_rx_future.is_some() {
-            self.stream_rx_future.take().unwrap()
-        } else {
-            let stream_rx = self.stream_rx.clone().unwrap();
-            Box::pin(async move {
-                let data = stream_rx.get_mut().await.data().await;
-                if data.is_none() {
-                    return Err(anyhow!("err:stream_rx close"));
+        let mut value: Option<Vec<u8>> = None;
+        loop {
+            let datas = self.read_buf_take();
+            if datas.is_some() {
+                if value.is_none() {
+                    value = Some(datas.unwrap())
+                } else {
+                    value
+                        .as_mut()
+                        .unwrap()
+                        .extend_from_slice(datas.unwrap().as_slice());
                 }
-                let data = data.unwrap();
-                match data {
-                    Err(e) => {
-                        return Err(anyhow!("err:stream_rx close => e:{}", e));
-                    }
-                    Ok(data) => {
-                        return Ok(data);
-                    }
+
+                if value.as_ref().unwrap().len() >= msg_size {
+                    return Poll::Ready(Ok(value.unwrap()));
                 }
-            })
-        };
-
-        let ret = stream_rx_future.as_mut().poll(_cx);
-        match ret {
-            Poll::Ready(Err(_)) => {
-                self.read_close();
-                return Poll::Ready(Ok(Vec::new()));
             }
-            Poll::Ready(Ok(data)) => {
-                self.stream_rx_buf = Some(StreamBuf::new(data));
 
-                let datas = self.read_buf_take();
-                return Poll::Ready(Ok(datas.unwrap()));
-            }
-            Poll::Pending => {
-                //Pending的时候保存起来
-                self.stream_rx_future = Some(stream_rx_future);
-                return Poll::Pending;
+            let mut stream_rx_future = if self.stream_rx_future.is_some() {
+                self.stream_rx_future.take().unwrap()
+            } else {
+                let stream_rx = self.stream_rx.clone().unwrap();
+
+                let mut try_stream_rx_future = Box::pin(async move {
+                    use futures_util::TryStreamExt;
+                    stream_rx.get_mut().await.try_next().await
+                });
+
+                let ret = try_stream_rx_future.as_mut().poll(_cx);
+                match ret {
+                    Poll::Ready(Err(_)) => {
+                        self.read_close();
+                        return Poll::Ready(Ok(Vec::new()));
+                    }
+                    Poll::Ready(Ok(data)) => {
+                        if data.is_some() {
+                            let data = data.unwrap();
+                            self.stream_rx_buf = Some(StreamBuf::new(data));
+                            continue;
+                        }
+                    }
+                    Poll::Pending => {}
+                }
+
+                if value.is_some() {
+                    return Poll::Ready(Ok(value.unwrap()));
+                }
+
+                let stream_rx = self.stream_rx.clone().unwrap();
+                Box::pin(async move {
+                    let data = stream_rx.get_mut().await.data().await;
+                    if data.is_none() {
+                        return Err(anyhow!("err:stream_rx close"));
+                    }
+                    let data = data.unwrap();
+                    match data {
+                        Err(e) => {
+                            return Err(anyhow!("err:stream_rx close => e:{}", e));
+                        }
+                        Ok(data) => {
+                            return Ok(data);
+                        }
+                    }
+                })
+            };
+
+            let ret = stream_rx_future.as_mut().poll(_cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    self.read_close();
+                    return Poll::Ready(Ok(Vec::new()));
+                }
+                Poll::Ready(Ok(data)) => {
+                    self.stream_rx_buf = Some(StreamBuf::new(data));
+                    continue;
+                }
+                Poll::Pending => {
+                    //Pending的时候保存起来
+                    self.stream_rx_future = Some(stream_rx_future);
+                    return Poll::Pending;
+                }
             }
         }
     }
@@ -260,49 +309,79 @@ impl tokio::io::AsyncRead for Stream {
             //log::error!("err:is_read_close");
             return Poll::Ready(Ok(()));
         }
-
-        if self.read_buf(buf) {
-            return Poll::Ready(Ok(()));
-        }
-
-        let mut stream_rx_future = if self.stream_rx_future.is_some() {
-            self.stream_rx_future.take().unwrap()
-        } else {
-            let stream_rx = self.stream_rx.clone().unwrap();
-            Box::pin(async move {
-                let data = stream_rx.get_mut().await.data().await;
-                if data.is_none() {
-                    return Err(anyhow!("err:stream_rx close"));
+        let mut is_read = false;
+        loop {
+            if self.read_buf(buf) {
+                is_read = true;
+                if buf.initialize_unfilled().len() <= 0 {
+                    return Poll::Ready(Ok(()));
                 }
-                let data = data.unwrap();
-                match data {
-                    Err(e) => {
-                        return Err(anyhow!("err:stream_rx close => e:{}", e));
+            }
+
+            let mut stream_rx_future = if self.stream_rx_future.is_some() {
+                self.stream_rx_future.take().unwrap()
+            } else {
+                let stream_rx = self.stream_rx.clone().unwrap();
+
+                let mut try_stream_rx_future = Box::pin(async move {
+                    use futures_util::TryStreamExt;
+                    stream_rx.get_mut().await.try_next().await
+                });
+
+                let ret = try_stream_rx_future.as_mut().poll(_cx);
+                match ret {
+                    Poll::Ready(Err(_)) => {
+                        self.read_close();
+                        return Poll::Ready(Ok(()));
                     }
-                    Ok(data) => {
-                        //log::info!("recv size {}", data.len());
-                        return Ok(data);
+                    Poll::Ready(Ok(data)) => {
+                        if data.is_some() {
+                            let data = data.unwrap();
+                            self.stream_rx_buf = Some(StreamBuf::new(data));
+                            continue;
+                        }
                     }
+                    Poll::Pending => {}
                 }
-            })
-        };
 
-        let ret = stream_rx_future.as_mut().poll(_cx);
-        match ret {
-            Poll::Ready(Err(_)) => {
-                self.read_close();
-                return Poll::Ready(Ok(()));
-            }
-            Poll::Ready(Ok(data)) => {
-                self.stream_rx_buf = Some(StreamBuf::new(data));
+                if is_read {
+                    return Poll::Ready(Ok(()));
+                }
 
-                let _ = self.read_buf(buf);
-                return Poll::Ready(Ok(()));
-            }
-            Poll::Pending => {
-                //Pending的时候保存起来
-                self.stream_rx_future = Some(stream_rx_future);
-                return Poll::Pending;
+                let stream_rx = self.stream_rx.clone().unwrap();
+                Box::pin(async move {
+                    let data = stream_rx.get_mut().await.data().await;
+                    if data.is_none() {
+                        return Err(anyhow!("err:stream_rx close"));
+                    }
+                    let data = data.unwrap();
+                    match data {
+                        Err(e) => {
+                            return Err(anyhow!("err:stream_rx close => e:{}", e));
+                        }
+                        Ok(data) => {
+                            //log::info!("recv size {}", data.len());
+                            return Ok(data);
+                        }
+                    }
+                })
+            };
+
+            let ret = stream_rx_future.as_mut().poll(_cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    self.read_close();
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Ok(data)) => {
+                    self.stream_rx_buf = Some(StreamBuf::new(data));
+                    continue;
+                }
+                Poll::Pending => {
+                    //Pending的时候保存起来
+                    self.stream_rx_future = Some(stream_rx_future);
+                    return Poll::Pending;
+                }
             }
         }
     }

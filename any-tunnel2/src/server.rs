@@ -5,14 +5,13 @@ use super::stream_flow::StreamFlow;
 use super::tunnel::Tunnel;
 use super::Protocol4;
 use crate::peer_client::PeerClientSender;
-use crate::push_stream::PushStream;
-use any_base::typ::ArcMutex;
+use any_base::stream::StreamReadWriteTokio;
+use any_base::stream_flow::StreamReadWriteFlow;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 pub type AcceptSenderType = async_channel::Sender<(Stream, SocketAddr, SocketAddr)>;
@@ -44,20 +43,26 @@ impl Publish {
     pub fn new(tunnel_key: String, server: Server) -> Publish {
         Publish { tunnel_key, server }
     }
-
-    pub async fn push_peer_stream(
+    pub async fn push_peer_stream_tokio<RW: StreamReadWriteTokio + 'static>(
         &self,
-        r: ArcMutex<Box<dyn AsyncRead + Send + Sync + Unpin>>,
-        w: ArcMutex<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
+        rw: RW,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
-        let stream = PushStream::new(r, w);
-        let (r, w) = any_base::io::split::split(stream);
+        use any_base::stream::Stream;
+        let rw = Stream::new(rw);
+        self.push_peer_stream(rw, local_addr, remote_addr).await
+    }
+    pub async fn push_peer_stream<RW: StreamReadWriteFlow + 'static>(
+        &self,
+        rw: RW,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> Result<()> {
         self.server
             .insert_peer_stream(
                 self.tunnel_key.clone(),
-                StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w))),
+                StreamFlow::new(0, rw),
                 local_addr,
                 remote_addr,
             )

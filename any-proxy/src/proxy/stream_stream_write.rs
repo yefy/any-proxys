@@ -1,6 +1,10 @@
 use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
+#[cfg(unix)]
+use crate::proxy::SENDFILE_WRITEABLE_MILLIS;
 use crate::proxy::{get_flag, StreamStatus, StreamStatusFull, StreamStreamShare};
+#[cfg(unix)]
+use any_base::io::async_stream::AsyncStreamExt;
 use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::typ::{ArcRwLockTokio, ShareRw};
 use anyhow::anyhow;
@@ -68,7 +72,7 @@ pub async fn handle_run(
     }
 
     if handle.is_some().await {
-        let handle_next = &*handle.get_mut().await;
+        let handle_next = &*handle.get().await;
         (handle_next)(sss.clone())
             .await
             .map_err(|e| anyhow!("err:write_buffer => e:{}", e))
@@ -112,6 +116,15 @@ pub async fn do_handle_run(
         #[cfg(unix)]
         if sendfile.get().await.is_some() && buffer.file_fd > 0 {
             _is_sendfile = true;
+            let timeout = tokio::time::Duration::from_millis(SENDFILE_WRITEABLE_MILLIS);
+            match tokio::time::timeout(timeout, w.writable()).await {
+                Ok(ret) => {
+                    ret?;
+                }
+                Err(_) => {
+                    break 0;
+                }
+            }
             let wn = sendfile
                 .get()
                 .await
@@ -150,6 +163,13 @@ pub async fn do_handle_run(
         }
         break write_size;
     };
+
+    if sss.get().is_first_write {
+        sss.get_mut().is_first_write = false;
+        stream_info
+            .get_mut()
+            .add_work_time(&format!("first write {}", get_flag(sss.get().is_client)));
+    }
 
     ssd.get_mut().total_write_size += wn;
     stream_info.get_mut().total_write_size += wn;

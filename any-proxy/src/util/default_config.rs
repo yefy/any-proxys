@@ -41,5 +41,5 @@ lazy_static! {
 }
 
 lazy_static! {
-    pub static ref MIN_CACHE_BUFFER_NUM: usize = 2;
+    pub static ref MIN_CACHE_BUFFER_NUM: AtomicUsize = AtomicUsize::new(2);
 }

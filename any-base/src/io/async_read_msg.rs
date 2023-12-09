@@ -53,7 +53,11 @@ pub trait AsyncReadMsg {
     /// If no data is available for reading, the method returns `Poll::Pending`
     /// and arranges for the current task (via `cx.waker()`) to receive a
     /// notification when the object becomes readable or is closed.
-    fn poll_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>>;
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>>;
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool>;
 }
 
@@ -62,8 +66,9 @@ macro_rules! deref_async_read_msg {
         fn poll_read_msg(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
+            msg_size: usize,
         ) -> Poll<io::Result<Vec<u8>>> {
-            Pin::new(&mut **self).poll_read_msg(cx)
+            Pin::new(&mut **self).poll_read_msg(cx, msg_size)
         }
         fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
             Pin::new(&mut **self).poll_is_read_msg(cx)
@@ -84,8 +89,12 @@ where
     P: DerefMut + Unpin,
     P::Target: AsyncReadMsg,
 {
-    fn poll_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
-        self.get_mut().as_mut().poll_read_msg(cx)
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
+        self.get_mut().as_mut().poll_read_msg(cx, msg_size)
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
@@ -101,11 +110,11 @@ pub trait AsyncReadMsgExt: AsyncReadMsg {
         is_read_msg(self)
     }
 
-    fn read_msg<'a>(&'a mut self) -> ReadMsg<'a, Self>
+    fn read_msg<'a>(&'a mut self, msg_size: usize) -> ReadMsg<'a, Self>
     where
         Self: Unpin,
     {
-        read_msg(self)
+        read_msg(self, msg_size)
     }
 }
 

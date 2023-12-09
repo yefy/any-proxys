@@ -85,7 +85,6 @@ impl proxy::Stream for DomainStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()> {
         let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
         stream_info.get_mut().add_work_time("tunnel_stream");
-
         let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
@@ -163,27 +162,10 @@ impl proxy::Stream for DomainStream {
         )
         .await?;
 
-        #[cfg(feature = "anyproxy-ebpf")]
-        use crate::config::any_ebpf_core;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let any_ebpf_core_conf = any_ebpf_core::main_conf(&self.ms).await;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
-
         let client_buf_reader = unsafe { client_buf_reader.take().await };
 
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
-        StreamStream::connect_and_stream(
-            scc,
-            stream_info,
-            client_buffer,
-            client_stream,
-            self.server_stream_info.local_addr.clone().unwrap(),
-            self.server_stream_info.remote_addr,
-            #[cfg(feature = "anyproxy-ebpf")]
-            ebpf_add_sock_hash,
-        )
-        .await
+        StreamStream::connect_and_stream(scc, stream_info, client_buffer, client_stream).await
     }
 }

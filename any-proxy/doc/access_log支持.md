@@ -8,7 +8,7 @@ access raw = r```
         #default "./logs/access.log"
         access_log_file = "./logs/access.log"
         #default
-        access_format = "[${local_time}] ${total_read_size} ${total_write_size} ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]"
+        access_format = "[${local_time}] ${total_read_size} ${total_write_size} ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]"
         #default false
         access_log_stdout = false
 ```r;
@@ -79,6 +79,8 @@ access raw = r```
 "upstream_bytes_received"
 # 是否使用ebof
 "is_open_ebpf"
+# 是否使用sendfile
+"open_sendfile"
 # 回源负载均衡方法
 "upstream_dispatch"
 # 是否开启proxy_protocol_hello

@@ -130,9 +130,7 @@ impl client::Connection for Connection {
                 #[cfg(not(unix))]
                 let fd = 0;
                 let stream = Stream::new(tcp_stream);
-                let (r, w) = any_base::io::split::split(stream);
-                let stream =
-                    StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let stream = StreamFlow::new(fd, stream);
                 Ok((Protocol7::Tcp, stream, local_addr, remote_addr))
             }
         }

@@ -6,6 +6,7 @@ use any_base::typ;
 use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny};
 use anyhow::Result;
 use lazy_static::lazy_static;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 lazy_static! {
@@ -28,6 +29,7 @@ pub struct ConfStream {
     pub min_read_buffer_size: usize,
     pub min_cache_file_size: usize,
     pub plugin_handle_stream: ArcRwLockTokio<PluginHandleStream>,
+    pub read_buffer_size: usize,
 }
 
 impl ConfStream {
@@ -38,10 +40,10 @@ impl ConfStream {
         stream_cache_size: usize,
         mut is_stream_cache_merge: bool,
         is_tmp_file_io_page: bool,
+        read_buffer_page_size: usize,
     ) -> Self {
         use crate::proxy::StreamCacheBuffer;
         use crate::util::default_config;
-        use std::sync::atomic::Ordering;
 
         let buffer_cache = if tmp_file_size > 0 && stream_cache_size > 0 {
             "file_and_cache".to_string()
@@ -70,6 +72,7 @@ impl ConfStream {
             min_read_buffer_size: page_size,
             min_cache_file_size: page_size * 256,
             plugin_handle_stream: ArcRwLockTokio::default(),
+            read_buffer_size: read_buffer_page_size * page_size,
         };
 
         if ssc.stream_cache_size > 0 && ssc.stream_cache_size < ssc.min_cache_buffer_size as i64 {
@@ -125,12 +128,15 @@ pub struct Conf {
     pub http_context: Arc<HttpContext>,
     pub download: Arc<ConfStream>,
     pub upload: Arc<ConfStream>,
+    pub read_buffer_page_size: usize,
+    pub is_port_direct_ebpf: bool,
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 0; //131072
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
 const TCP_CONF_NAME_DEFAULT: &str = "tcp_config_1";
 const QUIC_CONF_NAME_DEFAULT: &str = "quic_config_1";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
+const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 2;
 impl Conf {
     pub fn new() -> Self {
         Conf {
@@ -156,8 +162,10 @@ impl Conf {
             is_open_ebpf: false,
             http_context: HTTP_CONTEXT.clone(),
             is_disable_share_http_context: false,
-            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, true)),
-            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, true)),
+            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, true, 2)),
+            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, true, 2)),
+            read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
+            is_port_direct_ebpf: false,
         }
     }
 }
@@ -346,6 +354,22 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
+        module::Cmd {
+            name: "read_buffer_page_size".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(read_buffer_page_size(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "is_port_direct_ebpf".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(is_port_direct_ebpf(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
     ]);
 }
 
@@ -502,6 +526,14 @@ async fn merge_conf(
                 parent_conf.is_disable_share_http_context.clone();
         }
 
+        if child_conf.read_buffer_page_size == READ_BUFFER_PAGE_SIZE_DEFAULT {
+            child_conf.read_buffer_page_size = parent_conf.read_buffer_page_size.clone();
+        }
+
+        if child_conf.is_port_direct_ebpf == false {
+            child_conf.is_port_direct_ebpf = parent_conf.is_port_direct_ebpf.clone();
+        }
+
         child_conf.download = Arc::new(ConfStream::new(
             child_conf.download_tmp_file_size,
             child_conf.download_limit_rate_after,
@@ -509,6 +541,7 @@ async fn merge_conf(
             child_conf.stream_cache_size,
             child_conf.is_stream_cache_merge,
             child_conf.is_tmp_file_io_page,
+            child_conf.read_buffer_page_size,
         ));
 
         child_conf.upload = Arc::new(ConfStream::new(
@@ -518,6 +551,7 @@ async fn merge_conf(
             child_conf.stream_cache_size,
             child_conf.is_stream_cache_merge,
             child_conf.is_tmp_file_io_page,
+            child_conf.read_buffer_page_size,
         ));
 
         use super::http_core_plugin;
@@ -566,7 +600,11 @@ async fn init_conf(
     _main_confs: typ::ArcUnsafeAny,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
-    let _conf = conf.get_mut::<Conf>();
+    let conf = conf.get_mut::<Conf>();
+    if conf.read_buffer_page_size > 0 {
+        use crate::util::default_config::MIN_CACHE_BUFFER_NUM;
+        MIN_CACHE_BUFFER_NUM.store(conf.read_buffer_page_size, Ordering::SeqCst);
+    }
     return Ok(());
 }
 
@@ -867,6 +905,35 @@ async fn is_disable_share_http_context(
     let c = conf.get_mut::<Conf>();
     c.is_disable_share_http_context = conf_arg.value.get::<bool>().clone();
 
-    log::trace!("c.is_open_ebpf:{:?}", c.is_disable_share_http_context);
+    log::trace!(
+        "c.is_disable_share_http_context:{:?}",
+        c.is_disable_share_http_context
+    );
+    return Ok(());
+}
+
+async fn read_buffer_page_size(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.read_buffer_page_size = conf_arg.value.get::<usize>().clone();
+
+    log::trace!("c.read_buffer_page_size:{:?}", c.read_buffer_page_size);
+    return Ok(());
+}
+
+async fn is_port_direct_ebpf(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.is_port_direct_ebpf = conf_arg.value.get::<bool>().clone();
+
+    log::trace!("c.is_port_direct_ebpf:{:?}", c.is_port_direct_ebpf);
     return Ok(());
 }

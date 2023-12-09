@@ -56,19 +56,20 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         sss.get_mut().buffer_pool.set(buffer_pool);
     }
 
+    let read_buffer_size = sss.get().ssc.cs.read_buffer_size;
     let mut is_first = true;
     loop {
         if (ssd.get().stream_cache_size > 0 || ssd.get().tmp_file_size > 0)
             && sss.get().read_err.is_none()
         {
-            let (ret, buffer) = read(sss.clone())
+            let (ret, buffer) = read(sss.clone(), read_buffer_size)
                 .await
                 .map_err(|e| anyhow!("err:read => e:{}", e))?;
             if is_first {
                 is_first = false;
                 stream_info
                     .get_mut()
-                    .add_work_time(get_flag(sss.get().is_client));
+                    .add_work_time(&format!("first read {}", get_flag(sss.get().is_client)));
             }
             sss.get_mut().read_buffer = Some(buffer);
             sss.get_mut().read_buffer_ret = Some(ret);
@@ -83,7 +84,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
                 }
             }
         }
-        let handle_next = &*CACHE_HANDLE_NEXT.get_mut().await;
+        let handle_next = &*CACHE_HANDLE_NEXT.get().await;
         (handle_next)(sss.clone())
             .await
             .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
@@ -197,6 +198,7 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
 
 pub async fn read(
     sss: ShareRw<StreamStreamShare>,
+    read_buffer_size: usize,
 ) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
     let ssd = sss.get().ssc.ssd.clone();
     let stream_info = sss.get().stream_info.clone();
@@ -283,7 +285,7 @@ pub async fn read(
         if r.is_read_msg().await {
             tokio::select! {
                 biased;
-                ret = r.read_msg() => {
+                ret = r.read_msg(read_buffer_size) => {
                     let msg = ret?;
                     let n = msg.len();
                     buffer.msg = Some(msg);

@@ -18,8 +18,6 @@ path = "examples/single_threaded.rs"
 [features]
 default = ["anyproxy-openssl"]
 #default = ["anyproxy-rustls"]
-#default = ["anyproxy-openssl", "anydebug-error"]
-#default = ["anyproxy-rustls", "anydebug-error"]
 #使用openssl加密
 anyproxy-openssl = ["openssl-sys", "openssl", "tokio-openssl", "hyper-openssl"]
 #使用rustls加密

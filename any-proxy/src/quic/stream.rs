@@ -40,10 +40,17 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
-    fn poll_read_msg(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll_read_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
         let mut stream_rx_future = if self.stream_rx_future.is_some() {
             self.stream_rx_future.take().unwrap()
         } else {
@@ -55,7 +62,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
             let mut stream_rx = stream_rx.unwrap();
 
             Box::pin(async move {
-                let data = stream_rx.read_chunk(usize::MAX, true).await?;
+                let data = stream_rx.read_chunk(msg_size, true).await?;
                 if data.is_none() {
                     return Err(anyhow!("err:stream_rx close"));
                 }
@@ -71,7 +78,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
             }
             Poll::Ready(Ok((data, stream_rx))) => {
                 self.stream_rx = Some(stream_rx);
-                return Poll::Ready(Ok(data.to_vec()));
+                return Poll::Ready(Ok(data.into()));
             }
             Poll::Pending => {
                 //Pending的时候保存起来

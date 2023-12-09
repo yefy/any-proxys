@@ -203,6 +203,9 @@ impl PeerClientContext {
             let domain = self.peer_stream_connect.as_ref().unwrap().host().await;
 
             let key = self.peer_stream_connect.as_ref().unwrap().key().await?;
+            let stream = any_base::io::buf_stream::BufStream::new(stream);
+            let rw = any_base::stream::Stream::new(stream);
+            let stream = StreamFlow::new(0, rw);
             PeerClient::do_create_peer_stream(
                 true,
                 key,

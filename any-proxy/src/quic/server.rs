@@ -240,9 +240,7 @@ impl server::Connection for Connection {
             }
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
-                let (r, w) = any_base::io::split::split(stream);
-                let mut stream =
-                    StreamFlow::new(0, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                let mut stream = StreamFlow::new(0, stream);
                 let quic_recv_timeout = self.config.quic_recv_timeout as u64;
                 let read_timeout = tokio::time::Duration::from_secs(quic_recv_timeout);
                 let quic_send_timeout = self.config.quic_send_timeout as u64;

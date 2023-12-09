@@ -112,10 +112,11 @@ pub async fn upsteam_connect_info(
     scc: ShareRw<StreamConfigContext>,
 ) -> Result<(Option<bool>, Arc<Box<dyn Connect>>)> {
     let client_ip = stream_var::client_ip(&stream_info.get());
-    if client_ip.is_none() {
-        return Err(anyhow!("err: client_ip nil"));
-    }
-    let client_ip = client_ip.unwrap();
+    let client_ip = if client_ip.is_none() {
+        stream_info.get().server_stream_info.remote_addr.to_string()
+    } else {
+        client_ip.unwrap()
+    };
     let scc = scc.get();
     stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
     let (ups_dispatch, connect_info) = {

@@ -189,9 +189,7 @@ impl client::Connection for Connection {
                     let mut ssl_stream = SslStream::new(ssl, tcp_stream)?;
                     std::pin::Pin::new(&mut ssl_stream).connect().await?;
                     let stream = Stream::new(StreamData::Openssl(ssl_stream));
-                    let (r, w) = any_base::io::split::split(stream);
-                    let stream =
-                        StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                    let stream = StreamFlow::new(fd, stream);
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
 
@@ -224,9 +222,7 @@ impl client::Connection for Connection {
                         .map_err(|e| anyhow!("err:connector.connect => e:{}", e))?;
 
                     let stream = Stream::new(StreamData::C(ssl_stream));
-                    let (r, w) = any_base::io::split::split(stream);
-                    let stream =
-                        StreamFlow::new(fd, ArcMutex::new(Box::new(r)), ArcMutex::new(Box::new(w)));
+                    let stream = StreamFlow::new(fd, stream);
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
             }

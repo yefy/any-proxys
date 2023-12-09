@@ -114,6 +114,9 @@ impl Stream {
                     let split_at = std::cmp::min(expected, remain);
                     let data = cache_buf.split_to(split_at);
                     buf.put_slice(data);
+                    if split_at == remain {
+                        self.buf = None;
+                    }
                     return Ok(());
                 } else {
                     self.buf = None;
@@ -135,10 +138,17 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
-    fn poll_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _msg_size: usize,
+    ) -> Poll<io::Result<Vec<u8>>> {
         return Poll::Ready(Ok(Vec::new()));
     }
 

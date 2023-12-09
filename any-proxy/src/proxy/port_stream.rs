@@ -80,14 +80,33 @@ impl PortStream {
 
 #[async_trait]
 impl proxy::Stream for PortStream {
-    async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()> {
-        let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
+    async fn do_start(
+        &mut self,
+        stream_info: Share<StreamInfo>,
+        client_stream: StreamFlow,
+    ) -> Result<()> {
         let scc = self.port_config_listen.port_config_context.scc.clone();
-
         stream_info.get_mut().scc = scc.clone();
         stream_info.get_mut().debug_is_open_print = scc.get().http_core_conf().debug_is_open_print;
-        stream_info.get_mut().add_work_time("tunnel_stream");
 
+        #[cfg(feature = "anyproxy-ebpf")]
+        let client_stream = if scc.get().http_core_conf().is_port_direct_ebpf
+            && scc.get().http_core_conf().is_open_ebpf
+            && client_stream.fd() > 0
+        {
+            let ret =
+                StreamStream::connect_and_ebpf(scc.clone(), stream_info.clone(), client_stream)
+                    .await?;
+            if ret.is_none() {
+                return Ok(());
+            }
+            ret.unwrap()
+        } else {
+            client_stream
+        };
+
+        let client_buf_reader = any_base::io::buf_reader::BufReader::new(client_stream);
+        stream_info.get_mut().add_work_time("tunnel_stream");
         let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
@@ -181,26 +200,9 @@ impl proxy::Stream for PortStream {
             self.server_stream_info
         );
 
-        #[cfg(feature = "anyproxy-ebpf")]
-        use crate::config::any_ebpf_core;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let any_ebpf_core_conf = any_ebpf_core::main_conf(&self.ms).await;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
-
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
 
-        StreamStream::connect_and_stream(
-            scc,
-            stream_info,
-            client_buffer,
-            client_stream,
-            self.server_stream_info.local_addr.clone().unwrap(),
-            self.server_stream_info.remote_addr,
-            #[cfg(feature = "anyproxy-ebpf")]
-            ebpf_add_sock_hash,
-        )
-        .await
+        StreamStream::connect_and_stream(scc, stream_info, client_buffer, client_stream).await
     }
 }
