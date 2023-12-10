@@ -1,19 +1,18 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
 use anyhow::anyhow;
 use anyhow::Result;
-use bytes::Bytes;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 pub struct Stream {
-    stream_rx: Option<quinn::RecvStream>,
-    stream_rx_future: Option<
-        Pin<
-            Box<dyn Future<Output = Result<(Bytes, quinn::RecvStream)>> + std::marker::Send + Sync>,
-        >,
-    >,
+    stream_rx: quinn::RecvStream,
+    // stream_rx_future: Option<
+    //     Pin<
+    //         Box<dyn Future<Output = Result<(Bytes, quinn::RecvStream)>> + std::marker::Send + Sync>,
+    //     >,
+    // >,
     stream_tx: Option<quinn::SendStream>,
     stream_tx_data_size: usize,
     stream_tx_future:
@@ -23,8 +22,8 @@ pub struct Stream {
 impl Stream {
     pub fn new(stream_rx: quinn::RecvStream, stream_tx: quinn::SendStream) -> Stream {
         Stream {
-            stream_rx: Some(stream_rx),
-            stream_rx_future: None,
+            stream_rx,
+            //stream_rx_future: None,
             stream_tx_future: None,
             stream_tx_data_size: 0,
             stream_tx: Some(stream_tx),
@@ -48,48 +47,112 @@ impl any_base::io::async_stream::AsyncStream for Stream {
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
     fn poll_read_msg(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         msg_size: usize,
     ) -> Poll<io::Result<Vec<u8>>> {
-        let mut stream_rx_future = if self.stream_rx_future.is_some() {
-            self.stream_rx_future.take().unwrap()
-        } else {
-            let stream_rx = self.stream_rx.take();
-            if stream_rx.is_none() {
-                log::error!("err:quic stream_rx.is_none");
-                return Poll::Ready(Ok(Vec::new()));
-            }
-            let mut stream_rx = stream_rx.unwrap();
-
-            Box::pin(async move {
-                let data = stream_rx.read_chunk(msg_size, true).await?;
-                if data.is_none() {
-                    return Err(anyhow!("err:stream_rx close"));
+        /*
+        let mut is_err = false;
+        let mut value: Option<Vec<u8>> = None;
+        loop {
+            if is_err {
+                if value.is_some() {
+                    return Poll::Ready(Ok(value.unwrap()));
+                } else {
+                    return Poll::Ready(Ok(Vec::new()));
                 }
-                let data = data.unwrap();
-                Ok((data.bytes, stream_rx))
-            })
-        };
+            }
+            let mut stream_rx_future = if self.stream_rx_future.is_some() {
+                self.stream_rx_future.take().unwrap()
+            } else {
+                let stream_rx = self.stream_rx.take();
+                if stream_rx.is_none() {
+                    log::error!("err:quic stream_rx.is_none");
+                    return Poll::Ready(Ok(Vec::new()));
+                }
+                let mut stream_rx = stream_rx.unwrap();
 
-        let ret = stream_rx_future.as_mut().poll(_cx);
-        match ret {
-            Poll::Ready(Err(_)) => {
-                return Poll::Ready(Ok(Vec::new()));
+                Box::pin(async move {
+                    let data = stream_rx.read_chunk(msg_size, true).await?;
+                    if data.is_none() {
+                        return Err(anyhow!("err:stream_rx close"));
+                    }
+                    let data = data.unwrap();
+                    Ok((data.bytes, stream_rx))
+                })
+            };
+
+            let ret = stream_rx_future.as_mut().poll(_cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok((data, stream_rx))) => {
+                    self.stream_rx = Some(stream_rx);
+                    if value.is_none() {
+                        value = Some(data.into())
+                    } else {
+                        value
+                            .as_mut()
+                            .unwrap()
+                            .extend_from_slice(data.into().as_slice());
+                    }
+
+                    if value.as_ref().unwrap().len() >= msg_size {
+                        return Poll::Ready(Ok(value.unwrap()));
+                    }
+                }
+                Poll::Pending => {
+                    //Pending的时候保存起来
+                    self.stream_rx_future = Some(stream_rx_future);
+                    if value.is_some() {
+                        return Poll::Ready(Ok(value.unwrap()));
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
             }
-            Poll::Ready(Ok((data, stream_rx))) => {
-                self.stream_rx = Some(stream_rx);
-                return Poll::Ready(Ok(data.into()));
+        }
+
+         */
+
+        let mut is_err = false;
+        let mut vecs = any_base::util::Vecs::new();
+        loop {
+            if is_err {
+                return Poll::Ready(Ok(vecs.to_vec()));
             }
-            Poll::Pending => {
-                //Pending的时候保存起来
-                self.stream_rx_future = Some(stream_rx_future);
-                return Poll::Pending;
+
+            let mut read_chunk = Box::pin(self.stream_rx.read_chunk(msg_size, true));
+            let ret = Pin::new(&mut read_chunk).poll(cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(None)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(Some(data))) => {
+                    vecs.push(data.bytes.into());
+                    if vecs.len() >= msg_size {
+                        return Poll::Ready(Ok(vecs.to_vec()));
+                    }
+                }
+                Poll::Pending => {
+                    if vecs.len() > 0 {
+                        return Poll::Ready(Ok(vecs.to_vec()));
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
             }
         }
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
-        return Poll::Ready(false);
+        return Poll::Ready(true);
     }
 }
 
@@ -138,7 +201,7 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
     }
 
     fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
-        return Poll::Ready(false);
+        return Poll::Ready(true);
     }
 }
 
@@ -148,7 +211,7 @@ impl tokio::io::AsyncRead for Stream {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream_rx.as_mut().unwrap()).poll_read(cx, buf)
+        Pin::new(&mut self.stream_rx).poll_read(cx, buf)
     }
 }
 

@@ -239,27 +239,19 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         _cx: &mut Context<'_>,
         msg_size: usize,
     ) -> Poll<io::Result<Vec<u8>>> {
-        if self.is_read_close() {
-            //log::error!("err:is_read_close");
-            return Poll::Ready(Ok(Vec::new()));
-        }
         log::trace!("skip waning is_client:{}", self.is_client);
-        let mut value: Option<Vec<u8>> = None;
+        let mut vecs = any_base::util::Vecs::new();
 
         loop {
+            if self.is_read_close() {
+                return Poll::Ready(Ok(vecs.to_vec()));
+            }
+
             let datas = self.read_buf_take();
             if datas.is_some() {
-                if value.is_none() {
-                    value = Some(datas.unwrap())
-                } else {
-                    value
-                        .as_mut()
-                        .unwrap()
-                        .extend_from_slice(datas.unwrap().as_slice());
-                }
-
-                if value.as_ref().unwrap().len() >= msg_size {
-                    return Poll::Ready(Ok(value.unwrap()));
+                vecs.push(datas.unwrap());
+                if vecs.len() >= msg_size {
+                    return Poll::Ready(Ok(vecs.to_vec()));
                 }
             }
 
@@ -277,12 +269,12 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     Err(async_channel::TryRecvError::Empty) => {}
                     Err(async_channel::TryRecvError::Closed) => {
                         self.close();
-                        return Poll::Ready(Ok(Vec::new()));
+                        continue;
                     }
                 }
 
-                if value.is_some() {
-                    return Poll::Ready(Ok(value.unwrap()));
+                if vecs.len() > 0 {
+                    return Poll::Ready(Ok(vecs.to_vec()));
                 }
 
                 let stream_rx = self.stream_rx.clone().unwrap();
@@ -293,7 +285,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
             match ret {
                 Poll::Ready(Err(_)) => {
                     self.close();
-                    return Poll::Ready(Ok(Vec::new()));
+                    continue;
                 }
                 Poll::Ready(Ok(tunnel_data)) => {
                     self.stream_rx_pack_id
@@ -305,7 +297,11 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 Poll::Pending => {
                     //Pending的时候保存起来
                     self.stream_rx_future = Some(stream_rx_future);
-                    return Poll::Pending;
+                    if vecs.len() > 0 {
+                        return Poll::Ready(Ok(vecs.to_vec()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
             }
         }
@@ -381,14 +377,14 @@ impl tokio::io::AsyncRead for Stream {
         _cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.is_read_close() {
-            //log::error!("err:is_read_close");
-            return Poll::Ready(Ok(()));
-        }
         log::trace!("skip waning is_client:{}", self.is_client);
 
         let mut is_read = false;
         loop {
+            if self.is_read_close() {
+                return Poll::Ready(Ok(()));
+            }
+
             if self.read_buf(buf) {
                 is_read = true;
                 if buf.initialize_unfilled().len() <= 0 {
@@ -410,7 +406,7 @@ impl tokio::io::AsyncRead for Stream {
                     Err(async_channel::TryRecvError::Empty) => {}
                     Err(async_channel::TryRecvError::Closed) => {
                         self.close();
-                        return Poll::Ready(Ok(()));
+                        continue;
                     }
                 }
 
@@ -426,7 +422,7 @@ impl tokio::io::AsyncRead for Stream {
             match ret {
                 Poll::Ready(Err(_)) => {
                     self.close();
-                    return Poll::Ready(Ok(()));
+                    continue;
                 }
                 Poll::Ready(Ok(tunnel_data)) => {
                     self.stream_rx_pack_id
@@ -439,7 +435,11 @@ impl tokio::io::AsyncRead for Stream {
                 Poll::Pending => {
                     //Pending的时候保存起来
                     self.stream_rx_future = Some(stream_rx_future);
-                    return Poll::Pending;
+                    if is_read {
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
             }
         }

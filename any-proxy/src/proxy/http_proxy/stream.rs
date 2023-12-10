@@ -2,7 +2,6 @@ use any_base::io::async_write_msg::AsyncWriteBuf;
 use any_base::typ::ArcMutexTokio;
 use anyhow::anyhow;
 use anyhow::Result;
-use bytes::Bytes;
 use hyper::body::HttpBody;
 use hyper::body::Sender;
 use hyper::Body;
@@ -53,10 +52,11 @@ impl StreamBuf {
 }
 
 pub struct Stream {
-    stream_rx: Option<ArcMutexTokio<Body>>,
+    //stream_rx: Option<ArcMutexTokio<Body>>,
+    stream_rx: Option<Body>,
     stream_rx_buf: Option<StreamBuf>,
-    stream_rx_future:
-        Option<Pin<Box<dyn Future<Output = Result<Bytes>> + std::marker::Send + Sync>>>,
+    //stream_rx_future:
+    //   Option<Pin<Box<dyn Future<Output = Result<Bytes>> + std::marker::Send + Sync>>>,
     stream_tx: Option<ArcMutexTokio<Sender>>,
     stream_tx_data_size: usize,
     stream_tx_future: Option<Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + Sync>>>,
@@ -64,12 +64,11 @@ pub struct Stream {
 
 impl Stream {
     pub fn new(stream_rx: Body, stream_tx: Sender) -> Stream {
-        let stream_rx = ArcMutexTokio::new(stream_rx);
         let stream_tx = ArcMutexTokio::new(stream_tx);
         Stream {
             stream_rx: Some(stream_rx),
             stream_rx_buf: None,
-            stream_rx_future: None,
+            //stream_rx_future: None,
             stream_tx_future: None,
             stream_tx_data_size: 0,
             stream_tx: Some(stream_tx),
@@ -153,16 +152,20 @@ impl any_base::io::async_stream::AsyncStream for Stream {
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
     fn poll_read_msg(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         msg_size: usize,
     ) -> Poll<io::Result<Vec<u8>>> {
-        if self.is_read_close() {
-            //log::error!("err:is_read_close");
-            return Poll::Ready(Ok(Vec::new()));
-        }
-
+        /*
         let mut value: Option<Vec<u8>> = None;
         loop {
+            if self.is_read_close() {
+                if value.is_some() {
+                    return Poll::Ready(Ok(value.unwrap()));
+                } else {
+                    return Poll::Ready(Ok(Vec::new()));
+                }
+            }
+
             let datas = self.read_buf_take();
             if datas.is_some() {
                 if value.is_none() {
@@ -193,7 +196,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 match ret {
                     Poll::Ready(Err(_)) => {
                         self.read_close();
-                        return Poll::Ready(Ok(Vec::new()));
+                        continue;
                     }
                     Poll::Ready(Ok(data)) => {
                         if data.is_some() {
@@ -231,7 +234,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
             match ret {
                 Poll::Ready(Err(_)) => {
                     self.read_close();
-                    return Poll::Ready(Ok(Vec::new()));
+                    continue;
                 }
                 Poll::Ready(Ok(data)) => {
                     self.stream_rx_buf = Some(StreamBuf::new(data));
@@ -241,6 +244,46 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     //Pending的时候保存起来
                     self.stream_rx_future = Some(stream_rx_future);
                     return Poll::Pending;
+                }
+            }
+        }
+
+         */
+
+        let mut vecs = any_base::util::Vecs::new();
+        loop {
+            if self.is_read_close() {
+                return Poll::Ready(Ok(vecs.to_vec()));
+            }
+
+            let datas = self.read_buf_take();
+            if datas.is_some() {
+                vecs.push(datas.unwrap());
+                if vecs.len() >= msg_size {
+                    return Poll::Ready(Ok(vecs.to_vec()));
+                }
+            }
+
+            let ret = Pin::new(&mut self.stream_rx.as_mut().unwrap()).poll_data(cx);
+            match ret {
+                Poll::Ready(None) => {
+                    self.read_close();
+                    continue;
+                }
+                Poll::Ready(Some(data)) => {
+                    if data.is_err() {
+                        self.read_close();
+                        continue;
+                    }
+                    self.stream_rx_buf = Some(StreamBuf::new(data.unwrap()));
+                    continue;
+                }
+                Poll::Pending => {
+                    if vecs.len() > 0 {
+                        return Poll::Ready(Ok(vecs.to_vec()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
             }
         }
@@ -302,15 +345,17 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
 impl tokio::io::AsyncRead for Stream {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.is_read_close() {
-            //log::error!("err:is_read_close");
-            return Poll::Ready(Ok(()));
-        }
+        /*
         let mut is_read = false;
         loop {
+            if self.is_read_close() {
+                //log::error!("err:is_read_close");
+                return Poll::Ready(Ok(()));
+            }
+
             if self.read_buf(buf) {
                 is_read = true;
                 if buf.initialize_unfilled().len() <= 0 {
@@ -332,7 +377,7 @@ impl tokio::io::AsyncRead for Stream {
                 match ret {
                     Poll::Ready(Err(_)) => {
                         self.read_close();
-                        return Poll::Ready(Ok(()));
+                        continue;
                     }
                     Poll::Ready(Ok(data)) => {
                         if data.is_some() {
@@ -371,7 +416,7 @@ impl tokio::io::AsyncRead for Stream {
             match ret {
                 Poll::Ready(Err(_)) => {
                     self.read_close();
-                    return Poll::Ready(Ok(()));
+                    continue;
                 }
                 Poll::Ready(Ok(data)) => {
                     self.stream_rx_buf = Some(StreamBuf::new(data));
@@ -381,6 +426,45 @@ impl tokio::io::AsyncRead for Stream {
                     //Pending的时候保存起来
                     self.stream_rx_future = Some(stream_rx_future);
                     return Poll::Pending;
+                }
+            }
+        }
+        */
+
+        let mut is_read = false;
+        loop {
+            if self.is_read_close() {
+                //log::error!("err:is_read_close");
+                return Poll::Ready(Ok(()));
+            }
+
+            if self.read_buf(buf) {
+                is_read = true;
+                if buf.initialize_unfilled().len() <= 0 {
+                    return Poll::Ready(Ok(()));
+                }
+            }
+
+            let ret = Pin::new(&mut self.stream_rx.as_mut().unwrap()).poll_data(cx);
+            match ret {
+                Poll::Ready(None) => {
+                    self.read_close();
+                    continue;
+                }
+                Poll::Ready(Some(data)) => {
+                    if data.is_err() {
+                        self.read_close();
+                        continue;
+                    }
+                    self.stream_rx_buf = Some(StreamBuf::new(data.unwrap()));
+                    continue;
+                }
+                Poll::Pending => {
+                    if is_read {
+                        return Poll::Ready(Ok(()));
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
             }
         }
