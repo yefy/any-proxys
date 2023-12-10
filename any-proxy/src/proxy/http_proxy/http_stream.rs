@@ -4,6 +4,7 @@ use crate::proxy::stream_start;
 use crate::proxy::stream_stream::StreamStream;
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
+use any_base::io::async_stream::AsyncStreamExt;
 use any_base::stream_flow::StreamFlow;
 #[cfg(unix)]
 use any_base::typ::ArcMutexTokio;
@@ -58,7 +59,7 @@ impl proxy::Stream for HttpStream {
     async fn do_start(
         &mut self,
         stream_info: Share<StreamInfo>,
-        client_stream: StreamFlow,
+        mut client_stream: StreamFlow,
     ) -> Result<()> {
         let upstream_stream = self.upstream_stream.take().unwrap();
         #[cfg(unix)]
@@ -66,24 +67,45 @@ impl proxy::Stream for HttpStream {
         #[cfg(unix)]
         let upstream_sendfile = ArcMutexTokio::default();
 
-        let ret = StreamStream::stream_to_stream_single(
-            self.scc.clone(),
-            stream_info.clone(),
-            client_stream,
-            upstream_stream,
-            #[cfg(unix)]
-            client_sendfile,
-            #[cfg(unix)]
-            upstream_sendfile,
-        )
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "err:stream_to_stream => request_id:{}, e:{}",
-                self.http_arg.stream_info.get().request_id,
-                e
+        let ret = if client_stream.is_single().await {
+            StreamStream::stream_to_stream_single(
+                self.scc.clone(),
+                stream_info.clone(),
+                client_stream,
+                upstream_stream,
+                #[cfg(unix)]
+                client_sendfile,
+                #[cfg(unix)]
+                upstream_sendfile,
             )
-        });
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "err:stream_to_stream => request_id:{}, e:{}",
+                    self.http_arg.stream_info.get().request_id,
+                    e
+                )
+            })
+        } else {
+            StreamStream::stream_to_stream(
+                self.scc.clone(),
+                stream_info.clone(),
+                client_stream,
+                upstream_stream,
+                #[cfg(unix)]
+                client_sendfile,
+                #[cfg(unix)]
+                upstream_sendfile,
+            )
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "err:stream_to_stream => request_id:{}, e:{}",
+                    self.http_arg.stream_info.get().request_id,
+                    e
+                )
+            })
+        };
 
         self.http_arg.stream_info.get_mut().add_work_time("end");
 

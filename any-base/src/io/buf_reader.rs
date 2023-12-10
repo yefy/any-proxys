@@ -39,6 +39,8 @@ pin_project! {
         pub(super) buf: Box<[u8]>,
         pub(super) pos: usize,
         pub(super) cap: usize,
+        pub(super) max_cap: usize,
+        pub(super) reinit_cap: usize,
         pub(super) seek_state: SeekState,
         pub(super) rollback: i64,
     }
@@ -54,11 +56,14 @@ impl<R: AsyncRead> BufReader<R> {
     /// Creates a new `BufReader` with the specified buffer capacity.
     pub fn with_capacity(capacity: usize, inner: R) -> Self {
         let buffer = vec![0; capacity];
+        let max_cap = buffer.len();
         Self {
             inner,
             buf: buffer.into_boxed_slice(),
             pos: 0,
             cap: 0,
+            max_cap,
+            reinit_cap: 0,
             seek_state: SeekState::Init,
             rollback: -1,
         }
@@ -66,11 +71,14 @@ impl<R: AsyncRead> BufReader<R> {
 
     pub fn new_from_buffer(inner: R, buffer: (Box<[u8]>, usize, usize)) -> Self {
         let (buf, pos, cap) = buffer;
+        let max_cap = buf.len();
         Self {
             inner,
             buf,
             pos,
             cap,
+            max_cap,
+            reinit_cap: 0,
             seek_state: SeekState::Init,
             rollback: -1,
         }
@@ -78,11 +86,14 @@ impl<R: AsyncRead> BufReader<R> {
 
     pub fn new_from_buffer_ext(buffer: (R, Box<[u8]>, usize, usize)) -> Self {
         let (inner, buf, pos, cap) = buffer;
+        let max_cap = buf.len();
         Self {
             inner,
             buf,
             pos,
             cap,
+            max_cap,
+            reinit_cap: 0,
             seek_state: SeekState::Init,
             rollback: -1,
         }
@@ -94,6 +105,8 @@ impl<R: AsyncRead> BufReader<R> {
             buf,
             pos,
             cap,
+            max_cap: _,
+            reinit_cap: _,
             seek_state: _,
             rollback: _,
         } = self;
@@ -106,6 +119,8 @@ impl<R: AsyncRead> BufReader<R> {
             buf,
             pos,
             cap,
+            max_cap: _,
+            reinit_cap: _,
             seek_state: _,
             rollback: _,
         } = self;
@@ -147,6 +162,14 @@ impl<R: AsyncRead> BufReader<R> {
         &self.buf[self.pos..self.cap]
     }
 
+    pub fn set_reinit_cap(&mut self, reinit_cap: usize) {
+        self.reinit_cap = reinit_cap;
+    }
+
+    pub fn set_reinit_cap_max(&mut self) {
+        self.reinit_cap = self.buf.len();
+    }
+
     /// Invalidates all data in the internal buffer.
     #[inline]
     fn discard_buffer(self: Pin<&mut Self>) {
@@ -154,6 +177,10 @@ impl<R: AsyncRead> BufReader<R> {
         *me.pos = 0;
         *me.cap = 0;
         *me.rollback = -1;
+        if *me.reinit_cap > 0 && *me.reinit_cap <= me.buf.len() {
+            *me.max_cap = *me.reinit_cap;
+            *me.reinit_cap = 0;
+        }
     }
 
     pub fn start(&mut self) {
@@ -189,7 +216,13 @@ impl<R: AsyncRead> AsyncRead for BufReader<R> {
         // If we don't have any buffered data and we're doing a massive read
         // (larger than our internal buffer), bypass our internal buffer
         // entirely.
-        if self.pos == self.cap && buf.remaining() >= self.buf.len() {
+        if self.pos == self.cap && buf.remaining() >= self.max_cap {
+            if self.rollback >= 0 {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "*me.cap >= me.max_cap",
+                )));
+            }
             let res = ready!(self.as_mut().get_pin_mut().poll_read(cx, buf));
             self.discard_buffer();
             return Poll::Ready(res);
@@ -213,19 +246,23 @@ impl<R: AsyncRead> AsyncBufRead for BufReader<R> {
 
         if *me.pos >= *me.cap {
             if *me.rollback >= 0 {
-                if *me.cap >= me.buf.len() {
+                if *me.cap >= *me.max_cap {
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::Other,
-                        "*me.cap >= me.buf.len()",
+                        "*me.cap >= me.max_cap",
                     )));
                 }
 
-                let mut buf = ReadBuf::new(&mut me.buf[*me.cap..]);
+                let mut buf = ReadBuf::new(&mut me.buf[*me.cap..*me.max_cap]);
                 ready!(me.inner.poll_read(cx, &mut buf))?;
                 *me.cap = *me.cap + buf.filled().len();
             } else {
                 debug_assert!(*me.pos == *me.cap);
-                let mut buf = ReadBuf::new(me.buf);
+                if *me.reinit_cap > 0 && *me.reinit_cap <= me.buf.len() {
+                    *me.max_cap = *me.reinit_cap;
+                    *me.reinit_cap = 0;
+                }
+                let mut buf = ReadBuf::new(&mut me.buf[0..*me.max_cap]);
                 ready!(me.inner.poll_read(cx, &mut buf))?;
                 *me.cap = buf.filled().len();
                 *me.pos = 0;
@@ -394,7 +431,7 @@ impl<R: fmt::Debug> fmt::Debug for BufReader<R> {
             .field("reader", &self.inner)
             .field(
                 "buffer",
-                &format_args!("{}/{}", self.cap - self.pos, self.buf.len()),
+                &format_args!("{}/{}", self.cap - self.pos, self.max_cap),
             )
             .finish()
     }

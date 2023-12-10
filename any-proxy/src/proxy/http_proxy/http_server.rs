@@ -290,10 +290,15 @@ impl HttpServer {
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
             move |_| async move {
-                let client_stream = Stream::new(req_body, res_sender);
+                let is_single = if version == Version::HTTP_2 {
+                    false
+                } else {
+                    true
+                };
+                let client_stream = Stream::new(req_body, res_sender, is_single);
                 let client_stream = StreamFlow::new(0, client_stream);
 
-                let upstream_stream = Stream::new(client_res_body, client_req_sender);
+                let upstream_stream = Stream::new(client_res_body, client_req_sender, is_single);
                 let mut upstream_stream = StreamFlow::new(0, upstream_stream);
                 upstream_stream
                     .set_stream_info(http_arg.stream_info.get().upstream_stream_flow_info.clone());

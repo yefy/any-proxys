@@ -60,10 +60,11 @@ pub struct Stream {
     stream_tx: Option<ArcMutexTokio<Sender>>,
     stream_tx_data_size: usize,
     stream_tx_future: Option<Pin<Box<dyn Future<Output = Result<()>> + std::marker::Send + Sync>>>,
+    is_single: bool,
 }
 
 impl Stream {
-    pub fn new(stream_rx: Body, stream_tx: Sender) -> Stream {
+    pub fn new(stream_rx: Body, stream_tx: Sender, is_single: bool) -> Stream {
         let stream_tx = ArcMutexTokio::new(stream_tx);
         Stream {
             stream_rx: Some(stream_rx),
@@ -72,6 +73,7 @@ impl Stream {
             stream_tx_future: None,
             stream_tx_data_size: 0,
             stream_tx: Some(stream_tx),
+            is_single,
         }
     }
 
@@ -142,7 +144,7 @@ impl Drop for Stream {
 
 impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
-        return Poll::Ready(true);
+        return Poll::Ready(self.is_single);
     }
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         return Poll::Ready(io::Result::Ok(()));
