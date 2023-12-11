@@ -4,7 +4,6 @@ use crate::proxy::stream_start;
 use crate::proxy::stream_stream::StreamStream;
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
-use any_base::io::async_stream::AsyncStreamExt;
 use any_base::stream_flow::StreamFlow;
 #[cfg(unix)]
 use any_base::typ::ArcMutexTokio;
@@ -59,7 +58,7 @@ impl proxy::Stream for HttpStream {
     async fn do_start(
         &mut self,
         stream_info: Share<StreamInfo>,
-        mut client_stream: StreamFlow,
+        client_stream: StreamFlow,
     ) -> Result<()> {
         let upstream_stream = self.upstream_stream.take().unwrap();
         #[cfg(unix)]
@@ -67,7 +66,7 @@ impl proxy::Stream for HttpStream {
         #[cfg(unix)]
         let upstream_sendfile = ArcMutexTokio::default();
 
-        let ret = if client_stream.is_single().await {
+        let ret = if false {
             StreamStream::stream_to_stream_single(
                 self.scc.clone(),
                 stream_info.clone(),
@@ -96,6 +95,8 @@ impl proxy::Stream for HttpStream {
                 client_sendfile,
                 #[cfg(unix)]
                 upstream_sendfile,
+                false,
+                true,
             )
             .await
             .map_err(|e| {

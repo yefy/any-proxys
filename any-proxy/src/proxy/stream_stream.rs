@@ -237,6 +237,8 @@ impl StreamStream {
             client_sendfile,
             #[cfg(unix)]
             upstream_sendfile,
+            true,
+            true,
         )
         .await
         .map_err(|e| {
@@ -276,6 +278,8 @@ impl StreamStream {
         upstream: StreamFlow,
         #[cfg(unix)] client_sendfile: ArcMutexTokio<SendFile>,
         #[cfg(unix)] upstream_sendfile: ArcMutexTokio<SendFile>,
+        is_fast_close_client: bool,
+        is_fast_close_upstream: bool,
     ) -> Result<()> {
         let (client_read, client_write) = client.split();
         let (upstream_read, upstream_write) = upstream.split();
@@ -304,7 +308,6 @@ impl StreamStream {
                 total_write_size: 0,
             }),
         };
-        let is_fast_close = true;
 
         let ret: Result<()> = async {
             tokio::select! {
@@ -316,7 +319,7 @@ impl StreamStream {
                     upstream_write,
                     #[cfg(unix)] upstream_sendfile,
                     true,
-                    is_fast_close,
+                    is_fast_close_client,
                 )  => {
                     return ret.map_err(|e| anyhow!("err:client => e:{}", e));
                 }
@@ -328,7 +331,7 @@ impl StreamStream {
                     client_write,
                     #[cfg(unix)] client_sendfile,
                     false,
-                    is_fast_close,
+                    is_fast_close_upstream,
                 ) => {
                     return ret.map_err(|e| anyhow!("err:ups => e:{}", e));
                 }
@@ -477,7 +480,7 @@ impl StreamStream {
         let plugins: Vec<Option<ArcUnsafeAny>> = vec![None; ctx_index_len];
         let sss = StreamStreamShare {
             ssc,
-            _scc: scc,
+            _scc: scc.clone(),
             stream_info,
             r: ArcMutexTokio::new(r),
             w: ArcMutexTokio::new(w),
@@ -497,6 +500,16 @@ impl StreamStream {
             is_first_write: true,
         };
         let sss = ShareRw::new(sss);
+
+        let plugin_handle_stream = if !is_fast_close {
+            let ms = scc.get().ms.clone();
+            use crate::config::http_core_plugin;
+            let http_core_plugin_conf = http_core_plugin::main_conf(&ms).await;
+            http_core_plugin_conf.plugin_handle_stream_cache.clone()
+        } else {
+            plugin_handle_stream
+        };
+
         let plugin_handle_stream = plugin_handle_stream.get().await;
         (plugin_handle_stream)(sss).await?;
         Ok(())

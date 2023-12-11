@@ -166,7 +166,7 @@ impl server::Connection for Connection {
             let tls_acceptor = self
                 .sni
                 .sni_openssl
-                .tls_acceptor("")
+                .tls_acceptor(b"\x02h2\x08http/1.1")
                 .map_err(|e| anyhow!("err:sni_openssl.tls_acceptor => e:{}", e))?;
             let mut ssl =
                 Ssl::new(tls_acceptor.context()).map_err(|e| anyhow!("err:Ssl::new => e:{}", e))?;
@@ -227,7 +227,10 @@ impl server::Connection for Connection {
 
         #[cfg(feature = "anyproxy-rustls")]
         {
-            let tls_acceptor = util::rustls::tls_acceptor(self.sni.sni_rustls.clone(), vec![]);
+            let tls_acceptor = util::rustls::tls_acceptor(
+                self.sni.sni_rustls.clone(),
+                vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+            );
             let ssl_stream = tls_acceptor
                 .accept(tcp_stream)
                 .await

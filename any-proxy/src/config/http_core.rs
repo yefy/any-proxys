@@ -37,7 +37,7 @@ impl ConfStream {
         tmp_file_size: u64,
         limit_rate_after: u64,
         limit_rate: u64,
-        stream_cache_size: usize,
+        mut stream_cache_size: usize,
         mut is_stream_cache_merge: bool,
         is_tmp_file_io_page: bool,
         read_buffer_page_size: usize,
@@ -55,6 +55,11 @@ impl ConfStream {
             is_stream_cache_merge = false;
             "memory".to_string()
         };
+        //http2.0 强制走cache
+        if stream_cache_size <= 0 {
+            stream_cache_size = StreamCacheBuffer::buffer_size();
+        }
+
         let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
         let mut ssc = ConfStream {
             buffer_cache: Arc::new(buffer_cache),
@@ -558,7 +563,7 @@ async fn merge_conf(
         let http_core_plugin_conf = http_core_plugin::main_conf(&ms).await;
 
         let plugin_handle_stream =
-            if child_conf.download.stream_cache_size > 0 || child_conf.download.tmp_file_size > 0 {
+            if child_conf.stream_cache_size > 0 || child_conf.download.tmp_file_size > 0 {
                 http_core_plugin_conf.plugin_handle_stream_cache.clone()
             } else {
                 http_core_plugin_conf.plugin_handle_stream_memory.clone()
@@ -570,7 +575,7 @@ async fn merge_conf(
             .await;
 
         let plugin_handle_stream =
-            if child_conf.upload.stream_cache_size > 0 || child_conf.upload.tmp_file_size > 0 {
+            if child_conf.stream_cache_size > 0 || child_conf.upload.tmp_file_size > 0 {
                 http_core_plugin_conf.plugin_handle_stream_cache.clone()
             } else {
                 http_core_plugin_conf.plugin_handle_stream_memory.clone()

@@ -181,7 +181,9 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         let mut ssd = ssd.get_mut();
         let mut sss = sss.get_mut();
 
-        ssd.stream_cache_size -= size as i64;
+        if cs.max_stream_cache_size > 0 {
+            ssd.stream_cache_size -= size as i64;
+        }
         //let last_cache = sss.caches.back_mut();
         // if buffer.msg.is_none() && last_cache.is_some() {
         //     let last_cache = last_cache.unwrap();

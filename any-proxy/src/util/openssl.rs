@@ -92,7 +92,7 @@ impl OpensslSni {
     }
 
     ///openssl 加密accept
-    pub fn tls_acceptor(&self, prototol: &str) -> Result<Arc<SslAcceptor>> {
+    pub fn tls_acceptor(&self, prototol: &[u8]) -> Result<Arc<SslAcceptor>> {
         let sni_map = self.sni_map.clone();
         let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())
             .map_err(|e| anyhow!("err:SslAcceptor::mozilla_modern => e:{}", e))?;
@@ -103,12 +103,12 @@ impl OpensslSni {
             .set_private_key_file(self.default_key.get().as_str(), SslFiletype::PEM)
             .map_err(|e| anyhow!("err:set_private_key_file => e:{}", e))?;
         if prototol.len() > 0 {
-            let prototol = prototol.to_string();
+            let prototol = prototol.to_vec();
             acceptor.set_alpn_select_callback(move |_, client| {
                 //ssl::select_next_proto(b"\x02h2", client).ok_or(AlpnError::NOACK)
                 //ssl::select_next_proto(b"\x02h2\x08http/1.1", client).ok_or(AlpnError::NOACK)
                 //ssl.set_alpn_protos(b"\x02h2\x08http/1.1")?;
-                ssl::select_next_proto(prototol.as_bytes(), client).ok_or(AlpnError::NOACK)
+                ssl::select_next_proto(&prototol, client).ok_or(AlpnError::NOACK)
             });
         }
 

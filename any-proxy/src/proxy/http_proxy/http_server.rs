@@ -21,6 +21,7 @@ use any_base::executor_local_spawn::ThreadRuntime;
 use any_base::io::buf_reader::BufReader;
 use any_base::typ::{ArcMutex, Share, ShareRw};
 use base64::{engine::general_purpose, Engine as _};
+use http::header::HOST;
 use hyper::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -202,12 +203,16 @@ impl HttpServer {
             );
         }
 
-        let protocol7 = connect_func.protocol7().await;
-        let upstream_host = connect_func.host().await?;
-        let upstream_is_tls = connect_func.is_tls().await;
-
-        let version = req.version();
         log::trace!("client req = {:#?}", req);
+        let protocol7 = connect_func.protocol7().await;
+        let upstream_is_tls = connect_func.is_tls().await;
+        //let upstream_host = connect_func.host().await?;
+        let upstream_host = req.headers().get(HOST);
+        if upstream_host.is_none() {
+            return Err(anyhow!("host nil"));
+        }
+        let upstream_host = upstream_host.unwrap().to_str().unwrap();
+        let version = req.version();
 
         let proxy = {
             let scc = scc.get();
@@ -239,6 +244,7 @@ impl HttpServer {
         let uri = url_string.parse()?;
 
         *req.uri_mut() = uri;
+        req.headers_mut().remove(HOST);
         req.headers_mut().remove("connection");
         *req.version_mut() = upstream_version;
         log::trace!("upstream req = {:#?}", req);
@@ -290,15 +296,10 @@ impl HttpServer {
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
             move |_| async move {
-                let is_single = if version == Version::HTTP_2 {
-                    false
-                } else {
-                    true
-                };
-                let client_stream = Stream::new(req_body, res_sender, is_single);
+                let client_stream = Stream::new(req_body, res_sender);
                 let client_stream = StreamFlow::new(0, client_stream);
 
-                let upstream_stream = Stream::new(client_res_body, client_req_sender, is_single);
+                let upstream_stream = Stream::new(client_res_body, client_req_sender);
                 let mut upstream_stream = StreamFlow::new(0, upstream_stream);
                 upstream_stream
                     .set_stream_info(http_arg.stream_info.get().upstream_stream_flow_info.clone());
