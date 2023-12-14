@@ -2,6 +2,7 @@ use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
 use crate::typ::ArcMutex;
+use crate::util::StreamMsg;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -435,13 +436,13 @@ impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         let ret = Pin::new(&mut *self.r).poll_read_msg(cx, msg_size);
         match ret {
             Poll::Ready(ret) => match ret {
                 Err(e) => {
                     self.read_flow(io::Result::Err(e))?;
-                    return Poll::Ready(Ok(Vec::new()));
+                    return Poll::Ready(Ok(StreamMsg::new()));
                 }
                 Ok(data) => {
                     self.read_flow(io::Result::Ok(data.len()))?;

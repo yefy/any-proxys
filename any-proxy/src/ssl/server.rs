@@ -219,7 +219,7 @@ impl server::Connection for Connection {
                     protocol7: Protocol7::Ssl,
                     remote_addr,
                     local_addr: Some(local_addr),
-                    domain: Some(domain),
+                    domain: Some(domain.into()),
                     is_tls: true,
                 },
             )))

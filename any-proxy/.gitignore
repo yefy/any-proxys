@@ -4,6 +4,7 @@ test
 test/*
 ab.exe
 ab.log
+ab
 
 # visual studio code files
 .vscode
@@ -34,5 +35,7 @@ logs
 *.signal
 *.exe
 *.o
-anyproxy/work/anyproxy
 vmlinux.h
+any-proxy/examples/anyproxy/examples/anyproxy.exe
+any-proxy/examples/anyproxy/examples/anyproxy
+.output

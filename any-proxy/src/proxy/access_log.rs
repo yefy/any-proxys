@@ -38,7 +38,7 @@ impl AccessLog {
             }
 
             let ret: Result<Var> = async {
-                let access_format_vars = Var::new(&access.access_format, Some("-"))
+                let access_format_vars = Var::new(&access.access_format, "-")
                     .map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
                 let mut access_format_vars_test = Var::copy(&access_format_vars)
                     .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;

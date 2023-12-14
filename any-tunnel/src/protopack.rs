@@ -1,3 +1,4 @@
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 #[cfg(feature = "anypool-dynamic-pool")]
@@ -42,10 +43,10 @@ pub enum TunnelPack {
     TunnelClose(TunnelClose),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TunnelHello {
     pub version: String,
-    pub session_id: String,
+    pub session_id: ArcString,
     pub min_stream_cache_size: usize,
     pub channel_size: usize,
     pub client_peer_stream_index: usize,

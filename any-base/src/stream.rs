@@ -1,4 +1,5 @@
 use crate::io::async_write_msg::AsyncWriteBuf;
+use crate::util::StreamMsg;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -45,8 +46,8 @@ impl crate::io::async_read_msg::AsyncReadMsg for Stream {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         _msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
-        return Poll::Ready(Ok(Vec::new()));
+    ) -> Poll<io::Result<StreamMsg>> {
+        return Poll::Ready(Ok(StreamMsg::new()));
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {

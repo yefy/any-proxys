@@ -9,6 +9,8 @@ use crate::protopack::DynamicPoolTunnelData;
 use crate::PeerClientToStreamReceiver;
 use any_base::io::async_write_msg::AsyncWriteBuf;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
+use any_base::util::StreamMsg;
 use awaitgroup::WorkerInner;
 #[cfg(feature = "anypool-dynamic-pool")]
 use dynamic_pool::DynamicPool;
@@ -91,7 +93,7 @@ pub struct Stream {
             >,
         >,
     >,
-    _session_id: String,
+    _session_id: ArcString,
     stream_tx_pack_id: Arc<AtomicU32>,
     stream_rx_pack_id: Arc<AtomicU32>,
     worker_inner: Option<WorkerInner>,
@@ -104,7 +106,7 @@ impl Stream {
         stream_tx: ArcMutex<RoundAsyncChannel<TunnelPack>>,
         _max_stream_size: usize,
         _channel_size: usize,
-        _session_id: String,
+        _session_id: ArcString,
         stream_tx_pack_id: Arc<AtomicU32>,
         stream_rx_pack_id: Arc<AtomicU32>,
         worker_inner: WorkerInner,
@@ -238,20 +240,20 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         log::trace!("skip waning is_client:{}", self.is_client);
-        let mut vecs = any_base::util::Vecs::new();
+        let mut stream_msg = StreamMsg::new();
 
         loop {
             if self.is_read_close() {
-                return Poll::Ready(Ok(vecs.to_vec()));
+                return Poll::Ready(Ok(stream_msg));
             }
 
             let datas = self.read_buf_take();
             if datas.is_some() {
-                vecs.push(datas.unwrap());
-                if vecs.len() >= msg_size {
-                    return Poll::Ready(Ok(vecs.to_vec()));
+                stream_msg.push(datas.unwrap());
+                if stream_msg.len() >= msg_size {
+                    return Poll::Ready(Ok(stream_msg));
                 }
             }
 
@@ -273,8 +275,8 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     }
                 }
 
-                if vecs.len() > 0 {
-                    return Poll::Ready(Ok(vecs.to_vec()));
+                if stream_msg.len() > 0 {
+                    return Poll::Ready(Ok(stream_msg));
                 }
 
                 let stream_rx = self.stream_rx.clone().unwrap();
@@ -297,8 +299,8 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 Poll::Pending => {
                     //Pending的时候保存起来
                     self.stream_rx_future = Some(stream_rx_future);
-                    if vecs.len() > 0 {
-                        return Poll::Ready(Ok(vecs.to_vec()));
+                    if stream_msg.len() > 0 {
+                        return Poll::Ready(Ok(stream_msg));
                     } else {
                         return Poll::Pending;
                     }

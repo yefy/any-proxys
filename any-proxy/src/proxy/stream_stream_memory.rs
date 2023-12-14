@@ -46,6 +46,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         sss.get_mut().buffer_pool.set(buffer_pool);
     }
     let read_buffer_size = sss.get().ssc.cs.read_buffer_size;
+    sss.get_mut().is_cache = false;
 
     let mut _is_first = true;
     loop {
@@ -116,10 +117,10 @@ pub async fn read(
         if r.is_read_msg().await {
             let msg = r.read_msg(read_buffer_size).await?;
             let n = msg.len();
-            buffer.msg = Some(msg);
+            buffer.push_msg(msg);
             return Ok(n);
         } else {
-            let n = r.read(&mut buffer.data).await?;
+            let n = r.read(buffer.data_raw()).await?;
             return Ok(n);
         }
     }

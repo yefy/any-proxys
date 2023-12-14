@@ -357,9 +357,9 @@ pub async fn stream_info_parse(
         if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteTimeout {
             stream_info.err_status = ErrStatus::GatewayTimeout;
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteReset {
-            stream_info.err_status_str = Some(stream_info::UPS_CONN_RESET.to_string());
+            stream_info.err_status_str = Some(stream_info::UPS_CONN_RESET.clone());
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteErr {
-            stream_info.err_status_str = Some(stream_info::UPS_CONN_ERR.to_string());
+            stream_info.err_status_str = Some(stream_info::UPS_CONN_ERR.clone());
         }
     }
 

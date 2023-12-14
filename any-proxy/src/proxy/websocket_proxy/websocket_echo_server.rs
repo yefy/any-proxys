@@ -8,6 +8,7 @@ use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::ShareRw;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
@@ -40,7 +41,11 @@ impl WebsocketServer {
         let mut proxy_hello: Option<(AnyproxyHello, usize)> = None;
         let mut ups_request: Request = Request::new(());
 
-        self.arg.stream_info.get_mut().protocol77 = Some(Protocol77::WebSocket);
+        if self.arg.server_stream_info.is_tls {
+            self.arg.stream_info.get_mut().client_protocol77 = Some(Protocol77::WebSockets);
+        } else {
+            self.arg.stream_info.get_mut().client_protocol77 = Some(Protocol77::WebSocket);
+        }
 
         let copy_headers_callback = |request: &Request,
                                      response: Response|
@@ -110,6 +115,7 @@ impl WebsocketServer {
         }
         log::debug!("ws_host:{}", ws_host);
         let (domain, _) = host_and_port(&ws_host);
+        let domain = ArcString::new(domain.to_string());
 
         let scc = proxy_util::parse_proxy_domain(
             &self.arg,
@@ -117,7 +123,7 @@ impl WebsocketServer {
                 let hello = proxy_hello;
                 Ok(hello)
             },
-            || async { Ok(domain.to_string()) },
+            || async { Ok(domain) },
         )
         .await?;
 

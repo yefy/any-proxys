@@ -12,6 +12,7 @@ use crate::Protocol7;
 use any_base::executor_local_spawn::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
 use any_base::typ::{ArcMutex, ArcMutexTokio};
+use any_base::util::ArcString;
 use any_tunnel2::client as tunnel_client;
 use any_tunnel2::peer_stream_connect::PeerStreamConnect;
 use any_tunnel2::stream_flow::StreamFlow;
@@ -24,7 +25,7 @@ use std::time::Instant;
 
 #[derive(Clone)]
 pub struct PeerStreamConnectTcp {
-    host: String,
+    host: ArcString,
     address: SocketAddr, //ip:port, domain:port
     tcp_config: TcpConfig,
     tcp_connect: Arc<tcp_connect::Connect>,
@@ -36,6 +37,7 @@ impl PeerStreamConnectTcp {
         address: SocketAddr, //ip:port, domain:port
         tcp_config: TcpConfig,
     ) -> PeerStreamConnectTcp {
+        let host = ArcString::new(host);
         let tcp_connect =
             tcp_connect::Connect::new(host.clone(), address.clone(), tcp_config.clone());
         let tcp_connect = Arc::new(tcp_connect);
@@ -111,7 +113,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
         Ok(self.address.clone())
     }
 
-    async fn host(&self) -> String {
+    async fn host(&self) -> ArcString {
         self.host.clone()
     }
 
@@ -135,7 +137,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
 
 #[derive(Clone)]
 pub struct PeerStreamConnectSsl {
-    host: String,
+    host: ArcString,
     address: SocketAddr, //ip:port, domain:port
     tcp_config: TcpConfig,
     ssl_connect: ArcMutexTokio<ssl_connect::Connect>,
@@ -148,6 +150,7 @@ impl PeerStreamConnectSsl {
         ssl_domain: String,
         tcp_config: TcpConfig,
     ) -> PeerStreamConnectSsl {
+        let host = ArcString::new(host);
         let ssl_connect = ssl_connect::Connect::new(
             host.clone(),
             address.clone(),
@@ -229,7 +232,7 @@ impl PeerStreamConnect for PeerStreamConnectSsl {
         Ok(self.address.clone())
     }
 
-    async fn host(&self) -> String {
+    async fn host(&self) -> ArcString {
         self.host.clone()
     }
 
@@ -253,7 +256,7 @@ impl PeerStreamConnect for PeerStreamConnectSsl {
 
 #[derive(Clone)]
 pub struct PeerStreamConnectQuic {
-    host: String,
+    host: ArcString,
     address: SocketAddr, //ip:port, domain:port
     //ssl_domain: String,
     //endpoints: Arc<endpoints::Endpoints>,
@@ -269,6 +272,7 @@ impl PeerStreamConnectQuic {
         endpoints: Arc<endpoints::Endpoints>,
         quic_config: QuicConfig,
     ) -> PeerStreamConnectQuic {
+        let host = ArcString::new(host);
         let quic_connect = quic_connect::Connect::new(
             host.clone(),
             address.clone(),
@@ -365,7 +369,7 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
         Ok(self.address.clone())
     }
 
-    async fn host(&self) -> String {
+    async fn host(&self) -> ArcString {
         self.host.clone()
     }
 
@@ -405,7 +409,7 @@ impl Connect {
 impl connect::Connect for Connect {
     async fn connect(
         &self,
-        _request_id: Option<String>,
+        _request_id: Option<ArcString>,
         stream_info: ArcMutex<StreamFlowInfo>,
         _run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
@@ -449,7 +453,7 @@ impl connect::Connect for Connect {
         self.connect.addr().await
     }
 
-    async fn host(&self) -> Result<String> {
+    async fn host(&self) -> Result<ArcString> {
         Ok(self.connect.host().await)
     }
     async fn is_tls(&self) -> bool {
@@ -458,7 +462,7 @@ impl connect::Connect for Connect {
     async fn protocol7(&self) -> String {
         self.connect.protocol7().await
     }
-    async fn domain(&self) -> String {
+    async fn domain(&self) -> ArcString {
         self.connect.host().await
     }
 }

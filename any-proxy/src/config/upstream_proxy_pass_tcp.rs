@@ -198,7 +198,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             return Err(anyhow!("err:tcp.tcp={}", tcp_str));
         }
         let connect = Box::new(tcp_connect::Connect::new(
-            host,
+            host.into(),
             addr.clone(),
             tcp_config.unwrap(),
         ));

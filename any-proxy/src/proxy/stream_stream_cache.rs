@@ -55,9 +55,12 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         );
         sss.get_mut().buffer_pool.set(buffer_pool);
     }
+    sss.get_mut().is_cache = true;
 
     let read_buffer_size = sss.get().ssc.cs.read_buffer_size;
     let mut is_first = true;
+    let is_client = sss.get().is_client;
+
     loop {
         if (ssd.get().stream_cache_size > 0 || ssd.get().tmp_file_size > 0)
             && sss.get().read_err.is_none()
@@ -69,13 +72,13 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
                 is_first = false;
                 stream_info
                     .get_mut()
-                    .add_work_time(&format!("first read {}", get_flag(sss.get().is_client)));
+                    .add_work_time(&format!("first read {}", get_flag(is_client)));
             }
             sss.get_mut().read_buffer = Some(buffer);
             sss.get_mut().read_buffer_ret = Some(ret);
         } else {
             let stream_status = sss.get().stream_status.clone();
-            StreamStreamShare::stream_status_sleep(stream_status).await;
+            StreamStreamShare::stream_status_sleep(stream_status, is_client).await;
             if sss.get().read_err.is_some() && sss.get().read_buffer.is_some() {
                 if sss.get().read_buffer.as_ref().unwrap().read_size <= 0 {
                     log::error!("err:buffer.read_size <= 0");
@@ -124,15 +127,14 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
     };
 
     if is_close {
-        use std::time::Instant;
-        let start_time = Instant::now();
-        scopeguard::defer! {
-            let elapsed = start_time.elapsed().as_millis();
-            if elapsed > 500 {
-                log::warn!("stream_stream_cache_or_file exit time:{}", elapsed);
-            }
-        }
-
+        // use std::time::Instant;
+        // let start_time = Instant::now();
+        // scopeguard::defer! {
+        //     let elapsed = start_time.elapsed().as_millis();
+        //     if elapsed > 500 {
+        //         log::warn!("stream_stream_cache_or_file exit time:{}", elapsed);
+        //     }
+        // }
         stream_info.get_mut().close_num += 1;
         loop {
             if stream_info.get().close_num >= 2 {
@@ -206,53 +208,51 @@ pub async fn read(
     let mut buffer = if sss.get_mut().read_buffer.is_some() {
         sss.get_mut().read_buffer.take().unwrap()
     } else {
-        sss.get_mut().buffer_pool.get().take()
+        let mut buffer = sss.get_mut().buffer_pool.get().take();
+        buffer.resize(None);
+        buffer
     };
 
-    buffer.resize(None);
-    buffer.is_cache = false;
-
-    if buffer.size < buffer.read_size {
+    if buffer.size <= buffer.read_size {
         log::error!("err:buffer.size < buffer.read_size");
         return Err(anyhow!("err:buffer.size < buffer.read_size"));
     }
 
-    if ssd.get().stream_cache_size < buffer.read_size as i64
-        && ssd.get().tmp_file_size < buffer.read_size as i64
+    if ssd.get().stream_cache_size <= buffer.read_size as i64
+        && ssd.get().tmp_file_size <= buffer.read_size as i64
     {
         log::error!("err:buffer.read_size");
         return Err(anyhow!("err:buffer.read_size"));
     }
-
-    if ssd.get().stream_cache_size > 0 && ssd.get().stream_cache_size >= buffer.read_size as i64 {
-        buffer.is_cache = true;
-        if ssd.get().stream_cache_size < buffer.size as i64 {
-            buffer.size = ssd.get().stream_cache_size as u64;
+    let mut is_find = false;
+    if ssd.get().stream_cache_size > 0 && ssd.get().stream_cache_size > buffer.read_size as i64 {
+        if buffer.read_size == 0 || (buffer.read_size > 0 && buffer.is_cache) {
+            is_find = true;
+            buffer.is_cache = true;
+            if ssd.get().stream_cache_size < buffer.size as i64 {
+                buffer.size = ssd.get().stream_cache_size as u64;
+            }
         }
     }
 
-    if !buffer.is_cache {
-        if ssd.get().tmp_file_size < buffer.size as i64 {
-            buffer.size = ssd.get().tmp_file_size as u64;
+    if !is_find {
+        if ssd.get().tmp_file_size > 0 && ssd.get().tmp_file_size > buffer.read_size as i64 {
+            if buffer.read_size == 0 || (buffer.read_size > 0 && !buffer.is_cache) {
+                is_find = true;
+                buffer.is_cache = false;
+                if ssd.get().tmp_file_size < buffer.size as i64 {
+                    buffer.size = ssd.get().tmp_file_size as u64;
+                }
+            }
         }
+    }
+
+    if !is_find {
+        log::error!("err:!is_find");
+        return Err(anyhow!("err:!is_find"));
     }
 
     let ret: std::io::Result<usize> = async {
-        if buffer.size == buffer.read_size {
-            //___test___
-            log::warn!(
-                "buffer.size:{} == buffer.read_size:{}",
-                buffer.size,
-                buffer.read_size
-            );
-            if sss.get().is_write_empty() {
-                return Ok(0);
-            }
-            let stream_status = sss.get().stream_status.clone();
-            StreamStreamShare::stream_status_sleep(stream_status).await;
-            return Ok(0);
-        }
-
         let sleep_read_time_millis = match &sss.get().stream_status {
             StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
             StreamStatus::Full(info) => {
@@ -272,7 +272,7 @@ pub async fn read(
             }
         };
 
-        let read_size = buffer.read_size as usize;
+        let start_size = buffer.read_size as usize;
         let end_size = buffer.size as usize;
 
         let read_wait = if sss.get().is_client {
@@ -288,7 +288,7 @@ pub async fn read(
                 ret = r.read_msg(read_buffer_size) => {
                     let msg = ret?;
                     let n = msg.len();
-                    buffer.msg = Some(msg);
+                    buffer.push_msg(msg);
                     return Ok(n);
                 },
                 _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
@@ -306,7 +306,7 @@ pub async fn read(
         } else {
             tokio::select! {
                 biased;
-                ret = r.read(buffer.data(read_size, end_size)) => {
+                ret = r.read(buffer.data_mut(start_size, end_size)) => {
                     let n = ret?;
                     return Ok(n);
                 },

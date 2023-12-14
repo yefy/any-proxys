@@ -67,11 +67,30 @@ impl HttpStaticServer {
     }
 
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
+        log::trace!("self.req.version:{:?}", self.req.version());
+        log::trace!("self.req:{:?}", self.req);
+        /*
+        use hyper::body::HttpBody;
+        let body = self.req.data().await;
+        if body.is_none() {
+            log::trace!("body.is_none()");
+        } else {
+            let body = body.unwrap();
+            if body.is_err() {
+                log::trace!("body.is_err()");
+            } else {
+                let body = body.unwrap();
+                log::trace!("body.len:{}", body.len());
+            }
+        }
+         */
+
         let scc = self.scc.get();
         use crate::config::http_server_static;
         let http_server_static_conf = http_server_static::currs_conf(scc.http_server_confs());
         let mut seq = "";
         let mut name = self.req.uri().path();
+
         log::trace!("name:{}", name);
         if name.len() <= 0 || name == "/" {
             seq = "/";

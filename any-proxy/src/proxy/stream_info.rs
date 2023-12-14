@@ -7,6 +7,7 @@ use crate::Protocol77;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::future_wait::FutureWait;
 use any_base::typ::{ArcMutex, Share, ShareRw};
+use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,67 +23,71 @@ pub enum ErrStatus {
 
 /// 200 对应的详细错误
 //200
-pub const CLI_WRITE_CLOSE: &'static str = "cli_write_close";
-pub const CLI_READ_CLOSE: &'static str = "cli_read_close";
-pub const CLI_WRITE_RESET: &'static str = "cli_write_reset";
-pub const CLI_READ_RESET: &'static str = "cli_read_reset";
-pub const CLI_WRITE_TIMEOUT: &'static str = "cli_write_timeout";
-pub const CLI_READ_TIMEOUT: &'static str = "cli_read_timeout";
-pub const CLI_WRITE_ERR: &'static str = "cli_write_err";
-pub const CLI_READ_ERR: &'static str = "cli_read_err";
+use lazy_static::lazy_static;
+lazy_static! {
+pub static ref CLI_WRITE_CLOSE: ArcString = "cli_write_close".into();
+pub static ref CLI_READ_CLOSE: ArcString = "cli_read_close".into();
+pub static ref CLI_WRITE_RESET: ArcString = "cli_write_reset".into();
+pub static ref CLI_READ_RESET: ArcString = "cli_read_reset".into();
+pub static ref CLI_WRITE_TIMEOUT: ArcString = "cli_write_timeout".into();
+pub static ref CLI_READ_TIMEOUT: ArcString = "cli_read_timeout".into();
+pub static ref CLI_WRITE_ERR: ArcString = "cli_write_err".into();
+pub static ref CLI_READ_ERR: ArcString = "cli_read_err".into();
 
-pub const UPS_WRITE_CLOSE: &'static str = "ups_write_close";
-pub const UPS_READ_CLOSE: &'static str = "ups_read_close";
-pub const UPS_WRITE_RESET: &'static str = "ups_write_reset";
-pub const UPS_READ_RESET: &'static str = "ups_read_reset";
-pub const UPS_WRITE_TIMEOUT: &'static str = "ups_write_timeout";
-pub const UPS_READ_TIMEOUT: &'static str = "ups_read_timeout";
-pub const UPS_WRITE_ERR: &'static str = "ups_write_err";
-pub const UPS_READ_ERR: &'static str = "ups_read_err";
+pub static ref UPS_WRITE_CLOSE: ArcString = "ups_write_close".into();
+pub static ref UPS_READ_CLOSE: ArcString = "ups_read_close".into();
+pub static ref UPS_WRITE_RESET: ArcString = "ups_write_reset".into();
+pub static ref UPS_READ_RESET: ArcString = "ups_read_reset".into();
+pub static ref UPS_WRITE_TIMEOUT: ArcString = "ups_write_timeout".into();
+pub static ref UPS_READ_TIMEOUT: ArcString = "ups_read_timeout".into();
+pub static ref UPS_WRITE_ERR: ArcString = "ups_write_err".into();
+pub static ref UPS_READ_ERR: ArcString = "ups_read_err".into();
 
 /// 503 对应的详细错误
 //503
-pub const UPS_CONN_RESET: &'static str = "ups_conn_reset";
-pub const UPS_CONN_ERR: &'static str = "ups_conn_err";
+pub static ref UPS_CONN_RESET: ArcString = "ups_conn_reset".into();
+pub static ref UPS_CONN_ERR: ArcString = "ups_conn_err".into();
+
+}
 
 pub trait ErrStatus200 {
-    fn write_close(&self) -> String;
-    fn read_close(&self) -> String;
-    fn write_reset(&self) -> String;
-    fn read_reset(&self) -> String;
-    fn write_timeout(&self) -> String;
-    fn read_timeout(&self) -> String;
-    fn write_err(&self) -> String;
-    fn read_err(&self) -> String;
+    fn write_close(&self) -> ArcString;
+    fn read_close(&self) -> ArcString;
+    fn write_reset(&self) -> ArcString;
+    fn read_reset(&self) -> ArcString;
+    fn write_timeout(&self) -> ArcString;
+    fn read_timeout(&self) -> ArcString;
+    fn write_err(&self) -> ArcString;
+    fn read_err(&self) -> ArcString;
     fn is_ups_err(&self) -> bool;
 }
 
 pub struct ErrStatusClient {}
 
 impl ErrStatus200 for ErrStatusClient {
-    fn write_close(&self) -> String {
-        CLI_WRITE_CLOSE.to_string()
+    fn write_close(&self) -> ArcString {
+        CLI_WRITE_CLOSE.clone()
     }
-    fn read_close(&self) -> String {
-        CLI_READ_CLOSE.to_string()
+    fn read_close(&self) -> ArcString {
+        CLI_READ_CLOSE.clone()
     }
-    fn write_reset(&self) -> String {
-        CLI_WRITE_RESET.to_string()
+    fn write_reset(&self) -> ArcString {
+        CLI_WRITE_RESET.clone()
     }
-    fn read_reset(&self) -> String {
-        CLI_READ_RESET.to_string()
+    fn read_reset(&self) -> ArcString {
+        CLI_READ_RESET.clone()
     }
-    fn write_timeout(&self) -> String {
-        CLI_WRITE_TIMEOUT.to_string()
+    fn write_timeout(&self) -> ArcString {
+        CLI_WRITE_TIMEOUT.clone()
     }
-    fn read_timeout(&self) -> String {
-        CLI_READ_TIMEOUT.to_string()
+    fn read_timeout(&self) -> ArcString {
+        CLI_READ_TIMEOUT.clone()
     }
-    fn write_err(&self) -> String {
-        CLI_WRITE_ERR.to_string()
+    fn write_err(&self) -> ArcString {
+        CLI_WRITE_ERR.clone()
     }
-    fn read_err(&self) -> String {
-        CLI_READ_ERR.to_string()
+    fn read_err(&self) -> ArcString {
+        CLI_READ_ERR.clone()
     }
     fn is_ups_err(&self) -> bool {
         false
@@ -92,29 +97,29 @@ impl ErrStatus200 for ErrStatusClient {
 pub struct ErrStatusUpstream {}
 
 impl ErrStatus200 for ErrStatusUpstream {
-    fn write_close(&self) -> String {
-        UPS_WRITE_CLOSE.to_string()
+    fn write_close(&self) -> ArcString {
+        UPS_WRITE_CLOSE.clone()
     }
-    fn read_close(&self) -> String {
-        UPS_READ_CLOSE.to_string()
+    fn read_close(&self) -> ArcString {
+        UPS_READ_CLOSE.clone()
     }
-    fn write_reset(&self) -> String {
-        UPS_WRITE_RESET.to_string()
+    fn write_reset(&self) -> ArcString {
+        UPS_WRITE_RESET.clone()
     }
-    fn read_reset(&self) -> String {
-        UPS_READ_RESET.to_string()
+    fn read_reset(&self) -> ArcString {
+        UPS_READ_RESET.clone()
     }
-    fn write_timeout(&self) -> String {
-        UPS_WRITE_TIMEOUT.to_string()
+    fn write_timeout(&self) -> ArcString {
+        UPS_WRITE_TIMEOUT.clone()
     }
-    fn read_timeout(&self) -> String {
-        UPS_READ_TIMEOUT.to_string()
+    fn read_timeout(&self) -> ArcString {
+        UPS_READ_TIMEOUT.clone()
     }
-    fn write_err(&self) -> String {
-        UPS_WRITE_ERR.to_string()
+    fn write_err(&self) -> ArcString {
+        UPS_WRITE_ERR.clone()
     }
-    fn read_err(&self) -> String {
-        UPS_READ_ERR.to_string()
+    fn read_err(&self) -> ArcString {
+        UPS_READ_ERR.clone()
     }
     fn is_ups_err(&self) -> bool {
         true
@@ -124,16 +129,16 @@ impl ErrStatus200 for ErrStatusUpstream {
 pub struct StreamInfo {
     pub executors: Option<ExecutorsLocal>,
     pub server_stream_info: Arc<ServerStreamInfo>,
-    pub ssl_domain: Option<String>,
-    pub local_domain: Option<String>,
-    pub remote_domain: Option<String>,
+    pub ssl_domain: Option<ArcString>,
+    pub local_domain: Option<ArcString>,
+    pub remote_domain: Option<ArcString>,
     pub session_time: f32,
     pub debug_is_open_print: bool,
-    pub request_id: String,
+    pub request_id: ArcString,
     pub protocol_hello: ArcMutex<Arc<AnyproxyHello>>,
     pub protocol_hello_size: usize,
     pub err_status: ErrStatus,
-    pub err_status_str: Option<String>,
+    pub err_status_str: Option<ArcString>,
     pub client_stream_flow_info: ArcMutex<StreamFlowInfo>,
     pub upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
     pub upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
@@ -155,7 +160,8 @@ pub struct StreamInfo {
     pub is_timeout_exit: bool,
     pub total_read_size: u64,
     pub total_write_size: u64,
-    pub protocol77: Option<Protocol77>,
+    pub client_protocol77: Option<Protocol77>,
+    pub upstream_protocol77: Option<Protocol77>,
     pub upload_read: FutureWait,
     pub download_read: FutureWait,
     pub upload_close: FutureWait,
@@ -176,7 +182,7 @@ impl StreamInfo {
             remote_domain: None,
             session_time: 0.0,
             debug_is_open_print: false,
-            request_id: "".to_string(),
+            request_id: ArcString::default(),
             protocol_hello: ArcMutex::default(),
             protocol_hello_size: 0,
             err_status: ErrStatus::ClientProtoErr,
@@ -202,7 +208,8 @@ impl StreamInfo {
             is_timeout_exit: false,
             total_read_size: 0,
             total_write_size: 0,
-            protocol77: None,
+            client_protocol77: None,
+            upstream_protocol77: None,
             upload_read: FutureWait::new(),
             download_read: FutureWait::new(),
             upload_close: FutureWait::new(),

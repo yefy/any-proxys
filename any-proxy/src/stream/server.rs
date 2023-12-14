@@ -5,6 +5,7 @@ use crate::Protocol7;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::stream_flow::StreamFlow;
+use any_base::util::ArcString;
 use any_tunnel::server as any_tunnel_server;
 use any_tunnel2::server as any_tunnel2_server;
 use anyhow::anyhow;
@@ -20,7 +21,7 @@ pub struct ServerStreamInfo {
     pub protocol7: Protocol7,
     pub remote_addr: SocketAddr,
     pub local_addr: Option<SocketAddr>,
-    pub domain: Option<String>,
+    pub domain: Option<ArcString>,
     pub is_tls: bool,
 }
 

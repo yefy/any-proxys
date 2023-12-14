@@ -3,6 +3,7 @@ use crate::stream::connect::Connect;
 use any_base::executor_local_spawn::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use hyper::{service::Service, Uri};
 use std::future::Future;
@@ -17,7 +18,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Clone)]
 pub struct HttpHyperConnector {
     upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
-    request_id: String,
+    request_id: ArcString,
     upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
     connect_func: Arc<Box<dyn Connect>>,
     session_id: Arc<AtomicU64>,
@@ -27,7 +28,7 @@ pub struct HttpHyperConnector {
 impl HttpHyperConnector {
     pub fn new(
         upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
-        request_id: String,
+        request_id: ArcString,
         upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
         connect_func: Arc<Box<dyn Connect>>,
         session_id: Arc<AtomicU64>,
@@ -62,6 +63,7 @@ impl Service<Uri> for HttpHyperConnector {
             self.request_id,
             self.session_id.fetch_add(1, Ordering::Relaxed)
         );
+        let request_id = ArcString::new(request_id);
         let upstream_connect_flow_info = self.upstream_connect_flow_info.clone();
         let upstream_stream_flow_info = self.upstream_stream_flow_info.clone();
         let connect_func = self.connect_func.clone();

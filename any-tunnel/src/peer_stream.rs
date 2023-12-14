@@ -18,6 +18,7 @@ use crate::protopack::{TunnelClose, TunnelHello};
 use crate::server::{AcceptSenderType, ServerRecvHello};
 use any_base::executor_local_spawn::Runtime;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 #[cfg(feature = "anypool-dynamic-pool")]
@@ -31,7 +32,7 @@ pub struct PeerStreamKey {
     pub key: String,
     pub local_addr: SocketAddr,
     pub remote_addr: SocketAddr,
-    pub domain: Option<String>,
+    pub domain: Option<ArcString>,
     pub to_peer_stream_tx: async_channel::Sender<PeerStreamRecv>,
 }
 
@@ -44,7 +45,7 @@ pub struct PeerStreamRecvHello {
     pub channel_size: usize,
     pub peer_stream_tx_pack_id: Arc<AtomicU32>,
     pub peer_stream_rx_pack_id: Arc<AtomicU32>,
-    pub session_id: Option<String>,
+    pub session_id: Option<ArcString>,
     pub is_error: Arc<AtomicBool>,
     pub peer_stream_id: Option<usize>,
 }
@@ -57,7 +58,7 @@ pub struct PeerStreamOnce {
     close_num: AtomicUsize,
     tunnel_peer_close: Mutex<Option<TunnelClose>>,
     is_send_close: AtomicBool,
-    session_id: Mutex<Option<String>>,
+    session_id: Mutex<Option<ArcString>>,
     peer_stream_index: AtomicUsize,
     peer_stream_id: AtomicUsize,
     tx_pack_id: AtomicU32,
@@ -118,7 +119,7 @@ impl PeerStream {
         is_client: bool,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
         client_context: Option<Arc<ClientContext>>,
         accept_tx: Option<AcceptSenderType>,
         key: String,

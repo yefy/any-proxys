@@ -1,3 +1,4 @@
+use any_base::util::ArcString;
 use serde::{Deserialize, Serialize};
 use std::str;
 
@@ -482,7 +483,7 @@ pub struct Tls {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SSL {
-    pub ssl_domain: String,
+    pub ssl_domain: ArcString,
     pub cert: String,
     pub key: String,
     pub tls: Option<Tls>,

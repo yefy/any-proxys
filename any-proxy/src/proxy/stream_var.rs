@@ -1,4 +1,6 @@
 use crate::proxy::stream_info::StreamInfo;
+use crate::util::var::VarAnyData;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::prelude::*;
@@ -6,9 +8,12 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-type VarFunc = fn(stream_info: &StreamInfo) -> Option<String>;
+type VarFunc = fn(stream_info: &StreamInfo) -> Option<VarAnyData>;
 
 lazy_static! {
+    pub static ref TIMEOUT_EXIT: ArcString = "timeout exit".into();
+    pub static ref PROXY_PROTOCOL_HELLO: ArcString = "proxy_protocol_hello".into();
+    pub static ref EBPF: ArcString = "ebpf".into();
     pub static ref VAR_MAP: HashMap<&'static str, VarFunc> = {
         let mut map: HashMap<&'static str, VarFunc> = HashMap::new();
         map.insert("local_time", local_time);
@@ -64,7 +69,7 @@ lazy_static! {
     };
 }
 
-pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<String>> {
+pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<VarAnyData>> {
     let value = VAR_MAP.get(var_name.trim());
     match value {
         None => return Err(anyhow!("err=>var not found => var_name:{}", var_name)),
@@ -72,305 +77,309 @@ pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<String>> 
     }
 }
 
-pub fn local_time(_stream_connect: &StreamInfo) -> Option<String> {
+pub fn local_time(_stream_connect: &StreamInfo) -> Option<VarAnyData> {
     let date_str = Local::now().to_string();
-    Some(date_str[0..26].to_string())
+    Some(VarAnyData::Str(date_str[0..26].to_string()))
 }
 
-pub fn ssl_domain(stream_info: &StreamInfo) -> Option<String> {
+pub fn ssl_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.ssl_domain.is_none() {
         return None;
     }
-    Some(stream_info.ssl_domain.clone().unwrap())
+    Some(VarAnyData::ArcString(
+        stream_info.ssl_domain.clone().unwrap(),
+    ))
 }
 
-pub fn local_domain(stream_info: &StreamInfo) -> Option<String> {
+pub fn local_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.local_domain.is_none() {
         return None;
     }
-    Some(stream_info.local_domain.clone().unwrap())
+    Some(VarAnyData::ArcString(
+        stream_info.local_domain.clone().unwrap(),
+    ))
 }
 
-pub fn remote_domain(stream_info: &StreamInfo) -> Option<String> {
+pub fn remote_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.remote_domain.is_none() {
         return None;
     }
-    Some(stream_info.remote_domain.clone().unwrap())
+    Some(VarAnyData::ArcString(
+        stream_info.remote_domain.clone().unwrap(),
+    ))
 }
 
-pub fn local_protocol(stream_info: &StreamInfo) -> Option<String> {
-    if stream_info.protocol77.is_none() {
-        Some(stream_info.server_stream_info.protocol7.to_string())
-    } else {
-        Some(format!(
-            "{}_{}",
-            stream_info.protocol77.as_ref().unwrap().to_string(),
-            stream_info.server_stream_info.protocol7.to_string()
+pub fn local_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.client_protocol77.is_none() {
+        Some(VarAnyData::Str(
+            stream_info.server_stream_info.protocol7.to_string(),
         ))
+    } else {
+        Some(VarAnyData::Str(format!(
+            "{}_{}",
+            stream_info.client_protocol77.as_ref().unwrap().to_string(),
+            stream_info.server_stream_info.protocol7.to_string()
+        )))
     }
 }
 
-pub fn upstream_protocol(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    if stream_info.protocol77.is_none() {
-        Some(
+    if stream_info.upstream_protocol77.is_none() {
+        Some(VarAnyData::Str(
             stream_info
                 .upstream_connect_info
                 .get()
                 .protocol7
                 .to_string(),
-        )
+        ))
     } else {
-        Some(format!(
+        Some(VarAnyData::Str(format!(
             "{}_{}",
-            stream_info.protocol77.as_ref().unwrap().to_string(),
+            stream_info
+                .upstream_protocol77
+                .as_ref()
+                .unwrap()
+                .to_string(),
             stream_info
                 .upstream_connect_info
                 .get()
                 .protocol7
                 .to_string()
-        ))
+        )))
     }
 }
 
-pub fn local_addr(stream_info: &StreamInfo) -> Option<String> {
-    Some(
-        stream_info
-            .server_stream_info
-            .local_addr
-            .unwrap()
-            .to_string(),
-    )
+pub fn local_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::SocketAddr(
+        stream_info.server_stream_info.local_addr.unwrap(),
+    ))
 }
 
-pub fn local_ip(stream_info: &StreamInfo) -> Option<String> {
-    Some(
+pub fn local_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::Str(
         stream_info
             .server_stream_info
             .local_addr
             .unwrap()
             .ip()
             .to_string(),
-    )
+    ))
 }
 
-pub fn local_port(stream_info: &StreamInfo) -> Option<String> {
-    Some(
-        stream_info
-            .server_stream_info
-            .local_addr
-            .unwrap()
-            .port()
-            .to_string(),
-    )
+pub fn local_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::U16(
+        stream_info.server_stream_info.local_addr.unwrap().port(),
+    ))
 }
 
-pub fn remote_addr(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.server_stream_info.remote_addr.to_string())
+pub fn remote_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::SocketAddr(
+        stream_info.server_stream_info.remote_addr.clone(),
+    ))
 }
 
-pub fn remote_ip(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.server_stream_info.remote_addr.ip().to_string())
+pub fn remote_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::Str(
+        stream_info.server_stream_info.remote_addr.ip().to_string(),
+    ))
 }
 
-pub fn remote_port(stream_info: &StreamInfo) -> Option<String> {
-    Some(
-        stream_info
-            .server_stream_info
-            .remote_addr
-            .port()
-            .to_string(),
-    )
+pub fn remote_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::U16(
+        stream_info.server_stream_info.remote_addr.port(),
+    ))
 }
 
-pub fn session_time(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.session_time.to_string())
+pub fn session_time(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::F32(stream_info.session_time))
 }
 
-pub fn request_id(stream_info: &StreamInfo) -> Option<String> {
+pub fn request_id(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.request_id.clone())
+    Some(VarAnyData::ArcString(protocol_hello.request_id.clone()))
 }
 
-pub fn versions(stream_info: &StreamInfo) -> Option<String> {
+pub fn versions(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.version.clone())
+    Some(VarAnyData::ArcString(protocol_hello.version.clone()))
 }
 
-pub fn client_addr(stream_info: &StreamInfo) -> Option<String> {
+pub fn client_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.client_addr.to_string())
+    Some(VarAnyData::SocketAddr(protocol_hello.client_addr))
 }
 
-pub fn client_ip(stream_info: &StreamInfo) -> Option<String> {
+pub fn client_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.client_addr.ip().to_string())
+    Some(VarAnyData::Str(protocol_hello.client_addr.ip().to_string()))
 }
 
-pub fn client_port(stream_info: &StreamInfo) -> Option<String> {
+pub fn client_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.client_addr.port().to_string())
+    Some(VarAnyData::U16(protocol_hello.client_addr.port()))
 }
 
-pub fn domain(stream_info: &StreamInfo) -> Option<String> {
+pub fn domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let protocol_hello = stream_info.protocol_hello.get();
     if protocol_hello.is_none() {
         return None;
     }
-    Some(protocol_hello.domain.clone())
+    Some(VarAnyData::ArcString(protocol_hello.domain.clone()))
 }
 
-pub fn status(stream_info: &StreamInfo) -> Option<String> {
+pub fn status(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let err_status = stream_info.err_status.clone() as usize;
-    Some(err_status.to_string())
+    Some(VarAnyData::Usize(err_status))
 }
 
-pub fn status_str(stream_info: &StreamInfo) -> Option<String> {
+pub fn status_str(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.err_status_str.is_none() {
         return None;
     }
-    Some(stream_info.err_status_str.clone().unwrap())
+    Some(VarAnyData::ArcString(
+        stream_info.err_status_str.clone().unwrap(),
+    ))
 }
 
-pub fn upstream_host(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_host(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(stream_info.upstream_connect_info.get().domain.clone())
+    Some(VarAnyData::ArcString(
+        stream_info.upstream_connect_info.get().domain.clone(),
+    ))
 }
 
-pub fn upstream_addr(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(
-        stream_info
-            .upstream_connect_info
-            .get()
-            .remote_addr
-            .to_string(),
-    )
+    Some(VarAnyData::SocketAddr(
+        stream_info.upstream_connect_info.get().remote_addr,
+    ))
 }
 
-pub fn upstream_ip(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(
+    Some(VarAnyData::Str(
         stream_info
             .upstream_connect_info
             .get()
             .remote_addr
             .ip()
             .to_string(),
-    )
+    ))
 }
 
-pub fn upstream_port(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(
-        stream_info
-            .upstream_connect_info
-            .get()
-            .remote_addr
-            .port()
-            .to_string(),
-    )
+    Some(VarAnyData::U16(
+        stream_info.upstream_connect_info.get().remote_addr.port(),
+    ))
 }
 
-pub fn upstream_connect_time(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_connect_time(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(stream_info.upstream_connect_info.get().elapsed.to_string())
+    Some(VarAnyData::F32(
+        stream_info.upstream_connect_info.get().elapsed,
+    ))
 }
 
-pub fn stream_work_times(stream_info: &StreamInfo) -> Option<String> {
+pub fn stream_work_times(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let mut datas = String::with_capacity(100);
     for (name, stream_work_time) in stream_info.stream_work_times.iter() {
         let v = format!("{}:{:.3},", name, stream_work_time);
         datas.push_str(&v);
     }
-    Some(datas)
+    Some(VarAnyData::Str(datas))
 }
 
-pub fn client_bytes_sent(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.client_stream_flow_info.get().write.to_string())
+pub fn client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::I64(
+        stream_info.client_stream_flow_info.get().write,
+    ))
 }
 
-pub fn client_bytes_received(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.client_stream_flow_info.get().read.to_string())
+pub fn client_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::I64(
+        stream_info.client_stream_flow_info.get().read,
+    ))
 }
 
-pub fn upstream_bytes_sent(stream_info: &StreamInfo) -> Option<String> {
-    Some(
-        stream_info
-            .upstream_stream_flow_info
-            .get()
-            .write
-            .to_string(),
-    )
+pub fn upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::I64(
+        stream_info.upstream_stream_flow_info.get().write,
+    ))
 }
 
-pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<String> {
-    Some(stream_info.upstream_stream_flow_info.get().read.to_string())
+pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    Some(VarAnyData::I64(
+        stream_info.upstream_stream_flow_info.get().read,
+    ))
 }
 
-pub fn is_open_ebpf(stream_info: &StreamInfo) -> Option<String> {
+pub fn is_open_ebpf(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.is_open_ebpf {
-        return Some("ebpf".to_string());
+        return Some(VarAnyData::ArcString(EBPF.clone()));
     }
     return None;
 }
 
-pub fn open_sendfile(stream_info: &StreamInfo) -> Option<String> {
+pub fn open_sendfile(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.open_sendfile.is_some() {
-        return Some(format!("{:?}", stream_info.open_sendfile.as_ref().unwrap()));
+        return Some(VarAnyData::Str(stream_info.open_sendfile.clone().unwrap()));
     }
     return None;
 }
 
-pub fn upstream_dispatch(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_dispatch(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.ups_dispatch.is_some() {
-        return Some(format!("{:?}", stream_info.ups_dispatch.as_ref().unwrap()));
+        return Some(VarAnyData::Str(stream_info.ups_dispatch.clone().unwrap()));
     }
     return None;
 }
 
-pub fn is_proxy_protocol_hello(stream_info: &StreamInfo) -> Option<String> {
+pub fn is_proxy_protocol_hello(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.is_proxy_protocol_hello {
-        return Some("proxy_protocol_hello".to_string());
+        return Some(VarAnyData::ArcString(PROXY_PROTOCOL_HELLO.clone()));
     }
     return None;
 }
 
-pub fn buffer_cache(stream_info: &StreamInfo) -> Option<String> {
+pub fn buffer_cache(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.buffer_cache.is_some() {
-        return Some(stream_info.buffer_cache.clone().unwrap().to_string());
+        return Some(VarAnyData::ArcStr(
+            stream_info.buffer_cache.clone().unwrap(),
+        ));
     }
     return None;
 }
 
-pub fn upstream_curr_stream_size(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_curr_stream_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
@@ -392,10 +401,10 @@ pub fn upstream_curr_stream_size(stream_info: &StreamInfo) -> Option<String> {
         .unwrap()
         .load(Ordering::SeqCst);
 
-    return Some(peer_stream_size.to_string());
+    return Some(VarAnyData::Usize(peer_stream_size));
 }
 
-pub fn upstream_max_stream_size(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_max_stream_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
@@ -410,12 +419,12 @@ pub fn upstream_max_stream_size(stream_info: &StreamInfo) -> Option<String> {
     }
 
     let upstream_connect_info = stream_info.upstream_connect_info.get();
-    let max_stream_size = upstream_connect_info.max_stream_size.as_ref().unwrap();
+    let max_stream_size = upstream_connect_info.max_stream_size.clone().unwrap();
 
-    return Some(max_stream_size.to_string());
+    return Some(VarAnyData::Usize(max_stream_size));
 }
 
-pub fn upstream_min_stream_cache_size(stream_info: &StreamInfo) -> Option<String> {
+pub fn upstream_min_stream_cache_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
@@ -429,32 +438,29 @@ pub fn upstream_min_stream_cache_size(stream_info: &StreamInfo) -> Option<String
         return None;
     }
     let upstream_connect_info = stream_info.upstream_connect_info.get();
-    let min_stream_cache_size = upstream_connect_info
-        .min_stream_cache_size
-        .as_ref()
-        .unwrap();
+    let min_stream_cache_size = upstream_connect_info.min_stream_cache_size.clone().unwrap();
 
-    return Some(min_stream_cache_size.to_string());
+    return Some(VarAnyData::Usize(min_stream_cache_size));
 }
 
-pub fn write_max_block_time_ms(stream_info: &StreamInfo) -> Option<String> {
+pub fn write_max_block_time_ms(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.write_max_block_time_ms == 0 {
         return None;
     }
-    return Some(stream_info.write_max_block_time_ms.to_string());
+    return Some(VarAnyData::U128(stream_info.write_max_block_time_ms));
 }
 
-pub fn is_timeout_exit(stream_info: &StreamInfo) -> Option<String> {
+pub fn is_timeout_exit(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if !stream_info.is_timeout_exit {
         return None;
     }
-    return Some("timeout exit".to_string());
+    return Some(VarAnyData::ArcString(TIMEOUT_EXIT.clone()));
 }
 
-pub fn total_read_size(stream_info: &StreamInfo) -> Option<String> {
-    return Some(stream_info.total_read_size.to_string());
+pub fn total_read_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    return Some(VarAnyData::U64(stream_info.total_read_size));
 }
 
-pub fn total_write_size(stream_info: &StreamInfo) -> Option<String> {
-    return Some(stream_info.total_write_size.to_string());
+pub fn total_write_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    return Some(VarAnyData::U64(stream_info.total_write_size));
 }

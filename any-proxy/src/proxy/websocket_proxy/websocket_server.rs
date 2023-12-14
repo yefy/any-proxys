@@ -7,6 +7,7 @@ use crate::Protocol77;
 use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
@@ -44,7 +45,11 @@ impl WebsocketServer {
         let mut ups_request: Request = Request::new(());
         let mut req_uri = "".to_string();
 
-        self.arg.stream_info.get_mut().protocol77 = Some(Protocol77::WebSocket);
+        if self.arg.server_stream_info.is_tls {
+            self.arg.stream_info.get_mut().client_protocol77 = Some(Protocol77::WebSockets);
+        } else {
+            self.arg.stream_info.get_mut().client_protocol77 = Some(Protocol77::WebSocket);
+        }
 
         let copy_headers_callback = |request: &Request,
                                      response: Response|
@@ -121,6 +126,7 @@ impl WebsocketServer {
         }
         log::debug!("ws_host:{}", ws_host);
         let (domain, _) = host_and_port(&ws_host);
+        let domain = ArcString::new(domain.to_string());
 
         let scc = proxy_util::parse_proxy_domain(
             &self.arg,
@@ -128,13 +134,18 @@ impl WebsocketServer {
                 let hello = proxy_hello;
                 Ok(hello)
             },
-            || async { Ok(domain.to_string()) },
+            || async { Ok(domain) },
         )
         .await?;
 
         let (is_proxy_protocol_hello, connect_func) =
             proxy_util::upsteam_connect_info(self.arg.stream_info.clone(), scc.clone()).await?;
         let upstream_is_tls = connect_func.is_tls().await;
+        if upstream_is_tls {
+            self.arg.stream_info.get_mut().upstream_protocol77 = Some(Protocol77::WebSockets);
+        } else {
+            self.arg.stream_info.get_mut().upstream_protocol77 = Some(Protocol77::WebSocket);
+        }
         let upstream_host = connect_func.host().await?;
         let upstream_stream =
             proxy_util::upsteam_do_connect(self.arg.stream_info.clone(), connect_func)

@@ -115,21 +115,33 @@ impl Protocol7 {
 
 pub enum Protocol77 {
     Http,
+    Http2,
     WebSocket,
+    Https,
+    Https2,
+    WebSockets,
 }
 
 impl Protocol77 {
     pub fn to_string(&self) -> String {
         match self {
             Protocol77::Http => "http".to_string(),
+            Protocol77::Http2 => "http2".to_string(),
             Protocol77::WebSocket => "webSocket".to_string(),
+            Protocol77::Https => "https".to_string(),
+            Protocol77::Https2 => "https2".to_string(),
+            Protocol77::WebSockets => "webSockets".to_string(),
         }
     }
 
     pub fn from_string(name: &str) -> Result<Protocol77> {
         match name {
             "http" => Ok(Protocol77::Http),
+            "http2" => Ok(Protocol77::Http2),
             "webSocket" => Ok(Protocol77::WebSocket),
+            "https" => Ok(Protocol77::Https),
+            "https2" => Ok(Protocol77::Https2),
+            "webSockets" => Ok(Protocol77::WebSockets),
             _ => {
                 return Err(anyhow!("err:Protocol77 nil"));
             }

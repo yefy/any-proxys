@@ -16,6 +16,7 @@ pub struct HttpStream {
     http_arg: ServerArg,
     scc: ShareRw<StreamConfigContext>,
     upstream_stream: Option<StreamFlow>,
+    is_single: bool,
 }
 
 impl HttpStream {
@@ -23,11 +24,13 @@ impl HttpStream {
         http_arg: ServerArg,
         scc: ShareRw<StreamConfigContext>,
         upstream_stream: StreamFlow,
+        is_single: bool,
     ) -> HttpStream {
         HttpStream {
             http_arg,
             scc,
             upstream_stream: Some(upstream_stream),
+            is_single,
         }
     }
 
@@ -66,7 +69,7 @@ impl proxy::Stream for HttpStream {
         #[cfg(unix)]
         let upstream_sendfile = ArcMutexTokio::default();
 
-        let ret = if false {
+        let ret = if self.is_single {
             StreamStream::stream_to_stream_single(
                 self.scc.clone(),
                 stream_info.clone(),

@@ -9,6 +9,7 @@ use crate::util;
 use crate::Protocol7;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -154,7 +155,7 @@ impl Listener {
             Box::new(Connection::new(
                 new_conn,
                 remote_addr,
-                domain,
+                domain.into(),
                 self.config.clone(),
                 self.addr.clone(),
             )?),
@@ -180,7 +181,7 @@ impl server::Listener for Listener {
 pub struct Connection {
     conn: quinn::Connection,
     remote_addr: SocketAddr,
-    domain: String,
+    domain: ArcString,
     config: Arc<Config>,
     listen_addr: SocketAddr,
 }
@@ -189,7 +190,7 @@ impl Connection {
     pub fn new(
         conn: quinn::Connection,
         remote_addr: SocketAddr,
-        domain: String,
+        domain: ArcString,
         config: Arc<Config>,
         listen_addr: SocketAddr,
     ) -> Result<Connection> {

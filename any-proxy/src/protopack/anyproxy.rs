@@ -1,4 +1,5 @@
 use crate::io::buf_reader::BufReader;
+use any_base::util::ArcString;
 use any_tunnel::protopack;
 use any_tunnel::protopack::TUNNEL_VERSION;
 use any_tunnel2::protopack as protopack2;
@@ -23,12 +24,12 @@ pub struct AnyproxyHeader {
     pub body_size: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnyproxyHello {
-    pub version: String,
-    pub request_id: String,
+    pub version: ArcString,
+    pub request_id: ArcString,
     pub client_addr: SocketAddr,
-    pub domain: String,
+    pub domain: ArcString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

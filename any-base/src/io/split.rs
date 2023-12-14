@@ -1,6 +1,7 @@
 use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+use crate::util::StreamMsg;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::io;
@@ -128,7 +129,7 @@ impl<T: AsyncReadMsg> crate::io::async_read_msg::AsyncReadMsg for ReadHalf<T> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_read_msg(cx, msg_size)
     }

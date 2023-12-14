@@ -205,7 +205,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             .cloned()
             .unwrap();
         let connect = Box::new(quic_connect::Connect::new(
-            host,
+            host.into(),
             addr.clone(),
             self.quic.ssl_domain.clone(),
             endpoints,

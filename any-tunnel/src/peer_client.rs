@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use any_base::executor_local_spawn::Runtime;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use lazy_static::lazy_static;
 lazy_static! {
     static ref PEER_CLIENT_NUM: AtomicU32 = AtomicU32::new(0);
@@ -93,7 +94,7 @@ pub struct PeerClientContext {
     peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
     stream_wait_group: Arc<WaitGroup>,
     peer_stream_to_peer_client_rx: async_channel::Receiver<TunnelPack>,
-    session_id: ArcMutex<String>,
+    session_id: ArcMutex<ArcString>,
     peer_client_order_pack_id: Arc<AtomicU32>,
     peer_stream_connect: Option<Arc<Box<dyn PeerStreamConnect>>>,
     peer_stream_size: Arc<AtomicUsize>,
@@ -125,7 +126,7 @@ impl PeerClientContext {
     pub async fn client_create_peer_stream(
         &self,
         client_info: Option<(i32, u32)>,
-    ) -> Result<Option<(SocketAddr, SocketAddr, Option<String>)>> {
+    ) -> Result<Option<(SocketAddr, SocketAddr, Option<ArcString>)>> {
         let (peer_stream_key, min_stream_cache_size) = self
             .get_or_create_peer_stream()
             .await
@@ -253,7 +254,7 @@ impl PeerClientContext {
         peer_stream_key: Arc<PeerStreamKey>,
         client_info: Option<(i32, u32)>,
         min_stream_cache_size: usize,
-    ) -> Result<(String, TunnelHello)> {
+    ) -> Result<(ArcString, TunnelHello)> {
         let session_id = {
             if self.session_id.is_some() {
                 let session_id_ = self.session_id.get();
@@ -275,6 +276,7 @@ impl PeerClientContext {
                     peer_stream_key.remote_addr,
                     Local::now().timestamp_millis(),
                 );
+                let session_id = ArcString::new(session_id);
                 self.session_id.set(session_id.clone());
                 session_id
             }
@@ -294,7 +296,7 @@ impl PeerClientContext {
         mut tunnel_hello: Option<TunnelHello>,
         peer_stream_key: &PeerStreamKey,
         min_stream_cache_size: usize,
-        session_id: Option<String>,
+        session_id: Option<ArcString>,
         peer_stream_id: Option<usize>,
     ) -> Result<Option<()>> {
         let stream_to_peer_stream_rx = {
@@ -359,7 +361,7 @@ impl PeerClient {
         peer_client_to_stream_tx: PeerClientToStreamSender,
         peer_stream_connect: Option<Arc<Box<dyn PeerStreamConnect>>>,
         client_context: Option<Arc<ClientContext>>,
-        session_id: Option<String>,
+        session_id: Option<ArcString>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
         server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
@@ -506,7 +508,7 @@ impl PeerClient {
             .as_ref()
             .unwrap()
             .get_mut()
-            .delete(session_id);
+            .delete(session_id.string());
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -662,7 +664,7 @@ impl PeerClient {
         peer_stream_key: Option<&Arc<PeerStreamKey>>,
         min_stream_cache_size: usize,
         peer_stream_size: Option<Arc<AtomicUsize>>,
-        session_id: Option<String>,
+        session_id: Option<ArcString>,
         server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
         peer_stream_id: Option<usize>,
@@ -672,7 +674,7 @@ impl PeerClient {
         Stream,
         SocketAddr,
         SocketAddr,
-        Option<String>,
+        Option<ArcString>,
     )> {
         let (peer_client_to_stream_tx, peer_client_to_stream_rx) =
             async_channel::bounded(channel_size);
@@ -780,7 +782,7 @@ impl PeerClient {
         key: String,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
         client_context: Option<Arc<ClientContext>>,
         stream: StreamFlow,
         accept_tx: Option<AcceptSenderType>,

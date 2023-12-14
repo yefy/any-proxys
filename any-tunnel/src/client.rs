@@ -4,6 +4,7 @@ use super::stream::Stream;
 use crate::peer_stream::PeerStreamKey;
 use any_base::executor_local_spawn::Runtime;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -132,7 +133,7 @@ impl Client {
 
     pub async fn connect(
         &self,
-        request_id: Option<String>,
+        request_id: Option<ArcString>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
         run_time: Arc<Box<dyn Runtime>>,
@@ -144,7 +145,7 @@ impl Client {
 
     pub async fn do_connect(
         &self,
-        request_id: Option<String>,
+        request_id: Option<ArcString>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
         run_time: Arc<Box<dyn Runtime>>,

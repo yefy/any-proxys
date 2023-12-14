@@ -2,6 +2,7 @@ use super::protopack::TunnelData;
 use crate::anychannel::AnyAsyncReceiver;
 use crate::StreamPackToStreamReceiver;
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::util::StreamMsg;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -148,8 +149,8 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         _msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
-        return Poll::Ready(Ok(Vec::new()));
+    ) -> Poll<io::Result<StreamMsg>> {
+        return Poll::Ready(Ok(StreamMsg::new()));
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {

@@ -39,9 +39,11 @@ use any_base::module::module::Modules;
 use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
 use any_base::typ;
 use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
+use any_base::util::StreamMsg;
 use anyhow::Result;
 use dynamic_pool::{DynamicPool, DynamicPoolItem, DynamicReset};
 use std::collections::LinkedList;
+use std::mem::swap;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -98,7 +100,7 @@ pub struct StreamCacheFile {
 }
 
 pub struct StreamCacheBuffer {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
     pub start: u64,
     pub size: u64,
     pub is_cache: bool,
@@ -106,7 +108,7 @@ pub struct StreamCacheBuffer {
     pub file_fd: i32,
     pub read_size: u64,
     pub min_size: usize,
-    msg: Option<Vec<u8>>,
+    msg: Option<StreamMsg>,
 }
 
 impl Default for StreamCacheBuffer {
@@ -137,20 +139,38 @@ impl StreamCacheBuffer {
         }
     }
 
+    pub fn push_msg(&mut self, msg: StreamMsg) {
+        if self.msg.is_none() {
+            self.msg = Some(msg);
+        } else {
+            self.msg.as_mut().unwrap().push_msg(msg);
+        }
+    }
     pub fn data_raw(&mut self) -> &mut Vec<u8> {
         return &mut self.data;
     }
 
-    pub fn data(&mut self, start: usize, end: usize) -> &mut [u8] {
-        if self.msg.is_some() {
-            return &mut self.msg.as_mut().unwrap()[start..end];
-        }
+    pub fn data_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
         return &mut self.data.as_mut_slice()[start..end];
     }
 
-    pub fn msg(&mut self, start: usize, end: usize) -> Vec<u8> {
+    pub fn data_or_msg(&mut self, start: usize, end: usize) -> &[u8] {
         if self.msg.is_some() {
-            return self.msg.take().unwrap();
+            self.msg.as_mut().unwrap().init_and_data(start, end)
+        } else {
+            &self.data.as_mut_slice()[start..end]
+        }
+    }
+
+    pub fn to_msg(&mut self, start: usize, end: usize) -> Vec<u8> {
+        if self.msg.is_some() {
+            return self.msg.take().unwrap().to_vec();
+        }
+        if start == 0 && end == self.size as usize {
+            let mut data = Vec::with_capacity(end);
+            swap(&mut self.data, &mut data);
+            unsafe { data.set_len(end) };
+            return data;
         }
         return self.data.as_slice()[start..end].to_vec();
     }
@@ -179,12 +199,26 @@ impl StreamCacheBuffer {
             data_size.unwrap()
         };
 
-        if self.data.len() < data_size {
+        if self.data.capacity() < data_size {
             self.data.resize(data_size, 0);
-        } else {
-            unsafe { self.data.set_len(data_size) };
         }
+
+        unsafe { self.data.set_len(data_size) };
         self.size = data_size as u64;
+    }
+
+    fn resize_ext(&mut self, data_size: usize) {
+        let size = self.min_size + data_size;
+        self.resize(Some(size))
+    }
+
+    fn resize_curr_size(&mut self) {
+        let size = self.size as usize;
+        self.resize(Some(size))
+    }
+
+    fn set_len(&mut self, size: usize) {
+        unsafe { self.data.set_len(size) };
     }
 }
 
@@ -240,6 +274,7 @@ pub struct StreamStreamShare {
     buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
     plugins: Vec<Option<ArcUnsafeAny>>,
     is_first_write: bool,
+    is_cache: bool,
 }
 
 impl StreamStreamShare {
@@ -283,11 +318,9 @@ impl StreamStreamShare {
         return false;
     }
 
-    pub async fn stream_status_sleep(stream_status: StreamStatus) {
+    pub async fn stream_status_sleep(stream_status: StreamStatus, is_client: bool) {
         match stream_status {
             StreamStatus::Limit => {
-                //___test___
-                //log::warn!("StreamStatus::Limit");
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
             StreamStatus::Full(info) => {
@@ -296,16 +329,17 @@ impl StreamStreamShare {
                 } else {
                     LIMIT_SLEEP_TIME_MILLIS
                 };
-                //___test___
-                //log::warn!("StreamStatus::StreamFull");
                 tokio::time::sleep(std::time::Duration::from_millis(sleep_time)).await;
             }
             StreamStatus::Ok(_) => {
-                log::error!("err:StreamStatus::Ok");
+                log::error!("err:{} -> StreamStatus::Ok", get_flag(is_client));
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
             StreamStatus::DataEmpty => {
-                log::error!("err:StreamStatus::DataEmpty");
+                log::error!(
+                    "err:{} -> StreamStatus::DataEmpty from sleep",
+                    get_flag(is_client)
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
         };

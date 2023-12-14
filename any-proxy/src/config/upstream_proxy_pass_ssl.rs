@@ -201,7 +201,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             return Err(anyhow!("err:tcp.tcp={}", tcp_str));
         }
         let connect = Box::new(ssl_connect::Connect::new(
-            host,
+            host.into(),
             addr.clone(),
             self.ssl.ssl_domain.clone(),
             tcp_config.unwrap(),

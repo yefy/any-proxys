@@ -1,15 +1,15 @@
 # anyproxy
-rust编写高性能、高度模块化和插件化的四层,七层代理服务器，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、websockets、ebpf等
+rust编写高性能、高度模块化和插件化的四层和七层代理服务，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、websockets、ebpf等
 
 # any-tunnel
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
 
 # 特点
-底层tokio异步io框架  
-多线程无锁并发  
+tokio异步io框架  
+linux reuseport多线程无锁并发  
 多线程有锁并发  
-类似nginx高度模块化和插件化框架，快速添加协议监听和代理回源（包括tcp、quic、ssl、srt、http、websocket等），
-动态添加模块，配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承、配置合并和继承(代码参考any-proxys/any-proxy/src/config)      
+类似nginx高度模块化和插件化框架，快速添加server和client回源（包括tcp、quic、ssl、srt、http、websocket等）   
+支持动态添加模块，配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承、配置合并和继承(代码参考any-proxys/any-proxy/src/config)        
 可以快速基于tcp、quic、ssl、http、websocket添加插件解析私有协议，处理自己业务  
 高性能  
 内存安全  
@@ -66,7 +66,7 @@ upstream 配置多主机回源并支持负载均衡
 负载均衡算法--加权轮询,轮询,随机,固定hash, 动态hash,fair加载时间长短智能的进行负载均衡   
 支持心跳检查  
 支持动态域名解析  
-支持ebpf导流  
+支持ebpf代理和导流  
 linux零拷贝技术sendfile  
 cpu绑定  
 linux reuseport  

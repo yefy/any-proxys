@@ -5,6 +5,7 @@ use crate::config::http_core_plugin::PluginHandleStream;
 use crate::proxy::get_flag;
 use crate::proxy::{StreamStatus, StreamStreamShare};
 use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny, ShareRw};
+use any_base::util::StreamMsg;
 use anyhow::Result;
 use anyhow::{anyhow, Error};
 use dynamic_pool::DynamicPoolItem;
@@ -120,7 +121,7 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     }
     let read_buffer_ret = sss.get_mut().read_buffer_ret.take().unwrap();
     let mut buffer = sss.get_mut().read_buffer.take().unwrap();
-    if let Err(ref e) = read_buffer_ret {
+    let is_left = if let Err(ref e) = read_buffer_ret {
         let mut sss = sss.get_mut();
         log::trace!("{}, read_err = Some(ret)", get_flag(sss.is_client));
         if e.kind() != std::io::ErrorKind::ConnectionReset {
@@ -131,6 +132,7 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
             get_flag(sss.is_client),
             e
         )));
+        false
     } else {
         let mut stream_info = stream_info.get_mut();
         let mut ssd = ssd.get_mut();
@@ -150,26 +152,56 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
             buffer.read_size
         );
 
-        if sss.read_err.is_none()
-            && buffer.msg.is_none()
-            && buffer.size != buffer.read_size
-            && cs.is_stream_cache_merge
-            && !plugin.is_first_buffer
-        {
-            if !sss.is_write_empty() {
-                if buffer.read_size < cs.min_read_buffer_size as u64 {
-                    sss.read_buffer = Some(buffer);
-                    return Ok(());
+        let is_left = if buffer.is_cache {
+            if cs.max_stream_cache_size > 0 {
+                ssd.stream_cache_size -= size as i64;
+                if ssd.stream_cache_size > 0 {
+                    true
+                } else {
+                    false
                 }
             } else {
-                if old_read_size <= 0 && buffer.read_size < cs.min_read_buffer_size as u64 {
+                false
+            }
+        } else {
+            if cs.max_tmp_file_size > 0 {
+                ssd.tmp_file_size -= size as i64;
+                if ssd.tmp_file_size > 0 {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if is_left
+            && sss.read_err.is_none()
+            && sss.is_cache
+            && buffer.size != buffer.read_size
+            && cs.is_open_stream_cache_merge
+            && !plugin.is_first_buffer
+        {
+            let is_write_empty = sss.is_write_empty();
+            if buffer.read_size < cs.min_read_buffer_size as u64 {
+                if !is_write_empty || (is_write_empty && old_read_size <= 0) {
+                    ssd.total_read_size -= size;
+                    stream_info.total_read_size -= size;
+                    if buffer.is_cache {
+                        ssd.stream_cache_size += size as i64;
+                    } else {
+                        ssd.tmp_file_size += size as i64;
+                    }
                     sss.read_buffer = Some(buffer);
                     return Ok(());
                 }
             }
         }
         plugin.is_first_buffer = false;
-    }
+        is_left
+    };
+
     if buffer.read_size == 0 {
         return Ok(());
     }
@@ -178,36 +210,12 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     let mut size = buffer.size;
 
     if buffer.is_cache {
-        let mut ssd = ssd.get_mut();
         let mut sss = sss.get_mut();
-
-        if cs.max_stream_cache_size > 0 {
-            ssd.stream_cache_size -= size as i64;
-        }
-        //let last_cache = sss.caches.back_mut();
-        // if buffer.msg.is_none() && last_cache.is_some() {
-        //     let last_cache = last_cache.unwrap();
-        //     if let StreamCache::Buffer(last_cache) = last_cache {
-        //         if last_cache.msg.is_none() {
-        //             if last_cache.size < cs.min_merge_cache_buffer_size
-        //                 || buffer.size < cs.min_merge_cache_buffer_size
-        //             {
-        //                 let buffer_end = buffer.size as usize;
-        //                 let resize = last_cache.size as usize;
-        //                 last_cache.resize(Some(resize));
-        //                 last_cache
-        //                     .data_raw()
-        //                     .extend_from_slice(buffer.data(0, buffer_end));
-        //                 last_cache.size += buffer.size;
-        //                 return Ok(());
-        //             }
-        //         }
-        //     }
-        // }
         sss.caches.push_back(StreamCache::Buffer(buffer));
         return Ok(());
     }
-    if buffer.msg.is_none() && cs.is_tmp_file_io_page {
+
+    if cs.is_tmp_file_io_page && is_left {
         let plugin = plugin.get_mut::<StreamStreamTmpFile>();
         let mut sss = sss.get_mut();
 
@@ -226,26 +234,40 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
                 }
                 buffer.size = size - left_size;
                 buffer.read_size = buffer.size;
-                let copy_start = buffer.size;
+                let copy_start = buffer.size as usize;
+                let copy_end = size as usize;
+                size = buffer.size;
+
                 let mut write_buffer = sss.buffer_pool.get().take();
-                write_buffer
-                    .data_raw()
-                    .extend_from_slice(buffer.data(copy_start as usize, size as usize));
+                write_buffer.is_cache = false;
+                write_buffer.resize_ext(left_size as usize);
+                if buffer.msg.is_some() {
+                    let mut msg = StreamMsg::new();
+                    let datas = buffer.data_or_msg(copy_start, copy_end).to_vec();
+                    msg.push(datas);
+                    write_buffer.push_msg(msg);
+                } else {
+                    write_buffer.set_len(0);
+                    write_buffer
+                        .data_raw()
+                        .extend_from_slice(buffer.data_or_msg(copy_start, copy_end));
+                    write_buffer.resize_curr_size();
+                }
                 write_buffer.read_size = left_size;
-                write_buffer.resize(None);
                 sss.read_buffer = Some(write_buffer);
 
-                size = buffer.size;
+                ssd.get_mut().total_read_size -= left_size;
+                stream_info.get_mut().total_read_size -= left_size;
+                ssd.get_mut().tmp_file_size += left_size as i64;
             }
         }
     }
 
-    ssd.get_mut().tmp_file_size -= size as i64;
     let fw = plugin.get_mut::<StreamStreamTmpFile>().fw.clone();
     let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
         let mut fw = fw.get_mut();
         let ret = fw
-            .write_all(buffer.data(0, size as usize))
+            .write_all(buffer.data_or_msg(0, size as usize))
             .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
         match ret {
             Ok(_) => {
@@ -378,9 +400,9 @@ pub async fn read_buffer(
             }
             StreamCache::File(file) => {
                 let mut buffer = sss.get_mut().buffer_pool.get_mut().take();
+                buffer.is_cache = false;
                 buffer.resize(Some(file.size as usize));
                 buffer.file_fd = file.file_fd;
-                buffer.size = file.size;
                 buffer.seek = file.seek;
 
                 let ret = loop {
@@ -395,12 +417,12 @@ pub async fn read_buffer(
                     let ret: std::result::Result<DynamicPoolItem<StreamCacheBuffer>, Error> =
                         tokio::task::spawn_blocking(move || {
                             let end_size = buffer.size as usize;
-                            let ret =
-                                fr.get_mut()
-                                    .read_exact(buffer.data(0, end_size))
-                                    .map_err(|e| {
-                                        anyhow!("err:fr.read_exact => e:{}, size:{}", e, file.size)
-                                    });
+                            let ret = fr
+                                .get_mut()
+                                .read_exact(buffer.data_mut(0, end_size))
+                                .map_err(|e| {
+                                    anyhow!("err:fr.read_exact => e:{}, size:{}", e, file.size)
+                                });
                             match ret {
                                 Ok(_) => return Ok(buffer),
                                 Err(err) => return Err(err),
@@ -455,7 +477,7 @@ pub async fn write(
                 //
             }
             StreamStatus::DataEmpty => {
-                log::error!("err:StreamStatus::DataEmpty");
+                log::error!("err:StreamStatus::DataEmpty from write");
             }
         }
     }

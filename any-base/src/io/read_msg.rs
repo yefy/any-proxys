@@ -1,4 +1,5 @@
 use crate::io::async_read_msg::AsyncReadMsg;
+use crate::util::StreamMsg;
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
@@ -43,9 +44,9 @@ impl<R> Future for ReadMsg<'_, R>
 where
     R: AsyncReadMsg + Unpin + ?Sized,
 {
-    type Output = io::Result<Vec<u8>>;
+    type Output = io::Result<StreamMsg>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<Vec<u8>>> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<StreamMsg>> {
         let me = self.project();
         Pin::new(me.reader).poll_read_msg(cx, *me.msg_size)
     }

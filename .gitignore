@@ -30,3 +30,10 @@ logs
 *.signal
 *.exe
 *.o
+ab
+ab.exe
+ab.log
+vmlinux.h
+any-proxy/examples/anyproxy/examples/anyproxy.exe
+any-proxy/examples/anyproxy/examples/anyproxy
+.output

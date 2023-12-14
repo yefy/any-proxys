@@ -170,7 +170,7 @@ impl proxy::Stream for PortStream {
                         return Err(anyhow!("err:not hello and local_domain.is_none()"));
                     }
                     let hello = protopack::anyproxy::AnyproxyHello {
-                        version: protopack::anyproxy::ANYPROXY_VERSION.to_string(),
+                        version: protopack::anyproxy::ANYPROXY_VERSION.into(),
                         request_id: format!(
                             "{:?}_{}_{}_{}_{}",
                             stream_info.server_stream_info.local_addr,
@@ -178,7 +178,8 @@ impl proxy::Stream for PortStream {
                             unsafe { libc::getpid() },
                             session_id.fetch_add(1, Ordering::Relaxed),
                             Local::now().timestamp_millis()
-                        ),
+                        )
+                        .into(),
                         client_addr: stream_info.server_stream_info.remote_addr.clone(),
                         domain: stream_info.local_domain.clone().unwrap(),
                     };

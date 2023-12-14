@@ -7,6 +7,7 @@ use crate::Protocol7;
 use any_base::executor_local_spawn::Runtime;
 use any_base::stream_flow::{StreamFlow, StreamFlowInfo};
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub struct ConnectContext {
-    host: String,
+    host: ArcString,
     address: SocketAddr, //ip:port, domain:port
     tcp_config: TcpConfig,
     ssl_domain: String,
@@ -27,7 +28,7 @@ pub struct Connect {
 
 impl Connect {
     pub fn new(
-        host: String,
+        host: ArcString,
         address: SocketAddr, //ip:port, domain:port
         ssl_domain: String,
         tcp_config: TcpConfig,
@@ -47,7 +48,7 @@ impl Connect {
 impl connect::Connect for Connect {
     async fn connect(
         &self,
-        _request_id: Option<String>,
+        _request_id: Option<ArcString>,
         stream_info: ArcMutex<StreamFlowInfo>,
         _run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(StreamFlow, ConnectInfo)> {
@@ -102,7 +103,7 @@ impl connect::Connect for Connect {
         Ok(self.context.address.clone())
     }
 
-    async fn host(&self) -> Result<String> {
+    async fn host(&self) -> Result<ArcString> {
         Ok(self.context.host.clone())
     }
     async fn is_tls(&self) -> bool {
@@ -111,7 +112,7 @@ impl connect::Connect for Connect {
     async fn protocol7(&self) -> String {
         Protocol7::Ssl.to_string()
     }
-    async fn domain(&self) -> String {
+    async fn domain(&self) -> ArcString {
         self.context.host.clone()
     }
 }

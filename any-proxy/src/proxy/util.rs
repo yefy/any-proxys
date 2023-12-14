@@ -4,6 +4,7 @@ use crate::proxy::{stream_var, ServerArg, StreamConfigContext};
 use crate::stream::connect::Connect;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::{Share, ShareRw};
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -20,7 +21,7 @@ where
     S: FnOnce() -> SF,
     SF: Future<Output = Result<Option<(AnyproxyHello, usize)>>>,
     D: FnOnce() -> DF,
-    DF: Future<Output = Result<String>>,
+    DF: Future<Output = Result<ArcString>>,
 {
     arg.stream_info.get_mut().add_work_time("hello");
     let hello = {
@@ -53,7 +54,7 @@ where
 
                 let server_stream_info = arg.stream_info.get().server_stream_info.clone();
                 AnyproxyHello {
-                    version: ANYPROXY_VERSION.to_string(),
+                    version: ANYPROXY_VERSION.into(),
                     request_id: format!(
                         "{:?}_{}_{}_{}_{}",
                         server_stream_info.local_addr,
@@ -61,7 +62,8 @@ where
                         unsafe { libc::getpid() },
                         common_core_conf.session_id.fetch_add(1, Ordering::Relaxed),
                         Local::now().timestamp_millis()
-                    ),
+                    )
+                    .into(),
                     client_addr: server_stream_info.remote_addr.clone(),
                     domain,
                 }
@@ -115,7 +117,13 @@ pub async fn upsteam_connect_info(
     let client_ip = if client_ip.is_none() {
         stream_info.get().server_stream_info.remote_addr.to_string()
     } else {
-        client_ip.unwrap()
+        use crate::util::var::VarAnyData;
+        let client_ip = client_ip.unwrap();
+        if let VarAnyData::Str(client_ip) = client_ip {
+            client_ip
+        } else {
+            return Err(anyhow!("err:client_ip"));
+        }
     };
     let scc = scc.get();
     stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;

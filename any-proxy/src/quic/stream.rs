@@ -1,4 +1,5 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::util::StreamMsg;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::future::Future;
@@ -49,7 +50,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         /*
         let mut is_err = false;
         let mut value: Option<Vec<u8>> = None;
@@ -117,10 +118,10 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
          */
 
         let mut is_err = false;
-        let mut vecs = any_base::util::Vecs::new();
+        let mut stream_msg = StreamMsg::new();
         loop {
             if is_err {
-                return Poll::Ready(Ok(vecs.to_vec()));
+                return Poll::Ready(Ok(stream_msg));
             }
 
             let mut read_chunk = Box::pin(self.stream_rx.read_chunk(msg_size, true));
@@ -135,14 +136,14 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     continue;
                 }
                 Poll::Ready(Ok(Some(data))) => {
-                    vecs.push(data.bytes.into());
-                    if vecs.len() >= msg_size {
-                        return Poll::Ready(Ok(vecs.to_vec()));
+                    stream_msg.push(data.bytes.into());
+                    if stream_msg.len() >= msg_size {
+                        return Poll::Ready(Ok(stream_msg));
                     }
                 }
                 Poll::Pending => {
-                    if vecs.len() > 0 {
-                        return Poll::Ready(Ok(vecs.to_vec()));
+                    if stream_msg.len() > 0 {
+                        return Poll::Ready(Ok(stream_msg));
                     } else {
                         return Poll::Pending;
                     }

@@ -1,6 +1,7 @@
 /*
 域名解析器，支持全域名， 范域名， 全匹配
  */
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use regex::Regex;
@@ -14,7 +15,7 @@ pub struct DomainIndex {
 }
 
 impl DomainIndex {
-    pub fn new(domains: &HashMap<i32, (String, i32)>) -> Result<DomainIndex> {
+    pub fn new(domains: &HashMap<i32, (ArcString, i32)>) -> Result<DomainIndex> {
         let mut domain_map = HashMap::new();
         let mut domain_regex_map = HashMap::new();
         let mut full_match_index: Option<i32> = None;

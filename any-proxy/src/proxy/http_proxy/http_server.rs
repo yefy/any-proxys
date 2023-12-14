@@ -20,6 +20,7 @@ use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ThreadRuntime;
 use any_base::io::buf_reader::BufReader;
 use any_base::typ::{ArcMutex, Share, ShareRw};
+use any_base::util::ArcString;
 use base64::{engine::general_purpose, Engine as _};
 use http::header::HOST;
 use hyper::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
@@ -85,7 +86,7 @@ pub async fn do_http_handle(
 ) -> Result<Response<Body>> {
     let http_host = util::get_http_host(&mut req)?;
     let (domain, _) = host_and_port(&http_host);
-    let domain = domain.to_string();
+    let domain = ArcString::new(domain.to_string());
     let hello_str = req.headers().get(&*HTTP_HELLO_KEY).cloned();
 
     use crate::config::http_core;
@@ -97,7 +98,15 @@ pub async fn do_http_handle(
         Some(arg.executors.clone()),
     );
     let stream_info = Share::new(stream_info);
-    stream_info.get_mut().protocol77 = Some(Protocol77::Http);
+    let version = req.version();
+    match version {
+        Version::HTTP_2 => {
+            stream_info.get_mut().client_protocol77 = Some(Protocol77::Http2);
+        }
+        _ => {
+            stream_info.get_mut().client_protocol77 = Some(Protocol77::Http);
+        }
+    }
 
     let http_arg = ServerArg {
         ms: arg.ms.clone(),
@@ -182,6 +191,7 @@ impl HttpServer {
         scc: ShareRw<StreamConfigContext>,
         mut req: Request<Body>,
     ) -> Result<Response<Body>> {
+        log::trace!("client req = {:#?}", req);
         let (is_proxy_protocol_hello, connect_func) =
             proxy_util::upsteam_connect_info(self.http_arg.stream_info.clone(), scc.clone())
                 .await?;
@@ -203,16 +213,16 @@ impl HttpServer {
             );
         }
 
-        log::trace!("client req = {:#?}", req);
+        let version = req.version();
         let protocol7 = connect_func.protocol7().await;
         let upstream_is_tls = connect_func.is_tls().await;
+
         //let upstream_host = connect_func.host().await?;
         let upstream_host = req.headers().get(HOST);
         if upstream_host.is_none() {
             return Err(anyhow!("host nil"));
         }
         let upstream_host = upstream_host.unwrap().to_str().unwrap();
-        let version = req.version();
 
         let proxy = {
             let scc = scc.get();
@@ -229,6 +239,15 @@ impl HttpServer {
                 _ => Version::HTTP_11,
             },
         };
+
+        match upstream_version {
+            Version::HTTP_2 => {
+                self.http_arg.stream_info.get_mut().upstream_protocol77 = Some(Protocol77::Http2);
+            }
+            _ => {
+                self.http_arg.stream_info.get_mut().upstream_protocol77 = Some(Protocol77::Http);
+            }
+        }
 
         let upstream_scheme = if upstream_is_tls { "https" } else { "http" };
         let url_string = format!(
@@ -296,6 +315,12 @@ impl HttpServer {
             #[cfg(feature = "anyspawn-count")]
             format!("{}:{}", file!(), line!()),
             move |_| async move {
+                let is_single = match version {
+                    Version::HTTP_2 => false,
+                    Version::HTTP_3 => false,
+                    _ => true,
+                };
+
                 let client_stream = Stream::new(req_body, res_sender);
                 let client_stream = StreamFlow::new(0, client_stream);
 
@@ -307,7 +332,7 @@ impl HttpServer {
                 let mut shutdown_thread_rx = http_arg.executors.shutdown_thread_tx.subscribe();
                 tokio::select! {
                     biased;
-                    ret = HttpStream::new(http_arg, scc, upstream_stream)
+                    ret = HttpStream::new(http_arg, scc, upstream_stream, is_single)
                                 .start(client_stream) => {
                         return ret;
                     }

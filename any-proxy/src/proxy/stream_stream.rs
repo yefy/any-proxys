@@ -498,6 +498,7 @@ impl StreamStream {
             write_err: None,
             plugins,
             is_first_write: true,
+            is_cache: false,
         };
         let sss = ShareRw::new(sss);
 

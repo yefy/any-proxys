@@ -3,6 +3,7 @@ use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use any_tunnel::server as tunnel_server;
 use any_tunnel::stream as tunnel_stream;
 use anyhow::anyhow;
@@ -43,7 +44,7 @@ impl server::Listener for Listener {
             tunnel_stream::Stream,
             SocketAddr,
             SocketAddr,
-            Option<String>,
+            Option<ArcString>,
         )> = async {
             match self.listener.accept().await {
                 Ok(stream) => return Ok(stream),
@@ -75,7 +76,7 @@ pub struct Connection {
     stream: Option<tunnel_stream::Stream>,
     remote_addr: Option<SocketAddr>,
     local_addr: Option<SocketAddr>,
-    domain: Option<String>,
+    domain: Option<ArcString>,
     stream_send_timeout: usize,
     stream_recv_timeout: usize,
     is_tls: bool,
@@ -87,7 +88,7 @@ impl Connection {
         stream: tunnel_stream::Stream,
         remote_addr: SocketAddr,
         local_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
         stream_send_timeout: usize,
         stream_recv_timeout: usize,
         is_tls: bool,

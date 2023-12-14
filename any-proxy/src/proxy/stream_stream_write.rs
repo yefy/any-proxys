@@ -91,6 +91,7 @@ pub async fn do_handle_run(
     let curr_limit_rate = sss.get().ssc.curr_limit_rate.clone();
 
     let mut _is_sendfile = false;
+
     let mut n = buffer.size - buffer.start;
     let curr_limit_rate_num = curr_limit_rate.load(Ordering::Relaxed);
     let limit_rate_size = if cs.max_limit_rate <= 0 {
@@ -143,15 +144,15 @@ pub async fn do_handle_run(
         let start = buffer.start as usize;
         let end = (buffer.start + n) as usize;
 
-        log::trace!("write:{:?}", buffer.data(start, end));
+        //log::trace!("write:{:?}", buffer.data_or_msg(start, end));
         #[cfg(feature = "anyproxy-write-block-time-ms")]
         let write_start_time = Instant::now();
 
         let write_size = if w.is_write_msg().await {
-            let msg = buffer.msg(start, end);
+            let msg = buffer.to_msg(start, end);
             w.write_msg(msg).await? as u64
         } else {
-            w.write(buffer.data(start, end)).await? as u64
+            w.write(buffer.data_or_msg(start, end)).await? as u64
         };
 
         #[cfg(feature = "anyproxy-write-block-time-ms")]

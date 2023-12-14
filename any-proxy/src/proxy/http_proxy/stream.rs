@@ -1,5 +1,6 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
 use any_base::typ::ArcMutexTokio;
+use any_base::util::StreamMsg;
 use anyhow::anyhow;
 use anyhow::Result;
 use hyper::body::HttpBody;
@@ -154,7 +155,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         /*
         let mut value: Option<Vec<u8>> = None;
         loop {
@@ -249,18 +250,17 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         }
 
          */
-
-        let mut vecs = any_base::util::Vecs::new();
+        let mut stream_msg = StreamMsg::new();
         loop {
             if self.is_read_close() {
-                return Poll::Ready(Ok(vecs.to_vec()));
+                return Poll::Ready(Ok(stream_msg));
             }
 
             let datas = self.read_buf_take();
             if datas.is_some() {
-                vecs.push(datas.unwrap());
-                if vecs.len() >= msg_size {
-                    return Poll::Ready(Ok(vecs.to_vec()));
+                stream_msg.push(datas.unwrap());
+                if stream_msg.len() >= msg_size {
+                    return Poll::Ready(Ok(stream_msg));
                 }
             }
 
@@ -279,8 +279,8 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     continue;
                 }
                 Poll::Pending => {
-                    if vecs.len() > 0 {
-                        return Poll::Ready(Ok(vecs.to_vec()));
+                    if stream_msg.len() > 0 {
+                        return Poll::Ready(Ok(stream_msg));
                     } else {
                         return Poll::Pending;
                     }

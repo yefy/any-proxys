@@ -7,6 +7,7 @@ use any_base::executor_local_spawn::Runtime;
 use any_base::stream::StreamReadWriteTokio;
 use any_base::stream_flow::StreamReadWriteFlow;
 use any_base::typ::ArcMutex;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use hashbrown::HashMap;
@@ -44,7 +45,7 @@ impl Listener {
         }
     }
 
-    pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
+    pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr, Option<ArcString>)> {
         loop {
             let accept = self
                 .server
@@ -81,7 +82,7 @@ impl Publish {
         rw: RW,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
     ) -> Result<()> {
         use any_base::stream::Stream;
         let rw = Stream::new(rw);
@@ -94,7 +95,7 @@ impl Publish {
         rw: RW,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
     ) -> Result<()> {
         self.server
             .create_accept_connect(
@@ -151,7 +152,7 @@ impl Server {
         stream: StreamFlow,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        domain: Option<String>,
+        domain: Option<ArcString>,
         accept_tx: AcceptSenderType,
         run_time: Arc<Box<dyn Runtime>>,
     ) -> Result<()> {
@@ -175,13 +176,13 @@ impl Server {
         &self,
         accept_rx: &mut AcceptReceiverType,
         run_time: Arc<Box<dyn Runtime>>,
-    ) -> Result<(Stream, SocketAddr, SocketAddr, Option<String>)> {
+    ) -> Result<(Stream, SocketAddr, SocketAddr, Option<ArcString>)> {
         loop {
             let recv_msg = accept_rx
                 .recv()
                 .await
                 .map_err(|e| anyhow!("er:to_server_rx => e:{}", e))?;
-            let ret: Result<Option<(Stream, SocketAddr, SocketAddr, Option<String>)>> = async {
+            let ret: Result<Option<(Stream, SocketAddr, SocketAddr, Option<ArcString>)>> = async {
                 let recv_msg = match recv_msg {
                     ServerRecv::ServerRecvHello(recv_msg) => recv_msg,
                 };
@@ -284,7 +285,7 @@ impl Server {
                 {
                     self.context
                         .get_mut()
-                        .insert(session_id.clone(), Some(peer_client.clone()));
+                        .insert(session_id.string(), Some(peer_client.clone()));
                 }
 
                 Ok(Some((stream, local_addr, remote_addr, domain)))

@@ -14,6 +14,7 @@ use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::module::module::Modules;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::{ArcMutexTokio, Share};
+use any_base::util::ArcString;
 use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
@@ -149,7 +150,7 @@ impl proxy::Stream for DomainStream {
                 .await
                 .map_err(|e| anyhow!("err:ssl_hello::read_domain => e:{}", e))?;
                 let domain = match domain {
-                    Some(domain) => domain,
+                    Some(domain) => ArcString::new(domain),
                     None => {
                         if server_stream_info.domain.is_none() {
                             return Err(anyhow!("err:domain null"));

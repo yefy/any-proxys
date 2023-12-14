@@ -1,9 +1,11 @@
 use crate::config as conf;
 use crate::config::http_core_plugin::PluginHandleStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
+use crate::proxy::StreamCacheBuffer;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny};
+use any_base::util::ArcString;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::atomic::Ordering;
@@ -16,7 +18,8 @@ lazy_static! {
 pub struct ConfStream {
     pub buffer_cache: Arc<String>,
     pub stream_cache_size: i64,
-    pub is_stream_cache_merge: bool,
+    pub is_open_stream_cache_merge: bool,
+    pub is_open_stream_cache: bool,
     pub tmp_file_size: i64,
     pub limit_rate_after: i64,
     pub max_limit_rate: u64,
@@ -37,34 +40,32 @@ impl ConfStream {
         tmp_file_size: u64,
         limit_rate_after: u64,
         limit_rate: u64,
-        mut stream_cache_size: usize,
-        mut is_stream_cache_merge: bool,
+        stream_cache_size: usize,
+        is_open_stream_cache_merge: bool,
+        is_open_stream_cache: bool,
         is_tmp_file_io_page: bool,
         read_buffer_page_size: usize,
     ) -> Self {
-        use crate::proxy::StreamCacheBuffer;
         use crate::util::default_config;
 
-        let buffer_cache = if tmp_file_size > 0 && stream_cache_size > 0 {
-            "file_and_cache".to_string()
-        } else if tmp_file_size > 0 && stream_cache_size <= 0 {
-            "file".to_string()
-        } else if tmp_file_size <= 0 && stream_cache_size > 0 {
-            "cache".to_string()
+        let buffer_cache = if is_open_stream_cache {
+            if tmp_file_size > 0 && stream_cache_size > 0 {
+                "file_and_cache".to_string()
+            } else if tmp_file_size > 0 && stream_cache_size <= 0 {
+                "file".to_string()
+            } else {
+                "cache".to_string()
+            }
         } else {
-            is_stream_cache_merge = false;
             "memory".to_string()
         };
-        //http2.0 强制走cache
-        if stream_cache_size <= 0 {
-            stream_cache_size = StreamCacheBuffer::buffer_size();
-        }
 
         let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
         let mut ssc = ConfStream {
             buffer_cache: Arc::new(buffer_cache),
             stream_cache_size: stream_cache_size as i64,
-            is_stream_cache_merge,
+            is_open_stream_cache_merge,
+            is_open_stream_cache,
             tmp_file_size: tmp_file_size as i64,
             limit_rate_after: limit_rate_after as i64,
             max_limit_rate: limit_rate,
@@ -110,7 +111,9 @@ impl ConfStream {
 
 pub struct Conf {
     pub stream_cache_size: usize,
-    pub is_stream_cache_merge: bool,
+    pub is_open_stream_cache_merge: bool,
+    pub is_upload_open_stream_cache: bool,
+    pub is_download_open_stream_cache: bool,
     pub debug_is_open_stream_work_times: bool,
     pub debug_print_access_log_time: u64,
     pub debug_print_stream_flow_time: u64,
@@ -127,7 +130,7 @@ pub struct Conf {
     pub tcp_conf_name: String,
     pub quic_conf_name: String,
     pub is_proxy_protocol_hello: bool,
-    pub domain: String,
+    pub domain: ArcString,
     pub is_open_ebpf: bool,
     pub is_disable_share_http_context: bool,
     pub http_context: Arc<HttpContext>,
@@ -136,7 +139,7 @@ pub struct Conf {
     pub read_buffer_page_size: usize,
     pub is_port_direct_ebpf: bool,
 }
-const STREAM_CACHE_SIZE_DEFAULT: usize = 0; //131072
+const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
 const TCP_CONF_NAME_DEFAULT: &str = "tcp_config_1";
 const QUIC_CONF_NAME_DEFAULT: &str = "quic_config_1";
@@ -146,7 +149,9 @@ impl Conf {
     pub fn new() -> Self {
         Conf {
             stream_cache_size: STREAM_CACHE_SIZE_DEFAULT,
-            is_stream_cache_merge: true,
+            is_open_stream_cache_merge: true,
+            is_upload_open_stream_cache: false,
+            is_download_open_stream_cache: false,
             debug_is_open_stream_work_times: false,
             debug_print_access_log_time: 0,
             debug_print_stream_flow_time: 0,
@@ -163,12 +168,12 @@ impl Conf {
             tcp_conf_name: TCP_CONF_NAME_DEFAULT.to_string(),
             quic_conf_name: QUIC_CONF_NAME_DEFAULT.to_string(),
             is_proxy_protocol_hello: false,
-            domain: "".to_string(),
+            domain: ArcString::default(),
             is_open_ebpf: false,
             http_context: HTTP_CONTEXT.clone(),
             is_disable_share_http_context: false,
-            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, true, 2)),
-            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, true, 2)),
+            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, false, true, 2)),
+            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, false, true, 2)),
             read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
             is_port_direct_ebpf: false,
         }
@@ -186,8 +191,30 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
-            name: "is_stream_cache_merge".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(is_stream_cache_merge(ms, conf_arg, cmd, conf)),
+            name: "is_open_stream_cache_merge".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(is_open_stream_cache_merge(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "is_upload_open_stream_cache".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(is_upload_open_stream_cache(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "is_download_open_stream_cache".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(is_download_open_stream_cache(
+                ms, conf_arg, cmd, conf
+            )),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
@@ -464,8 +491,14 @@ async fn merge_conf(
         if child_conf.stream_cache_size == STREAM_CACHE_SIZE_DEFAULT {
             child_conf.stream_cache_size = parent_conf.stream_cache_size;
         }
-        if child_conf.is_stream_cache_merge == true {
-            child_conf.is_stream_cache_merge = parent_conf.is_stream_cache_merge;
+        if child_conf.is_open_stream_cache_merge == true {
+            child_conf.is_open_stream_cache_merge = parent_conf.is_open_stream_cache_merge;
+        }
+        if child_conf.is_upload_open_stream_cache == false {
+            child_conf.is_upload_open_stream_cache = parent_conf.is_upload_open_stream_cache;
+        }
+        if child_conf.is_download_open_stream_cache == false {
+            child_conf.is_download_open_stream_cache = parent_conf.is_download_open_stream_cache;
         }
         if child_conf.debug_is_open_stream_work_times == false {
             child_conf.debug_is_open_stream_work_times =
@@ -519,7 +552,7 @@ async fn merge_conf(
         if child_conf.is_proxy_protocol_hello == false {
             child_conf.is_proxy_protocol_hello = parent_conf.is_proxy_protocol_hello;
         }
-        if child_conf.domain == "".to_string() {
+        if child_conf.domain == ArcString::default() {
             child_conf.domain = parent_conf.domain.clone();
         }
         if child_conf.is_open_ebpf == false {
@@ -544,7 +577,8 @@ async fn merge_conf(
             child_conf.download_limit_rate_after,
             child_conf.download_limit_rate,
             child_conf.stream_cache_size,
-            child_conf.is_stream_cache_merge,
+            child_conf.is_open_stream_cache_merge,
+            child_conf.is_download_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
         ));
@@ -554,7 +588,8 @@ async fn merge_conf(
             child_conf.upload_limit_rate_after,
             child_conf.upload_limit_rate,
             child_conf.stream_cache_size,
-            child_conf.is_stream_cache_merge,
+            child_conf.is_open_stream_cache_merge,
+            child_conf.is_upload_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
         ));
@@ -562,24 +597,22 @@ async fn merge_conf(
         use super::http_core_plugin;
         let http_core_plugin_conf = http_core_plugin::main_conf(&ms).await;
 
-        let plugin_handle_stream =
-            if child_conf.stream_cache_size > 0 || child_conf.download.tmp_file_size > 0 {
-                http_core_plugin_conf.plugin_handle_stream_cache.clone()
-            } else {
-                http_core_plugin_conf.plugin_handle_stream_memory.clone()
-            };
+        let plugin_handle_stream = if child_conf.is_download_open_stream_cache {
+            http_core_plugin_conf.plugin_handle_stream_cache.clone()
+        } else {
+            http_core_plugin_conf.plugin_handle_stream_memory.clone()
+        };
         child_conf
             .download
             .plugin_handle_stream
             .set(plugin_handle_stream.get().await.clone())
             .await;
 
-        let plugin_handle_stream =
-            if child_conf.stream_cache_size > 0 || child_conf.upload.tmp_file_size > 0 {
-                http_core_plugin_conf.plugin_handle_stream_cache.clone()
-            } else {
-                http_core_plugin_conf.plugin_handle_stream_memory.clone()
-            };
+        let plugin_handle_stream = if child_conf.is_upload_open_stream_cache {
+            http_core_plugin_conf.plugin_handle_stream_cache.clone()
+        } else {
+            http_core_plugin_conf.plugin_handle_stream_memory.clone()
+        };
         child_conf
             .upload
             .plugin_handle_stream
@@ -621,19 +654,55 @@ async fn stream_cache_size(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.stream_cache_size = *conf_arg.value.get::<usize>();
+    if c.stream_cache_size <= 0 {
+        c.stream_cache_size = StreamCacheBuffer::buffer_size();
+    }
     log::trace!("c.stream_cache_size:{:?}", c.stream_cache_size);
     return Ok(());
 }
 
-async fn is_stream_cache_merge(
+async fn is_open_stream_cache_merge(
     _ms: module::Modules,
     conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    c.is_stream_cache_merge = *conf_arg.value.get::<bool>();
-    log::trace!("c.is_stream_cache_merge:{:?}", c.is_stream_cache_merge);
+    c.is_open_stream_cache_merge = *conf_arg.value.get::<bool>();
+    log::trace!(
+        "c.is_open_stream_cache_merge:{:?}",
+        c.is_open_stream_cache_merge
+    );
+    return Ok(());
+}
+
+async fn is_upload_open_stream_cache(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.is_upload_open_stream_cache = *conf_arg.value.get::<bool>();
+    log::trace!(
+        "c.is_upload_open_stream_cache:{:?}",
+        c.is_upload_open_stream_cache
+    );
+    return Ok(());
+}
+
+async fn is_download_open_stream_cache(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.is_download_open_stream_cache = *conf_arg.value.get::<bool>();
+    log::trace!(
+        "c.is_download_open_stream_cache:{:?}",
+        c.is_download_open_stream_cache
+    );
     return Ok(());
 }
 
@@ -866,7 +935,7 @@ async fn domain(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    c.domain = conf_arg.value.get::<String>().clone();
+    c.domain = conf_arg.value.get::<String>().clone().into();
 
     log::trace!("c.domain:{:?}", c.domain);
     return Ok(());

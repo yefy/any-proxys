@@ -2,6 +2,7 @@ use crate::io::is_read_msg::is_read_msg;
 use crate::io::is_read_msg::IsReadMsg;
 use crate::io::read_msg::read_msg;
 use crate::io::read_msg::ReadMsg;
+use crate::util::StreamMsg;
 use std::io;
 use std::ops::DerefMut;
 use std::pin::Pin;
@@ -57,7 +58,7 @@ pub trait AsyncReadMsg {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>>;
+    ) -> Poll<io::Result<StreamMsg>>;
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool>;
 }
 
@@ -67,7 +68,7 @@ macro_rules! deref_async_read_msg {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             msg_size: usize,
-        ) -> Poll<io::Result<Vec<u8>>> {
+        ) -> Poll<io::Result<StreamMsg>> {
             Pin::new(&mut **self).poll_read_msg(cx, msg_size)
         }
         fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
@@ -93,7 +94,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<Vec<u8>>> {
+    ) -> Poll<io::Result<StreamMsg>> {
         self.get_mut().as_mut().poll_read_msg(cx, msg_size)
     }
 
