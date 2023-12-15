@@ -1,10 +1,7 @@
 use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
 use crate::proxy::{get_flag, StreamStatus};
-use crate::proxy::{
-    StreamStreamShare, LIMIT_SLEEP_TIME_MILLIS, MIN_SLEEP_TIME_MILLIS, NORMAL_SLEEP_TIME_MILLIS,
-    NOT_SLEEP_TIME_MILLIS, SENDFILE_FULL_SLEEP_TIME_MILLIS,
-};
+use crate::proxy::{StreamStreamShare, LIMIT_SLEEP_TIME_MILLIS, NORMAL_SLEEP_TIME_MILLIS};
 use any_base::io::async_read_msg::AsyncReadMsgExt;
 use any_base::io::async_stream::AsyncStreamExt;
 use any_base::typ::{ArcRwLockTokio, ShareRw};
@@ -174,7 +171,7 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
                 let ret: std::io::Result<usize> = async {
                     tokio::select! {
                         biased;
-                        _= tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        _= tokio::time::sleep(std::time::Duration::from_millis(1000)) => {
                             return Ok(0);
                         },
                         _= close_wait => {
@@ -252,23 +249,16 @@ pub async fn read(
         return Err(anyhow!("err:!is_find"));
     }
 
+    //limit  full DataEmpty
     let ret: std::io::Result<usize> = async {
         let sleep_read_time_millis = match &sss.get().stream_status {
             StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
-            StreamStatus::Full(info) => {
-                if info.is_sendfile {
-                    SENDFILE_FULL_SLEEP_TIME_MILLIS
-                } else {
-                    NOT_SLEEP_TIME_MILLIS
-                }
+            StreamStatus::Full => {
+                0
             }
-            StreamStatus::Ok(_) => NOT_SLEEP_TIME_MILLIS,
+            StreamStatus::Ok(_) => 0,
             StreamStatus::DataEmpty => {
-                if buffer.read_size > 0 {
-                    MIN_SLEEP_TIME_MILLIS
-                } else {
-                    NORMAL_SLEEP_TIME_MILLIS
-                }
+                NORMAL_SLEEP_TIME_MILLIS
             }
         };
 
@@ -283,44 +273,56 @@ pub async fn read(
         let r = sss.get().r.clone();
         let mut r = r.get_mut().await;
         if r.is_read_msg().await {
-            tokio::select! {
-                biased;
-                ret = r.read_msg(read_buffer_size) => {
-                    let msg = ret?;
-                    let n = msg.len();
-                    buffer.push_msg(msg);
-                    return Ok(n);
-                },
-                _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
-                    return Ok(0);
-                },
-                 _= read_wait => {
-                    return Ok(0);
-                },
-                else => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                    "err:do_stream_to_stream_or_file select close"
-                )));
+            if sleep_read_time_millis > 0 {
+                tokio::select! {
+                    biased;
+                    ret = r.read_msg(read_buffer_size) => {
+                        let msg = ret?;
+                        let n = msg.len();
+                        buffer.push_msg(msg);
+                        return Ok(n);
+                    },
+                    _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
+                        return Ok(0);
+                    },
+                     _= read_wait => {
+                        return Ok(0);
+                    },
+                    else => {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
+                        "err:do_stream_to_stream_or_file select close"
+                    )));
+                    }
                 }
+            } else {
+                let msg  = r.try_read_msg(read_buffer_size).await?;
+                let n = msg.len();
+                buffer.push_msg(msg);
+                return Ok(n);
             }
         } else {
-            tokio::select! {
-                biased;
-                ret = r.read(buffer.data_mut(start_size, end_size)) => {
-                    let n = ret?;
-                    return Ok(n);
-                },
-                _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
-                    return Ok(0);
-                },
-                 _= read_wait => {
-                    return Ok(0);
-                },
-                else => {
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                    "err:do_stream_to_stream_or_file select close"
-                )));
+            if sleep_read_time_millis > 0 {
+                tokio::select! {
+                    biased;
+                    ret = r.read(buffer.data_mut(start_size, end_size)) => {
+                        let n = ret?;
+                        return Ok(n);
+                    },
+                    _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
+                        return Ok(0);
+                    },
+                     _= read_wait => {
+                        return Ok(0);
+                    },
+                    else => {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
+                        "err:do_stream_to_stream_or_file select close"
+                    )));
+                    }
                 }
+            } else {
+               let n = r.try_read(buffer.data_mut(start_size, end_size)).await?;
+                return Ok(n);
             }
         }
     }

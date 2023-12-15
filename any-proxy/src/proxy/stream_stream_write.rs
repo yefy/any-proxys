@@ -2,7 +2,7 @@ use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
 #[cfg(unix)]
 use crate::proxy::SENDFILE_WRITEABLE_MILLIS;
-use crate::proxy::{get_flag, StreamStatus, StreamStatusFull, StreamStreamShare};
+use crate::proxy::{get_flag, StreamStatus, StreamStreamShare};
 #[cfg(unix)]
 use any_base::io::async_stream::AsyncStreamExt;
 use any_base::io::async_write_msg::AsyncWriteMsgExt;
@@ -61,13 +61,13 @@ pub async fn handle_run(
             get_flag(sss.get().is_client),
             e
         )));
-        sss.get_mut().stream_status = StreamStatus::Full(StreamStatusFull::default());
+        sss.get_mut().stream_status = StreamStatus::Full;
     } else {
         let status = ret?;
         sss.get_mut().stream_status = status;
     }
 
-    if buffer.start < buffer.size {
+    if buffer.start < buffer.read_size {
         sss.get_mut().write_buffer = Some(buffer);
     }
 
@@ -81,6 +81,7 @@ pub async fn handle_run(
     }
 }
 
+//limit ok full
 pub async fn do_handle_run(
     sss: ShareRw<StreamStreamShare>,
     buffer: &mut DynamicPoolItem<StreamCacheBuffer>,
@@ -92,7 +93,7 @@ pub async fn do_handle_run(
 
     let mut _is_sendfile = false;
 
-    let mut n = buffer.size - buffer.start;
+    let mut n = buffer.read_size - buffer.start;
     let curr_limit_rate_num = curr_limit_rate.load(Ordering::Relaxed);
     let limit_rate_size = if cs.max_limit_rate <= 0 {
         n
@@ -133,7 +134,7 @@ pub async fn do_handle_run(
                 .await;
             if let Err(e) = wn {
                 if e.kind() == std::io::ErrorKind::WouldBlock {
-                    return Ok(StreamStatus::Full(StreamStatusFull::new(_is_sendfile, 0)));
+                    return Ok(StreamStatus::Full);
                 }
                 return Err(e);
             }
@@ -194,8 +195,8 @@ pub async fn do_handle_run(
         }
     }
 
-    if wn != n {
-        return Ok(StreamStatus::Full(StreamStatusFull::new(_is_sendfile, wn)));
+    if wn < n {
+        return Ok(StreamStatus::Full);
     }
     return Ok(StreamStatus::Ok(wn));
 }

@@ -375,7 +375,7 @@ impl Anyproxy {
                     return AnyproxyState::Skip;
                 }
             },
-             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+             _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
                return Anyproxy::load_signal_file();
             },
             else => {

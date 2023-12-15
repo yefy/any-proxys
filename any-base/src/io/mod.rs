@@ -9,5 +9,7 @@ pub mod is_single;
 pub mod is_write_msg;
 pub mod read_msg;
 pub mod split;
+pub mod try_read;
+pub mod try_read_msg;
 pub mod writable;
 pub mod write_msg;

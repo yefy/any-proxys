@@ -19,6 +19,7 @@ pub struct ConfStream {
     pub buffer_cache: Arc<String>,
     pub stream_cache_size: i64,
     pub is_open_stream_cache_merge: bool,
+    pub open_stream_cache_merge_mil_time: u64,
     pub is_open_stream_cache: bool,
     pub tmp_file_size: i64,
     pub limit_rate_after: i64,
@@ -27,7 +28,6 @@ pub struct ConfStream {
     pub max_tmp_file_size: u64,
     pub is_tmp_file_io_page: bool,
     pub page_size: usize,
-    pub min_merge_cache_buffer_size: u64,
     pub min_cache_buffer_size: usize,
     pub min_read_buffer_size: usize,
     pub min_cache_file_size: usize,
@@ -42,6 +42,7 @@ impl ConfStream {
         limit_rate: u64,
         stream_cache_size: usize,
         is_open_stream_cache_merge: bool,
+        open_stream_cache_merge_mil_time: u64,
         is_open_stream_cache: bool,
         is_tmp_file_io_page: bool,
         read_buffer_page_size: usize,
@@ -65,6 +66,7 @@ impl ConfStream {
             buffer_cache: Arc::new(buffer_cache),
             stream_cache_size: stream_cache_size as i64,
             is_open_stream_cache_merge,
+            open_stream_cache_merge_mil_time,
             is_open_stream_cache,
             tmp_file_size: tmp_file_size as i64,
             limit_rate_after: limit_rate_after as i64,
@@ -73,7 +75,6 @@ impl ConfStream {
             max_tmp_file_size: tmp_file_size,
             is_tmp_file_io_page,
             page_size,
-            min_merge_cache_buffer_size: (page_size / 2) as u64,
             min_cache_buffer_size: StreamCacheBuffer::buffer_size(),
             min_read_buffer_size: page_size,
             min_cache_file_size: page_size * 256,
@@ -112,6 +113,7 @@ impl ConfStream {
 pub struct Conf {
     pub stream_cache_size: usize,
     pub is_open_stream_cache_merge: bool,
+    pub open_stream_cache_merge_mil_time: u64,
     pub is_upload_open_stream_cache: bool,
     pub is_download_open_stream_cache: bool,
     pub debug_is_open_stream_work_times: bool,
@@ -145,11 +147,13 @@ const TCP_CONF_NAME_DEFAULT: &str = "tcp_config_1";
 const QUIC_CONF_NAME_DEFAULT: &str = "quic_config_1";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
 const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 2;
+const OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT: u64 = 100;
 impl Conf {
     pub fn new() -> Self {
         Conf {
             stream_cache_size: STREAM_CACHE_SIZE_DEFAULT,
             is_open_stream_cache_merge: true,
+            open_stream_cache_merge_mil_time: OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT,
             is_upload_open_stream_cache: false,
             is_download_open_stream_cache: false,
             debug_is_open_stream_work_times: false,
@@ -172,8 +176,8 @@ impl Conf {
             is_open_ebpf: false,
             http_context: HTTP_CONTEXT.clone(),
             is_disable_share_http_context: false,
-            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, false, true, 2)),
-            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, false, true, 2)),
+            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
+            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
             read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
             is_port_direct_ebpf: false,
         }
@@ -193,6 +197,16 @@ lazy_static! {
         module::Cmd {
             name: "is_open_stream_cache_merge".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(is_open_stream_cache_merge(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "open_stream_cache_merge_mil_time".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(open_stream_cache_merge_mil_time(
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
@@ -494,6 +508,10 @@ async fn merge_conf(
         if child_conf.is_open_stream_cache_merge == true {
             child_conf.is_open_stream_cache_merge = parent_conf.is_open_stream_cache_merge;
         }
+        if child_conf.open_stream_cache_merge_mil_time == OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT {
+            child_conf.open_stream_cache_merge_mil_time =
+                parent_conf.open_stream_cache_merge_mil_time;
+        }
         if child_conf.is_upload_open_stream_cache == false {
             child_conf.is_upload_open_stream_cache = parent_conf.is_upload_open_stream_cache;
         }
@@ -578,6 +596,7 @@ async fn merge_conf(
             child_conf.download_limit_rate,
             child_conf.stream_cache_size,
             child_conf.is_open_stream_cache_merge,
+            child_conf.open_stream_cache_merge_mil_time,
             child_conf.is_download_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
@@ -589,6 +608,7 @@ async fn merge_conf(
             child_conf.upload_limit_rate,
             child_conf.stream_cache_size,
             child_conf.is_open_stream_cache_merge,
+            child_conf.open_stream_cache_merge_mil_time,
             child_conf.is_upload_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
@@ -673,6 +693,24 @@ async fn is_open_stream_cache_merge(
         "c.is_open_stream_cache_merge:{:?}",
         c.is_open_stream_cache_merge
     );
+    return Ok(());
+}
+
+async fn open_stream_cache_merge_mil_time(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.open_stream_cache_merge_mil_time = *conf_arg.value.get::<u64>();
+    log::trace!(
+        "c.open_stream_cache_merge_mil_time:{:?}",
+        c.open_stream_cache_merge_mil_time
+    );
+    if c.open_stream_cache_merge_mil_time <= 0 {
+        c.open_stream_cache_merge_mil_time = OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT;
+    }
     return Ok(());
 }
 

@@ -34,6 +34,7 @@ use crate::proxy::stream_info::StreamInfo;
 use crate::stream::server::ServerStreamInfo;
 use crate::util::default_config;
 use any_base::executor_local_spawn::ExecutorsLocal;
+use any_base::future_wait::FutureWait;
 use any_base::module::module;
 use any_base::module::module::Modules;
 use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
@@ -44,7 +45,7 @@ use anyhow::Result;
 use dynamic_pool::{DynamicPool, DynamicPoolItem, DynamicReset};
 use std::collections::LinkedList;
 use std::mem::swap;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub struct StreamConfigContext {
@@ -236,15 +237,16 @@ pub struct StreamStreamContext {
     pub cs: Arc<ConfStream>,
     pub curr_limit_rate: Arc<AtomicI64>,
     pub ssd: ArcRwLock<StreamStreamData>,
+    pub delay_wait: FutureWait,
+    pub delay_wait_stop: FutureWait,
+    pub delay_ok: Arc<AtomicBool>,
+    pub is_delay: Arc<AtomicBool>,
 }
 
-const LIMIT_SLEEP_TIME_MILLIS: u64 = 300;
+const LIMIT_SLEEP_TIME_MILLIS: u64 = 500;
 const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 5;
-const NOT_SLEEP_TIME_MILLIS: u64 = 5;
-const MIN_SLEEP_TIME_MILLIS: u64 = 10;
-const SENDFILE_FULL_SLEEP_TIME_MILLIS: u64 = 50;
 #[cfg(unix)]
-const SENDFILE_WRITEABLE_MILLIS: u64 = 10;
+const SENDFILE_WRITEABLE_MILLIS: u64 = 100;
 
 pub fn get_flag(is_client: bool) -> &'static str {
     if is_client {
@@ -278,6 +280,21 @@ pub struct StreamStreamShare {
 }
 
 impl StreamStreamShare {
+    pub fn delay_start(&self) {
+        if self.ssc.is_delay.load(Ordering::SeqCst) {
+            return;
+        }
+        self.ssc.delay_wait.waker();
+    }
+
+    pub fn delay_stop(&self) {
+        if !self.ssc.is_delay.load(Ordering::SeqCst) {
+            return;
+        }
+        self.ssc.delay_wait_stop.waker();
+        self.ssc.delay_ok.store(false, Ordering::SeqCst);
+    }
+
     pub fn is_read_empty(&self) -> bool {
         if self.read_buffer.is_none()
             || (self.read_buffer.is_some()
@@ -306,7 +323,7 @@ impl StreamStreamShare {
             let sendfile = _sss.get().sendfile.clone();
             let is_sendfile_some = sendfile.get().await.is_some();
             let _sss = _sss.get();
-            let is_stream_full = if let StreamStatus::Full(_) = _sss.stream_status {
+            let is_stream_full = if let StreamStatus::Full = _sss.stream_status {
                 true
             } else {
                 false
@@ -323,14 +340,7 @@ impl StreamStreamShare {
             StreamStatus::Limit => {
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            StreamStatus::Full(info) => {
-                let sleep_time = if info.is_sendfile {
-                    SENDFILE_FULL_SLEEP_TIME_MILLIS
-                } else {
-                    LIMIT_SLEEP_TIME_MILLIS
-                };
-                tokio::time::sleep(std::time::Duration::from_millis(sleep_time)).await;
-            }
+            StreamStatus::Full => {}
             StreamStatus::Ok(_) => {
                 log::error!("err:{} -> StreamStatus::Ok", get_flag(is_client));
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
@@ -347,30 +357,9 @@ impl StreamStreamShare {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamStatusFull {
-    pub is_sendfile: bool,
-    _write_size: u64,
-}
-
-impl Default for StreamStatusFull {
-    fn default() -> Self {
-        StreamStatusFull::new(false, 0)
-    }
-}
-
-impl StreamStatusFull {
-    pub fn new(is_sendfile: bool, _write_size: u64) -> StreamStatusFull {
-        StreamStatusFull {
-            is_sendfile,
-            _write_size,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub enum StreamStatus {
     Limit,
-    Full(StreamStatusFull),
+    Full,
     Ok(u64),
     DataEmpty,
 }

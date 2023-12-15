@@ -142,9 +142,24 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         return Poll::Ready(io::Result::Ok(()));
     }
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _msg_size: usize,
+    ) -> Poll<io::Result<StreamMsg>> {
+        return Poll::Ready(Ok(StreamMsg::new()));
+    }
+
     fn poll_read_msg(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,

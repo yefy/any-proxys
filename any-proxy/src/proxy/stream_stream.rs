@@ -7,12 +7,13 @@ use crate::protopack;
 use crate::proxy::{
     get_flag, util as proxy_util, StreamStatus, StreamStreamData, StreamStreamShare,
 };
+use any_base::future_wait::FutureWait;
 use any_base::stream_flow::{StreamFlow, StreamFlowRead, StreamFlowWrite};
 use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::LinkedList;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
@@ -294,6 +295,10 @@ impl StreamStream {
                 total_read_size: 0,
                 total_write_size: 0,
             }),
+            delay_wait: FutureWait::new(),
+            delay_wait_stop: FutureWait::new(),
+            delay_ok: Arc::new(AtomicBool::new(false)),
+            is_delay: Arc::new(AtomicBool::new(false)),
         };
 
         let upload = scc.get().http_core_conf().upload.clone();
@@ -307,6 +312,10 @@ impl StreamStream {
                 total_read_size: 0,
                 total_write_size: 0,
             }),
+            delay_wait: FutureWait::new(),
+            delay_wait_stop: FutureWait::new(),
+            delay_ok: Arc::new(AtomicBool::new(false)),
+            is_delay: Arc::new(AtomicBool::new(false)),
         };
 
         let ret: Result<()> = async {
@@ -365,6 +374,10 @@ impl StreamStream {
                 total_read_size: 0,
                 total_write_size: 0,
             }),
+            delay_wait: FutureWait::new(),
+            delay_wait_stop: FutureWait::new(),
+            delay_ok: Arc::new(AtomicBool::new(false)),
+            is_delay: Arc::new(AtomicBool::new(false)),
         };
 
         let upload = scc.get().http_core_conf().upload.clone();
@@ -378,6 +391,10 @@ impl StreamStream {
                 total_read_size: 0,
                 total_write_size: 0,
             }),
+            delay_wait: FutureWait::new(),
+            delay_wait_stop: FutureWait::new(),
+            delay_ok: Arc::new(AtomicBool::new(false)),
+            is_delay: Arc::new(AtomicBool::new(false)),
         };
 
         let is_fast_close = true;
@@ -435,6 +452,9 @@ impl StreamStream {
                 _ = StreamStream::limit_timeout_reset(ssc.clone()) => {
                     Ok(())
                 }
+                _ = StreamStream::delay_timeout_reset(is_client, ssc.clone(), stream_info.clone()) => {
+                    Ok(())
+                }
                 ret = StreamStream::do_stream_to_stream(
                     ssc,
                     scc.clone(),
@@ -461,6 +481,38 @@ impl StreamStream {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             ssc.curr_limit_rate
                 .store(ssc.cs.max_limit_rate as i64, Ordering::Relaxed);
+        }
+    }
+
+    pub async fn delay_timeout_reset(
+        is_client: bool,
+        ssc: StreamStreamContext,
+        stream_info: Share<StreamInfo>,
+    ) {
+        let open_stream_cache_merge_mil_time = ssc.cs.open_stream_cache_merge_mil_time;
+        loop {
+            ssc.delay_wait.clone().await;
+            ssc.is_delay.store(true, Ordering::SeqCst);
+            ssc.delay_ok.store(false, Ordering::SeqCst);
+
+            tokio::select! {
+                biased;
+                _ = ssc.delay_wait_stop.clone() => {
+                },
+                _= tokio::time::sleep(tokio::time::Duration::from_millis(open_stream_cache_merge_mil_time)) => {
+                    ssc.delay_ok.store(true, Ordering::SeqCst);
+                    let read_wait = if is_client {
+                        stream_info.get().upload_read.clone()
+                    } else {
+                        stream_info.get().download_read.clone()
+                    };
+                    read_wait.waker();
+                },
+                else => {
+                    continue;
+                }
+            }
+            ssc.is_delay.store(false, Ordering::SeqCst);
         }
     }
 

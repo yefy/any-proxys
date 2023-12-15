@@ -27,8 +27,8 @@ impl FutureWait {
 
     pub fn waker(&self) {
         let waker = self.waker.get_option_mut();
-        self.flag.set(true);
         if waker.is_some() {
+            self.flag.set(true);
             waker.clone().unwrap().wake();
         }
     }

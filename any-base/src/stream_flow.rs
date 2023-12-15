@@ -203,12 +203,15 @@ impl StreamFlow {
 
     */
 
-    fn read_flow(&mut self, ret: io::Result<usize>) -> io::Result<()> {
+    fn read_flow(&mut self, ret: io::Result<usize>, buffer_len: usize) -> io::Result<()> {
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let mut kind: ErrorKind = io::ErrorKind::NotFound;
         let mut parse_err = |ret: io::Result<usize>| -> Result<usize> {
             match ret {
                 Ok(0) => {
+                    if buffer_len == 0 {
+                        return Ok(0);
+                    }
                     stream_err = StreamFlowErr::ReadClose;
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:read_flow close"));
@@ -429,9 +432,49 @@ impl crate::io::async_stream::AsyncStream for StreamFlow {
             Poll::Pending => Poll::Pending,
         }
     }
+
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let ret = Pin::new(&mut *self.r).poll_try_read(cx, buf);
+        match ret {
+            Poll::Ready(ret) => {
+                let ret = if let Err(e) = ret {
+                    self.read_flow(io::Result::Err(e), 0)
+                } else {
+                    self.read_flow(io::Result::Ok(buf.filled().len()), 0)
+                };
+                Poll::Ready(ret)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
+    fn poll_try_read_msg(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamMsg>> {
+        let ret = Pin::new(&mut *self.r).poll_try_read_msg(cx, msg_size);
+        match ret {
+            Poll::Ready(ret) => match ret {
+                Err(e) => {
+                    self.read_flow(io::Result::Err(e), 0)?;
+                    return Poll::Ready(Ok(StreamMsg::new()));
+                }
+                Ok(data) => {
+                    self.read_flow(io::Result::Ok(data.len()), 0)?;
+                    return Poll::Ready(Ok(data));
+                }
+            },
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
     fn poll_read_msg(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -441,11 +484,11 @@ impl crate::io::async_read_msg::AsyncReadMsg for StreamFlow {
         match ret {
             Poll::Ready(ret) => match ret {
                 Err(e) => {
-                    self.read_flow(io::Result::Err(e))?;
+                    self.read_flow(io::Result::Err(e), 1)?;
                     return Poll::Ready(Ok(StreamMsg::new()));
                 }
                 Ok(data) => {
-                    self.read_flow(io::Result::Ok(data.len()))?;
+                    self.read_flow(io::Result::Ok(data.len()), 1)?;
                     return Poll::Ready(Ok(data));
                 }
             },
@@ -486,9 +529,9 @@ impl tokio::io::AsyncRead for StreamFlow {
         match ret {
             Poll::Ready(ret) => {
                 let ret = if let Err(e) = ret {
-                    self.read_flow(io::Result::Err(e))
+                    self.read_flow(io::Result::Err(e), 1)
                 } else {
-                    self.read_flow(io::Result::Ok(buf.filled().len()))
+                    self.read_flow(io::Result::Ok(buf.filled().len()), 1)
                 };
                 Poll::Ready(ret)
             }

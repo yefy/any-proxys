@@ -33,9 +33,40 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         return Poll::Ready(io::Result::Ok(()));
     }
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        use tokio::io::AsyncRead;
+        let ret = match &mut self.stream_data {
+            StreamData::C(data) => Pin::new(data).poll_read(cx, buf),
+            StreamData::S(data) => Pin::new(data).poll_read(cx, buf),
+            #[cfg(feature = "anyproxy-openssl")]
+            StreamData::Openssl(data) => Pin::new(data).poll_read(cx, buf),
+        };
+        match ret {
+            Poll::Pending => {
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Ready(ret) => {
+                if ret.is_err() {
+                    ret?;
+                }
+                return Poll::Ready(Ok(()));
+            }
+        }
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _msg_size: usize,
+    ) -> Poll<io::Result<StreamMsg>> {
+        return Poll::Ready(Ok(StreamMsg::new()));
+    }
     fn poll_read_msg(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,

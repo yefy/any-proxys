@@ -12,6 +12,7 @@ use dynamic_pool::DynamicPoolItem;
 use lazy_static::lazy_static;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::atomic::Ordering;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
 use tempfile::Builder;
@@ -119,6 +120,7 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     if sss.get_mut().read_buffer_ret.is_none() {
         return Ok(());
     }
+
     let read_buffer_ret = sss.get_mut().read_buffer_ret.take().unwrap();
     let mut buffer = sss.get_mut().read_buffer.take().unwrap();
     let is_left = if let Err(ref e) = read_buffer_ret {
@@ -142,7 +144,6 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         let size = read_buffer_ret? as u64;
         ssd.total_read_size += size;
         stream_info.total_read_size += size;
-        let old_read_size = buffer.read_size;
         buffer.read_size += size;
 
         log::trace!(
@@ -177,15 +178,18 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         };
 
         if is_left
+            && cs.is_open_stream_cache_merge
             && sss.read_err.is_none()
             && sss.is_cache
-            && buffer.size != buffer.read_size
-            && cs.is_open_stream_cache_merge
+            && buffer.read_size < buffer.size
             && !plugin.is_first_buffer
         {
-            let is_write_empty = sss.is_write_empty();
             if buffer.read_size < cs.min_read_buffer_size as u64 {
-                if !is_write_empty || (is_write_empty && old_read_size <= 0) {
+                if !sss.ssc.delay_ok.load(Ordering::SeqCst) {
+                    if sss.is_write_empty() {
+                        sss.delay_start();
+                    }
+
                     ssd.total_read_size -= size;
                     stream_info.total_read_size -= size;
                     if buffer.is_cache {
@@ -198,7 +202,6 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
                 }
             }
         }
-        plugin.is_first_buffer = false;
         is_left
     };
 
@@ -206,60 +209,80 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
         return Ok(());
     }
 
-    buffer.size = buffer.read_size;
-    let mut size = buffer.size;
-
-    if buffer.is_cache {
+    let mut size = buffer.read_size;
+    {
         let mut sss = sss.get_mut();
-        sss.caches.push_back(StreamCache::Buffer(buffer));
-        return Ok(());
-    }
-
-    if cs.is_tmp_file_io_page && is_left {
         let plugin = plugin.get_mut::<StreamStreamTmpFile>();
-        let mut sss = sss.get_mut();
 
-        let next_seek_end = (plugin.fw_seek / cs.page_size as u64 + 1) * cs.page_size as u64;
-        let fw_seek_end = plugin.fw_seek + size;
-        let fw_seek_page = (fw_seek_end / cs.page_size as u64) * cs.page_size as u64;
-        if fw_seek_end > next_seek_end {
-            let left_size = fw_seek_end - fw_seek_page;
-            if left_size > 0 {
-                if left_size >= size {
-                    log::error!(
-                        "err:left_size >= size => left_size:{}, size:{}",
-                        left_size,
-                        size
-                    );
-                }
-                buffer.size = size - left_size;
-                buffer.read_size = buffer.size;
-                let copy_start = buffer.size as usize;
-                let copy_end = size as usize;
-                size = buffer.size;
-
-                let mut write_buffer = sss.buffer_pool.get().take();
-                write_buffer.is_cache = false;
-                write_buffer.resize_ext(left_size as usize);
-                if buffer.msg.is_some() {
-                    let mut msg = StreamMsg::new();
-                    let datas = buffer.data_or_msg(copy_start, copy_end).to_vec();
-                    msg.push(datas);
-                    write_buffer.push_msg(msg);
-                } else {
-                    write_buffer.set_len(0);
-                    write_buffer
-                        .data_raw()
-                        .extend_from_slice(buffer.data_or_msg(copy_start, copy_end));
-                    write_buffer.resize_curr_size();
-                }
-                write_buffer.read_size = left_size;
-                sss.read_buffer = Some(write_buffer);
-
-                ssd.get_mut().total_read_size -= left_size;
-                stream_info.get_mut().total_read_size -= left_size;
-                ssd.get_mut().tmp_file_size += left_size as i64;
+        if buffer.is_cache {
+            sss.delay_stop();
+            if plugin.is_first_buffer {
+                plugin.is_first_buffer = false;
             }
+            sss.caches.push_back(StreamCache::Buffer(buffer));
+            return Ok(());
+        }
+
+        if is_left
+            && cs.is_tmp_file_io_page
+            && sss.read_err.is_none()
+            && sss.is_cache
+            && buffer.read_size < buffer.size
+            && !plugin.is_first_buffer
+        {
+            let fw_seek_end = plugin.fw_seek + size;
+            let fw_seek_left = fw_seek_end % cs.page_size as u64;
+            if fw_seek_left > 0 {
+                let fw_seek_end_next_page =
+                    (fw_seek_end / cs.page_size as u64 + 1) * cs.page_size as u64;
+                if fw_seek_end < fw_seek_end_next_page {
+                    if !sss.ssc.delay_ok.load(Ordering::SeqCst) {
+                        if sss.is_write_empty() {
+                            sss.delay_start();
+                        }
+
+                        sss.read_buffer = Some(buffer);
+                        ssd.get_mut().total_read_size -= size;
+                        stream_info.get_mut().total_read_size -= size;
+                        ssd.get_mut().tmp_file_size += size as i64;
+                        return Ok(());
+                    }
+                } else {
+                    let left_size = fw_seek_left;
+
+                    buffer.read_size = size - left_size;
+                    let copy_start = buffer.read_size as usize;
+                    let copy_end = size as usize;
+                    size = buffer.read_size;
+
+                    let mut write_buffer = sss.buffer_pool.get().take();
+                    write_buffer.is_cache = false;
+                    write_buffer.resize_ext(left_size as usize);
+                    if buffer.msg.is_some() {
+                        let mut msg = StreamMsg::new();
+                        let datas = buffer.data_or_msg(copy_start, copy_end).to_vec();
+                        msg.push(datas);
+                        write_buffer.push_msg(msg);
+                    } else {
+                        write_buffer.set_len(0);
+                        write_buffer
+                            .data_raw()
+                            .extend_from_slice(buffer.data_or_msg(copy_start, copy_end));
+                        write_buffer.resize_curr_size();
+                    }
+                    write_buffer.read_size = left_size;
+                    sss.read_buffer = Some(write_buffer);
+
+                    ssd.get_mut().total_read_size -= left_size;
+                    stream_info.get_mut().total_read_size -= left_size;
+                    ssd.get_mut().tmp_file_size += left_size as i64;
+                }
+            }
+        }
+
+        sss.delay_stop();
+        if plugin.is_first_buffer {
+            plugin.is_first_buffer = false;
         }
     }
 
@@ -352,9 +375,7 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     if last_cache.is_some() {
         let last_cache = last_cache.unwrap();
         if let StreamCache::File(last_cache) = last_cache {
-            if last_cache.size < cs.min_merge_cache_buffer_size
-                || size < cs.min_merge_cache_buffer_size
-            {
+            if last_cache.size < cs.page_size as u64 || size < cs.page_size as u64 {
                 if last_cache.seek + last_cache.size != seek {
                     log::error!("err:last_cache.seek + last_cache.size != seek")
                 }
@@ -402,6 +423,7 @@ pub async fn read_buffer(
                 let mut buffer = sss.get_mut().buffer_pool.get_mut().take();
                 buffer.is_cache = false;
                 buffer.resize(Some(file.size as usize));
+                buffer.read_size = file.size;
                 buffer.file_fd = file.file_fd;
                 buffer.seek = file.seek;
 
@@ -416,7 +438,7 @@ pub async fn read_buffer(
                     let fr = plugin.get::<StreamStreamTmpFile>().fr.clone();
                     let ret: std::result::Result<DynamicPoolItem<StreamCacheBuffer>, Error> =
                         tokio::task::spawn_blocking(move || {
-                            let end_size = buffer.size as usize;
+                            let end_size = buffer.read_size as usize;
                             let ret = fr
                                 .get_mut()
                                 .read_exact(buffer.data_mut(0, end_size))
@@ -441,6 +463,7 @@ pub async fn read_buffer(
     }
 }
 
+//limit  full DataEmpty
 pub async fn write(
     sss: ShareRw<StreamStreamShare>,
     handle: ArcRwLockTokio<PluginHandleStream>,
@@ -456,7 +479,7 @@ pub async fn write(
             "{}, start:{}, size:{}",
             get_flag(sss.get().is_client),
             buffer.start,
-            buffer.size
+            buffer.read_size
         );
         sss.get_mut().write_buffer = Some(buffer);
 
@@ -470,7 +493,7 @@ pub async fn write(
             StreamStatus::Limit => {
                 return Ok(stream_status);
             }
-            StreamStatus::Full(_) => {
+            StreamStatus::Full => {
                 return Ok(stream_status);
             }
             StreamStatus::Ok(_) => {

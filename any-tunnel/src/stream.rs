@@ -233,9 +233,97 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         return Poll::Ready(io::Result::Ok(()));
     }
+
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        log::trace!("skip waning is_client:{}", self.is_client);
+
+        let mut is_read = false;
+        loop {
+            if self.is_read_close() {
+                if is_read {
+                    return Poll::Ready(Ok(()));
+                }
+                let kind = io::ErrorKind::ConnectionReset;
+                let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
+                return Poll::Ready(ret);
+            }
+
+            if self.read_buf(buf) {
+                is_read = true;
+                if buf.initialize_unfilled().len() <= 0 {
+                    return Poll::Ready(Ok(()));
+                }
+            }
+
+            match self.stream_rx.as_ref().unwrap().try_recv() {
+                Ok(tunnel_data) => {
+                    self.stream_rx_pack_id
+                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
+                    continue;
+                }
+                Err(async_channel::TryRecvError::Empty) => {
+                    return Poll::Ready(Ok(()));
+                }
+                Err(async_channel::TryRecvError::Closed) => {
+                    self.close();
+                    continue;
+                }
+            }
+        }
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamMsg>> {
+        log::trace!("skip waning is_client:{}", self.is_client);
+        let mut stream_msg = StreamMsg::new();
+
+        loop {
+            if self.is_read_close() {
+                if stream_msg.len() <= 0 {
+                    let kind = io::ErrorKind::ConnectionReset;
+                    let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
+                    return Poll::Ready(ret);
+                }
+                return Poll::Ready(Ok(stream_msg));
+            }
+
+            let datas = self.read_buf_take();
+            if datas.is_some() {
+                stream_msg.push(datas.unwrap());
+                if stream_msg.len() >= msg_size {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+            }
+
+            match self.stream_rx.as_ref().unwrap().try_recv() {
+                Ok(tunnel_data) => {
+                    self.stream_rx_pack_id
+                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
+                    continue;
+                }
+                Err(async_channel::TryRecvError::Empty) => {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+                Err(async_channel::TryRecvError::Closed) => {
+                    self.close();
+                    continue;
+                }
+            }
+        }
+    }
     fn poll_read_msg(
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,

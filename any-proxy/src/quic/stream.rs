@@ -43,9 +43,69 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         return Poll::Ready(io::Result::Ok(()));
     }
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        use tokio::io::AsyncRead;
+        let ret = Pin::new(&mut self.stream_rx).poll_read(cx, buf);
+        match ret {
+            Poll::Pending => {
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Ready(ret) => {
+                if ret.is_err() {
+                    ret?;
+                }
+                return Poll::Ready(Ok(()));
+            }
+        }
+    }
 }
 
 impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamMsg>> {
+        let mut is_err = false;
+        let mut stream_msg = StreamMsg::new();
+        loop {
+            if is_err {
+                if stream_msg.len() <= 0 {
+                    let kind = io::ErrorKind::ConnectionReset;
+                    let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
+                    return Poll::Ready(ret);
+                }
+                return Poll::Ready(Ok(stream_msg));
+            }
+
+            let mut read_chunk = Box::pin(self.stream_rx.read_chunk(msg_size, true));
+            let ret = Pin::new(&mut read_chunk).poll(cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(None)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(Some(data))) => {
+                    stream_msg.push(data.bytes.into());
+                    if stream_msg.len() >= msg_size {
+                        return Poll::Ready(Ok(stream_msg));
+                    }
+                }
+                Poll::Pending => {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+            }
+        }
+    }
+
     fn poll_read_msg(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
