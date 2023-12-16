@@ -78,17 +78,9 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
                     .await
                     .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
                 let stream_status = sss.get().stream_status.clone();
-                match &stream_status {
-                    &StreamStatus::Limit => {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            LIMIT_SLEEP_TIME_MILLIS,
-                        ))
+                if let StreamStatus::Limit = stream_status {
+                    tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS))
                         .await;
-                    }
-                    &StreamStatus::DataEmpty => {}
-                    _ => {
-                        log::error!("err:stream_stream_memory stream_status:{:?}", stream_status);
-                    }
                 }
             } else {
                 break;
