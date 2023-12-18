@@ -54,7 +54,7 @@ pub async fn handle_run(
     if let Err(ref e) = ret {
         log::debug!("{}, write_err = Some(ret)", get_flag(sss.get().is_client));
         if e.kind() != std::io::ErrorKind::ConnectionReset {
-            return Err(anyhow!("err:StreamStream.stream_write => e:{}", e))?;
+            return Err(anyhow!("err:do_handle_run => e:{}", e))?;
         }
         sss.get_mut().write_err = Some(Err(anyhow!(
             "err:stream_write => flag:{}, e:{}",
@@ -121,6 +121,9 @@ pub async fn do_handle_run(
             let timeout = tokio::time::Duration::from_millis(SENDFILE_WRITEABLE_MILLIS);
             match tokio::time::timeout(timeout, w.writable()).await {
                 Ok(ret) => {
+                    if ret.is_err() {
+                        log::warn!("err:sendfile writable {:?}", ret);
+                    }
                     ret?;
                 }
                 Err(_) => {

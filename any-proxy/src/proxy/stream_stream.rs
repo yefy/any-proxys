@@ -465,10 +465,10 @@ impl StreamStream {
                     is_client,
                     is_fast_close,
                 )  => {
-                    return ret.map_err(|e| anyhow!("err:client => e:{}", e));
+                    return ret.map_err(|e| anyhow!("err:do_stream_to_stream => e:{}", e));
                 }
                 else => {
-                    return Err(anyhow!("err:stream_to_stream_or_file select close"));
+                    return Err(anyhow!("err:do_single_stream_to_stream select close"));
                 }
             }
         }

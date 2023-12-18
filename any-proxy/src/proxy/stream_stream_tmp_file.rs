@@ -486,7 +486,7 @@ pub async fn write(
         let handle_next = &*handle.get().await;
         (handle_next)(sss.clone())
             .await
-            .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
+            .map_err(|e| anyhow!("err:handle => e:{}", e))?;
 
         let stream_status = sss.get_mut().stream_status.clone();
         match &stream_status {

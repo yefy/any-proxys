@@ -87,7 +87,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<usize> {
         let handle_next = &*CACHE_HANDLE_NEXT.get().await;
         (handle_next)(sss.clone())
             .await
-            .map_err(|e| anyhow!("err:write_buffer => e:{}", e))?;
+            .map_err(|e| anyhow!("err:CACHE_HANDLE_NEXT => e:{}", e))?;
 
         check_stream_close(sss.clone()).await?;
     }

@@ -25,7 +25,7 @@ impl SendFile {
         let mut offset: libc::off_t = seek as libc::off_t;
         let count: libc::size_t = size as libc::size_t;
         log::trace!(
-            "libc::sendfile socket_fd:{}, socket_fd:{}, offset:{}, count:{}",
+            "libc::sendfile socket_fd:{}, file_fd:{}, offset:{}, count:{}",
             socket_fd,
             file_fd,
             offset,
@@ -42,27 +42,26 @@ impl SendFile {
                 -1 => {
                     let c_err = unsafe { *libc::__errno_location() };
                     log::trace!("sendfile c_err:{}", c_err);
-                    if c_err == libc::EAGAIN {
+                    if c_err == libc::EAGAIN || c_err == libc::EINTR || c_err == libc::EWOULDBLOCK {
                         stream_err = StreamFlowErr::Init;
                         kind = io::ErrorKind::WouldBlock;
-                        return Err(anyhow!("err:sendfile EAGAIN"));
-                    }
-
-                    if c_err == libc::EINPROGRESS {
-                        if self.info.is_some() {
-                            {
-                                self.info.get_mut().err = StreamFlowErr::WriteClose;
-                            }
-                        }
+                        return Err(anyhow!("err:sendfile WouldBlock"));
+                    } else if c_err == libc::EINPROGRESS {
+                        // if self.info.is_some() {
+                        //         self.info.get_mut().err = StreamFlowErr::WriteClose;
+                        // }
                         stream_err = StreamFlowErr::Init;
                         kind = io::ErrorKind::WouldBlock;
-                        return Err(anyhow!("err:sendfile EAGAIN"));
-                    }
-
-                    if c_err == libc::ECONNRESET {
+                        return Err(anyhow!("err:sendfile WouldBlock"));
+                    } else if c_err == libc::ECONNRESET {
                         stream_err = StreamFlowErr::WriteClose;
                         kind = io::ErrorKind::ConnectionReset;
                         return Err(anyhow!("err:sendfile close"));
+                    } else if c_err == 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                        stream_err = StreamFlowErr::Init;
+                        kind = io::ErrorKind::WouldBlock;
+                        return Err(anyhow!("err:sendfile WouldBlock"));
                     }
 
                     stream_err = StreamFlowErr::WriteErr;
@@ -73,7 +72,7 @@ impl SendFile {
                     if copied == 0 {
                         stream_err = StreamFlowErr::Init;
                         kind = io::ErrorKind::WouldBlock;
-                        return Err(anyhow!("err:sendfile EAGAIN"));
+                        return Err(anyhow!("err:sendfile WouldBlock"));
                     }
                     log::trace!("sendfile copied:{}", copied);
                     return Ok(copied as u64);
@@ -85,9 +84,7 @@ impl SendFile {
         match ret {
             Err(e) => {
                 if self.info.is_some() && stream_err != StreamFlowErr::Init {
-                    {
-                        self.info.get_mut().err = stream_err;
-                    }
+                    self.info.get_mut().err = stream_err;
                 }
                 //log::error!("write kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
@@ -95,22 +92,9 @@ impl SendFile {
             Ok(size) => {
                 log::trace!("sendfile write size:{:?}", size);
                 if self.info.is_some() {
-                    {
-                        self.info.get_mut().write += size as i64;
-                    }
+                    self.info.get_mut().write += size as i64;
                 }
                 Ok(size)
-            }
-        }
-    }
-
-    pub async fn write_all(&self, fd: i32, mut seek: u64, mut size: u64) -> io::Result<()> {
-        loop {
-            let n = self.write(fd, seek, size).await?;
-            seek += n;
-            size -= n;
-            if size <= 0 {
-                return Ok(());
             }
         }
     }
