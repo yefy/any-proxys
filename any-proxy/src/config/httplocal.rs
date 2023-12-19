@@ -5,7 +5,7 @@ use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
 use anyhow::Result;
 use lazy_static::lazy_static;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub struct Conf {
@@ -140,7 +140,7 @@ async fn init_conf(
 
 async fn local(
     ms: module::Modules,
-    conf_arg: module::ConfArg,
+    mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
@@ -183,22 +183,30 @@ async fn local(
     }
 
     let local_confs_ = typ::ArcUnsafeAny::new(Box::new(local_confs.clone()));
-    let mut conf_arg_sub = module::ConfArg::new();
-    conf_arg_sub
-        .module_type
-        .store(conf::MODULE_TYPE_HTTP, Ordering::SeqCst);
-    conf_arg_sub
-        .cmd_conf_type
-        .store(conf::CMD_CONF_TYPE_LOCAL, Ordering::SeqCst);
-    conf_arg_sub
-        .main_index
-        .store(conf_arg.main_index.load(Ordering::SeqCst), Ordering::SeqCst);
-    conf_arg_sub.reader = conf_arg.reader.clone();
-    conf_arg_sub.file_name = conf_arg.file_name.clone();
-    conf_arg_sub.path = conf_arg.path.clone();
-    conf_arg_sub.line_num = conf_arg.line_num.clone();
-    conf_arg_sub.parent_module_confs = server_confs;
+    conf_arg.module_type = Arc::new(AtomicUsize::new(conf::MODULE_TYPE_HTTP));
+    conf_arg.cmd_conf_type = Arc::new(AtomicUsize::new(conf::CMD_CONF_TYPE_LOCAL));
+    let main_index = conf_arg.main_index.load(Ordering::SeqCst);
+    conf_arg.main_index = Arc::new(AtomicI32::new(main_index));
+    // let mut conf_arg_sub = module::ConfArg::new();
+    // conf_arg_sub
+    //     .module_type
+    //     .store(conf::MODULE_TYPE_HTTP, Ordering::SeqCst);
+    // conf_arg_sub
+    //     .cmd_conf_type
+    //     .store(conf::CMD_CONF_TYPE_LOCAL, Ordering::SeqCst);
+    // conf_arg_sub
+    //     .main_index
+    //     .store(conf_arg.main_index.load(Ordering::SeqCst), Ordering::SeqCst);
+    // conf_arg_sub.reader = conf_arg.reader.clone();
+    // conf_arg_sub.file_name = conf_arg.file_name.clone();
+    // conf_arg_sub.path = conf_arg.path.clone();
+    // conf_arg_sub.line_num = conf_arg.line_num.clone();
+    // conf_arg_sub.parent_module_confs = server_confs;
+    // conf_arg_sub.is_sub_file = conf_arg.is_sub_file;
+    // conf_arg_sub.curr_module_confs = conf_arg.curr_module_confs.clone();
+    // conf_arg_sub.any = conf_arg.any.clone();
+    // conf_arg_sub.is_block = conf_arg.is_block;
 
-    ms.parse_config(&mut conf_arg_sub, local_confs_).await?;
+    ms.parse_config(&mut conf_arg, local_confs_).await?;
     return Ok(());
 }

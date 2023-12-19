@@ -9,7 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
 use module::Modules;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[async_trait]
@@ -191,29 +191,38 @@ fn create_server(value: typ::ArcUnsafeAny) -> Result<Box<dyn module::Server>> {
 
 async fn server(
     ms: module::Modules,
-    conf_arg: module::ConfArg,
+    mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let module_conf = typ::ArcUnsafeAny::new(Box::new(upstream_block::Conf::new()));
-    let mut conf_arg_sub = module::ConfArg::new();
-    conf_arg_sub
-        .module_type
-        .store(conf::MODULE_TYPE_UPSTREAM, Ordering::SeqCst);
-    conf_arg_sub
-        .cmd_conf_type
-        .store(conf::CMD_CONF_TYPE_MAIN, Ordering::SeqCst);
-    conf_arg_sub
-        .main_index
-        .store(conf_arg.main_index.load(Ordering::SeqCst), Ordering::SeqCst);
-    conf_arg_sub.reader = conf_arg.reader.clone();
-    conf_arg_sub.file_name = conf_arg.file_name.clone();
-    conf_arg_sub.path = conf_arg.path.clone();
-    conf_arg_sub.line_num = conf_arg.line_num.clone();
-    conf_arg_sub.is_block = true;
+    conf_arg.module_type = Arc::new(AtomicUsize::new(conf::MODULE_TYPE_UPSTREAM));
+    conf_arg.cmd_conf_type = Arc::new(AtomicUsize::new(conf::CMD_CONF_TYPE_MAIN));
+    let main_index = conf_arg.main_index.load(Ordering::SeqCst);
+    conf_arg.main_index = Arc::new(AtomicI32::new(main_index));
+    conf_arg.is_block = true;
 
-    ms.parse_config(&mut conf_arg_sub, module_conf.clone())
-        .await?;
+    // let mut conf_arg_sub = module::ConfArg::new();
+    // conf_arg_sub
+    //     .module_type
+    //     .store(conf::MODULE_TYPE_UPSTREAM, Ordering::SeqCst);
+    // conf_arg_sub
+    //     .cmd_conf_type
+    //     .store(conf::CMD_CONF_TYPE_MAIN, Ordering::SeqCst);
+    // conf_arg_sub
+    //     .main_index
+    //     .store(conf_arg.main_index.load(Ordering::SeqCst), Ordering::SeqCst);
+    // conf_arg_sub.reader = conf_arg.reader.clone();
+    // conf_arg_sub.file_name = conf_arg.file_name.clone();
+    // conf_arg_sub.path = conf_arg.path.clone();
+    // conf_arg_sub.line_num = conf_arg.line_num.clone();
+    // conf_arg_sub.is_sub_file = conf_arg.is_sub_file;
+    // conf_arg_sub.parent_module_confs = conf_arg.parent_module_confs.clone();
+    // conf_arg_sub.curr_module_confs = conf_arg.curr_module_confs.clone();
+    // conf_arg_sub.any = conf_arg.any.clone();
+    // conf_arg_sub.is_block = true;
+
+    ms.parse_config(&mut conf_arg, module_conf.clone()).await?;
 
     let module_conf = unsafe { module_conf.take::<upstream_block::Conf>() };
     let conf = conf.get_mut::<Conf>();

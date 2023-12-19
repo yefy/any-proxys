@@ -184,17 +184,19 @@ pub struct ConfArg {
     pub module_type: Arc<AtomicUsize>,
     pub cmd_conf_type: Arc<AtomicUsize>,
     pub main_index: Arc<AtomicI32>,
+    pub reader: ArcMutex<BufReader<fs::File>>,
+    pub line_num: Arc<AtomicUsize>,
+    pub is_block: bool,
+    pub any: ArcUnsafeAny,
+    pub parent_module_confs: Vec<ArcUnsafeAny>,
+    pub curr_module_confs: ArcUnsafeAny,
+
+    //临时用的
     pub str_raw: String,
     pub str_key: String,
     pub str_typ: String,
     pub str_value: String,
-    pub reader: ArcMutex<BufReader<fs::File>>,
-    pub line_num: Arc<AtomicUsize>,
     pub value: ArcUnsafeAny,
-    pub is_block: bool,
-    pub any: ArcUnsafeAny,
-    pub curr_module_confs: ArcUnsafeAny,
-    pub parent_module_confs: Vec<ArcUnsafeAny>,
 }
 
 impl ConfArg {
@@ -840,11 +842,11 @@ impl Modules {
         self.merge_confs_map = ArcMutex::new(merge_confs_map);
         self.main_confs = ArcUnsafeAny::new(Box::new(main_confs));
 
-        let conf_arg = ConfArg::new();
+        let mut conf_arg = ConfArg::new();
         if any.is_some() {
             conf_arg.any.set(any.unwrap());
         }
-        self.parse_config_file(conf_arg, path_full_name, self.main_confs.clone())
+        self.parse_config_file(&mut conf_arg, path_full_name, self.main_confs.clone())
             .await?;
 
         let keys = self
@@ -1201,11 +1203,12 @@ impl Modules {
     #[async_recursion(?Send)]
     pub async fn parse_config_file(
         &self,
-        mut conf_arg: ConfArg,
+        conf_arg: &mut ConfArg,
         path_full_name: &str,
         module_confs: ArcUnsafeAny,
     ) -> Result<()> {
-        let file = std::fs::File::open(&path_full_name)?;
+        let file = std::fs::File::open(&path_full_name)
+            .map_err(|e| anyhow!("err:path_full_name:{} => e:{}", path_full_name, e))?;
         let reader = BufReader::new(file);
         let path = Path::new(&path_full_name);
 
@@ -1213,7 +1216,7 @@ impl Modules {
         conf_arg.path = path.parent().unwrap().to_str().unwrap().to_string();
         conf_arg.reader = ArcMutex::new(reader);
 
-        self.parse_config(&mut conf_arg, module_confs).await?;
+        self.parse_config(conf_arg, module_confs).await?;
         return Ok(());
     }
 
@@ -1426,22 +1429,42 @@ impl Modules {
                 if value.len() == 0 {
                     return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
                 }
-                let path_full_name = conf_arg.path.clone() + &value;
-                let mut conf_arg_sub = ConfArg::new();
-                conf_arg_sub.is_sub_file = true;
-                conf_arg_sub.module_type.store(
-                    conf_arg.module_type.load(Ordering::SeqCst),
-                    Ordering::SeqCst,
-                );
-                conf_arg_sub.cmd_conf_type.store(
-                    conf_arg.cmd_conf_type.load(Ordering::SeqCst),
-                    Ordering::SeqCst,
-                );
-                conf_arg_sub
-                    .main_index
-                    .store(conf_arg.main_index.load(Ordering::SeqCst), Ordering::SeqCst);
-                self.parse_config_file(conf_arg_sub, &path_full_name, module_confs.clone())
+
+                use std::path::PathBuf;
+                let sub_path = PathBuf::from(&value);
+                let new_sub_path = sub_path.strip_prefix("./");
+                let new_sub_path = if new_sub_path.is_err() {
+                    let new_sub_path = sub_path.strip_prefix("/");
+                    if new_sub_path.is_err() {
+                        Some(&value[..])
+                    } else {
+                        let new_sub_path = new_sub_path?;
+                        new_sub_path.to_str()
+                    }
+                } else {
+                    let new_sub_path = new_sub_path?;
+                    new_sub_path.to_str()
+                };
+
+                if new_sub_path.is_none() {
+                    return ret_err(conf_arg, "")
+                        .map_err(|e| anyhow!("err:path:{} => e:{}", value, e));
+                }
+                let path_full_name = format!("{}/{}", conf_arg.path, new_sub_path.unwrap());
+
+                let is_sub_file = conf_arg.is_sub_file;
+                let file_name = conf_arg.file_name.clone();
+                let path = conf_arg.path.clone();
+                let reader = conf_arg.reader.clone();
+
+                conf_arg.is_sub_file = true;
+                self.parse_config_file(conf_arg, &path_full_name, module_confs.clone())
                     .await?;
+
+                conf_arg.is_sub_file = is_sub_file;
+                conf_arg.file_name = file_name;
+                conf_arg.path = path;
+                conf_arg.reader = reader;
                 continue;
             }
 

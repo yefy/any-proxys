@@ -115,8 +115,8 @@ impl PeerClientContext {
         return self.peer_stream_size.load(Ordering::SeqCst);
     }
 
-    pub fn add_peer_stream_size(&self) {
-        self.peer_stream_size.fetch_add(1, Ordering::SeqCst);
+    pub fn add_peer_stream_size(&self) -> usize {
+        self.peer_stream_size.fetch_add(1, Ordering::SeqCst)
     }
 
     pub fn clone_and_ref(&self) -> Option<PeerStreamToPeerClientTx> {
@@ -315,7 +315,9 @@ impl PeerClientContext {
         }
         let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.unwrap();
 
-        let peer_stream_index = self.add_peer_stream_index();
+        //let peer_stream_index = self.add_peer_stream_index();
+        self.add_peer_stream_index();
+        let peer_stream_index = self.add_peer_stream_size();
         if tunnel_hello.is_some() {
             tunnel_hello.as_mut().unwrap().client_peer_stream_index = peer_stream_index;
         }
@@ -429,9 +431,9 @@ impl PeerClient {
             log::info!("del PEER_CLIENT_NUM:{}", num);
             log::info!(
                 "session_id:{:?}, flag:{}, peer_stream_index:{}, peer_client close",
-                { self.context.session_id.lock().unwrap() },
+                { &*self.context.session_id.get() },
                 get_flag(self.context.is_client),
-                self.peer_stream_index.load(Ordering::Relaxed),
+                self.context.peer_stream_index.load(Ordering::Relaxed),
             );
         }
 
@@ -441,8 +443,8 @@ impl PeerClient {
             let mut is_error = false;
             let stream_tx_pack_id = self.stream_tx_pack_id.load(Ordering::SeqCst);
             let stream_rx_pack_id = self.stream_rx_pack_id.load(Ordering::SeqCst);
-            let peer_stream_tx_pack_id = self.peer_stream_tx_pack_id.load(Ordering::SeqCst);
-            let peer_stream_rx_pack_id = self.peer_stream_rx_pack_id.load(Ordering::SeqCst);
+            let peer_stream_tx_pack_id = self.context.peer_stream_tx_pack_id.load(Ordering::SeqCst);
+            let peer_stream_rx_pack_id = self.context.peer_stream_rx_pack_id.load(Ordering::SeqCst);
             let peer_client_order_pack_id = self
                 .context
                 .peer_client_order_pack_id
@@ -467,7 +469,7 @@ impl PeerClient {
             }
 
             if !is_error {
-                is_error = self.is_error.load(Ordering::Relaxed);
+                is_error = self.context.is_error.load(Ordering::Relaxed);
             }
 
             if is_error {
@@ -476,7 +478,7 @@ impl PeerClient {
                 stream_tx_pack_id:{}, stream_rx_pack_id:{}, \
            peer_stream_tx_pack_id:{}, peer_stream_rx_pack_id:{}, \
             peer_client_order_pack_id:{},  peer_client_max_pack_id:{}",
-                    { self.context.session_id.lock().unwrap().as_ref().unwrap() },
+                    { &*self.context.session_id.get() },
                     get_flag(self.context.is_client),
                     stream_tx_pack_id,
                     stream_rx_pack_id,
@@ -869,9 +871,13 @@ impl PeerClientToStream {
                                     }
                                     Ok(Some(tunnel_data))
                                 } else {
-                                    self.context
-                                        .peer_client_max_pack_id
-                                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                                    let peer_client_max_pack_id =
+                                        self.context.peer_client_max_pack_id.load(Ordering::SeqCst);
+                                    if tunnel_data.header.pack_id > peer_client_max_pack_id {
+                                        self.context
+                                            .peer_client_max_pack_id
+                                            .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                                    }
                                     self.recv_pack_cache_map
                                         .insert(tunnel_data.header.pack_id, tunnel_data);
                                     Ok(None)
@@ -957,7 +963,7 @@ impl PeerClientToStream {
                 use crate::get_flag;
                 log::info!(
                     "session_id:{}, flag:{} is_close = true, write all pack id",
-                    { self.context.session_id.lock().unwrap().as_ref().unwrap() },
+                    { &*self.context.session_id.get() },
                     get_flag(self.context.is_client),
                 )
             }
