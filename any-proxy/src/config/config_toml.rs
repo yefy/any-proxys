@@ -2,7 +2,7 @@ use any_base::util::ArcString;
 use serde::{Deserialize, Serialize};
 use std::str;
 
-fn default_quic_name() -> String {
+fn default_quic_config_name() -> String {
     "quic_config_1".to_string()
 }
 fn default_quic_default() -> bool {
@@ -42,7 +42,7 @@ fn default_quic_recv_timeout() -> usize {
     60
 }
 fn default_quic_connect_timeout() -> usize {
-    10
+    60
 }
 fn default_quic_upstream_ports() -> String {
     "".to_string()
@@ -51,8 +51,8 @@ fn default_quic_upstream_ports() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuicConfig {
-    #[serde(default = "default_quic_name")]
-    pub quic_name: String,
+    #[serde(default = "default_quic_config_name")]
+    pub quic_config_name: String,
     #[serde(default = "default_quic_default")]
     pub quic_default: bool,
     #[serde(default = "default_quic_upstream_ports")]
@@ -83,7 +83,7 @@ pub struct QuicConfig {
     pub quic_connect_timeout: usize,
 }
 
-fn default_tcp_name() -> String {
+fn default_tcp_config_name() -> String {
     "tcp_config_1".to_string()
 }
 fn default_tcp_send_buffer() -> usize {
@@ -102,13 +102,13 @@ fn default_tcp_recv_timeout() -> usize {
     60
 }
 fn default_tcp_connect_timeout() -> usize {
-    10
+    60
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpConfig {
-    #[serde(default = "default_tcp_name")]
-    pub tcp_name: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     #[serde(default = "default_tcp_send_buffer")]
     pub tcp_send_buffer: usize,
     #[serde(default = "default_tcp_recv_buffer")]
@@ -213,9 +213,9 @@ pub struct Tunnel2Config {
     pub tunnel2_max_connect: usize,
 }
 
-pub fn default_tcp() -> Vec<TcpConfig> {
+pub fn default_tcp_config() -> Vec<TcpConfig> {
     vec![TcpConfig {
-        tcp_name: default_tcp_name(),
+        tcp_config_name: default_tcp_config_name(),
         tcp_send_buffer: default_tcp_send_buffer(),
         tcp_recv_buffer: default_tcp_recv_buffer(),
         tcp_nodelay: default_tcp_nodelay(),
@@ -225,9 +225,9 @@ pub fn default_tcp() -> Vec<TcpConfig> {
     }]
 }
 
-pub fn default_quic() -> Vec<QuicConfig> {
+pub fn default_quic_config() -> Vec<QuicConfig> {
     vec![QuicConfig {
-        quic_name: default_quic_name(),
+        quic_config_name: default_quic_config_name(),
         quic_default: default_quic_default(),
         quic_upstream_ports: default_quic_upstream_ports(),
         quic_upstream_streams: default_quic_upstream_streams(),
@@ -307,10 +307,10 @@ fn default_fast_conf() -> FastConf {
 pub struct ConfigToml {
     #[serde(default = "default_common")]
     pub common: CommonConfig,
-    #[serde(default = "default_tcp")]
-    pub tcp: Vec<TcpConfig>,
-    #[serde(default = "default_quic")]
-    pub quic: Vec<QuicConfig>,
+    #[serde(default = "default_tcp_config")]
+    pub tcp_config: Vec<TcpConfig>,
+    #[serde(default = "default_quic_config")]
+    pub quic_config: Vec<QuicConfig>,
     #[serde(default = "default_tunnel2")]
     pub tunnel2: Tunnel2Config,
     #[serde(default = "default_stream")]
@@ -583,8 +583,8 @@ pub enum DomainListenType {
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcpTunnel2 {
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -596,8 +596,8 @@ pub struct ProxyPassTcpTunnel2 {
 pub struct ProxyPassQuicTunnel2 {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_quic_name")]
-    pub quic: String,
+    #[serde(default = "default_quic_config_name")]
+    pub quic_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -609,8 +609,8 @@ pub struct ProxyPassQuicTunnel2 {
 pub struct ProxyPassSslTunnel2 {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -653,8 +653,8 @@ pub struct Tunnel {
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcp {
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -666,8 +666,8 @@ pub struct ProxyPassTcp {
 pub struct ProxyPassTcpTunnel {
     pub tunnel: Tunnel,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -679,8 +679,8 @@ pub struct ProxyPassTcpTunnel {
 pub struct ProxyPassSsl {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -693,8 +693,8 @@ pub struct ProxyPassSslTunnel {
     pub tunnel: Tunnel,
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_tcp_name")]
-    pub tcp: String,
+    #[serde(default = "default_tcp_config_name")]
+    pub tcp_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -706,8 +706,8 @@ pub struct ProxyPassSslTunnel {
 pub struct ProxyPassQuic {
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_quic_name")]
-    pub quic: String,
+    #[serde(default = "default_quic_config_name")]
+    pub quic_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -720,8 +720,8 @@ pub struct ProxyPassQuicTunnel {
     pub tunnel: Tunnel,
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
-    #[serde(default = "default_quic_name")]
-    pub quic: String,
+    #[serde(default = "default_quic_config_name")]
+    pub quic_config_name: String,
     pub heartbeat: Option<UpstreamHeartbeat>,
     pub dynamic_domain: Option<UpstreamDynamicDomain>,
     pub is_proxy_protocol_hello: Option<bool>,
@@ -788,8 +788,8 @@ fn default_is_upstream() -> bool {
 #[serde(deny_unknown_fields)]
 pub struct PortServerConfig {
     pub common: Option<CommonConfig>,
-    pub tcp: Option<String>,
-    pub quic: Option<String>,
+    pub tcp_config_name: Option<String>,
+    pub quic_config_name: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
     pub rate: Option<RateLimit>,
@@ -811,8 +811,8 @@ pub struct PortServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct _PortConfig {
-    pub tcp: Option<String>,
-    pub quic: Option<String>,
+    pub tcp_config_name: Option<String>,
+    pub quic_config_name: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
     pub rate: Option<RateLimit>,
@@ -827,8 +827,8 @@ pub struct _PortConfig {
 #[serde(deny_unknown_fields)]
 pub struct DomainServerConfig {
     pub common: Option<CommonConfig>,
-    pub tcp: Option<String>,
-    pub quic: Option<String>,
+    pub tcp_config_name: Option<String>,
+    pub quic_config_name: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
     pub rate: Option<RateLimit>,
@@ -851,8 +851,8 @@ pub struct DomainServerConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct _DomainConfig {
-    pub tcp: Option<String>,
-    pub quic: Option<String>,
+    pub tcp_config_name: Option<String>,
+    pub quic_config_name: Option<String>,
     pub tunnel2: Option<Tunnel2Config>,
     pub stream: Option<StreamConfig>,
     pub rate: Option<RateLimit>,

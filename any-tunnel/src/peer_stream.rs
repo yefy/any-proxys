@@ -26,7 +26,7 @@ use dynamic_pool::DynamicPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 pub struct PeerStreamKey {
     pub key: String,
@@ -226,7 +226,7 @@ impl PeerStream {
 
     pub async fn do_start(&mut self, mut stream: StreamFlow) -> Result<()> {
         let stream_info = ArcMutex::new(StreamFlowInfo::new());
-        stream.set_stream_info(stream_info.clone());
+        stream.set_stream_info(Some(stream_info.clone()));
         let (mut r, mut w) = tokio::io::split(stream);
         loop {
             #[cfg(feature = "anydebug")]
@@ -245,10 +245,14 @@ impl PeerStream {
                 if err as i32 >= StreamFlowErr::WriteTimeout as i32 {
                     return Err(anyhow!("err:do_stream => e:{}", e))?;
                 }
+                let _ = w.flush().await;
+                //let _ = w.shutdown().await;
                 return Ok(());
             }
 
             if ret? {
+                let _ = w.flush().await;
+                //let _ = w.shutdown().await;
                 return Ok(());
             }
         }

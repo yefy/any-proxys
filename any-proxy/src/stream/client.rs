@@ -8,13 +8,16 @@ use std::net::SocketAddr;
 
 #[async_trait]
 pub trait Client: Send + Sync + 'static {
-    async fn connect(&self, info: ArcMutex<StreamFlowInfo>) -> Result<Box<dyn Connection + Send>>;
+    async fn connect(
+        &self,
+        info: Option<ArcMutex<StreamFlowInfo>>,
+    ) -> Result<Box<dyn Connection + Send>>;
 }
 
 #[async_trait]
 pub trait Connection: Send + Sync + 'static {
     async fn stream(
         &self,
-        info: ArcMutex<StreamFlowInfo>,
+        info: Option<ArcMutex<StreamFlowInfo>>,
     ) -> Result<(Protocol7, stream_flow::StreamFlow, SocketAddr, SocketAddr)>;
 }

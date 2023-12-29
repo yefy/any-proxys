@@ -18,7 +18,7 @@ use std::time::Instant;
 pub struct ConnectContext {
     host: ArcString,
     address: SocketAddr, //ip:port, domain:port
-    tcp_config: TcpConfig,
+    tcp_config: Arc<TcpConfig>,
     ssl_domain: String,
 }
 
@@ -31,7 +31,7 @@ impl Connect {
         host: ArcString,
         address: SocketAddr, //ip:port, domain:port
         ssl_domain: String,
-        tcp_config: TcpConfig,
+        tcp_config: Arc<TcpConfig>,
     ) -> Connect {
         Connect {
             context: Arc::new(ConnectContext {
@@ -49,7 +49,7 @@ impl connect::Connect for Connect {
     async fn connect(
         &self,
         _request_id: Option<ArcString>,
-        stream_info: ArcMutex<StreamFlowInfo>,
+        stream_info: Option<ArcMutex<StreamFlowInfo>>,
         _run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(StreamFlow, ConnectInfo)> {
         let tcp_connect_timeout = self.context.tcp_config.tcp_connect_timeout as u64;
@@ -59,7 +59,7 @@ impl connect::Connect for Connect {
         let client = tcp_client::Client::new(
             addr,
             timeout,
-            Arc::new(self.context.tcp_config.clone()),
+            self.context.tcp_config.clone(),
             self.context.ssl_domain.clone(),
         )
         .map_err(|e| anyhow!("err:tcp_client::Client::new => e:{}", e))?;
@@ -81,7 +81,7 @@ impl connect::Connect for Connect {
         let read_timeout = tokio::time::Duration::from_secs(tcp_recv_timeout);
         let tcp_send_timeout = self.context.tcp_config.tcp_send_timeout as u64;
         let write_timeout = tokio::time::Duration::from_secs(tcp_send_timeout);
-        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+        stream.set_config(read_timeout, write_timeout, None);
 
         Ok((
             stream,

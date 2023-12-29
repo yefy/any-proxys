@@ -26,7 +26,7 @@ pub trait Connect: Send + Sync {
     async fn connect(
         &self,
         request_id: Option<ArcString>,
-        stream_info: ArcMutex<StreamFlowInfo>,
+        stream_info: Option<ArcMutex<StreamFlowInfo>>,
         run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(StreamFlow, ConnectInfo)>;
     async fn addr(&self) -> Result<SocketAddr>;

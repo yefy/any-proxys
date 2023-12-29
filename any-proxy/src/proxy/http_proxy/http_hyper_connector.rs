@@ -72,7 +72,7 @@ impl Service<Uri> for HttpHyperConnector {
             let connect_info = connect_func
                 .connect(
                     Some(request_id.clone()),
-                    upstream_connect_flow_info,
+                    Some(upstream_connect_flow_info),
                     Some(run_time),
                 )
                 .await
@@ -80,7 +80,7 @@ impl Service<Uri> for HttpHyperConnector {
 
             let (mut upstream_stream, _) = connect_info;
 
-            upstream_stream.set_stream_info(upstream_stream_flow_info.clone());
+            upstream_stream.set_stream_info(Some(upstream_stream_flow_info.clone()));
 
             Ok(HttpHyperStream::new(upstream_stream))
         })

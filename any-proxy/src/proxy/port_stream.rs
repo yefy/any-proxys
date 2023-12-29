@@ -22,7 +22,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct PortStream {
-    ms: Modules,
+    _ms: Modules,
     executors: ExecutorsLocal,
     server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: Option<tunnel_server::Publish>,
@@ -32,7 +32,7 @@ pub struct PortStream {
 
 impl PortStream {
     pub fn new(
-        ms: Modules,
+        _ms: Modules,
         executors: ExecutorsLocal,
         server_stream_info: ServerStreamInfo,
         tunnel_publish: Option<tunnel_server::Publish>,
@@ -40,7 +40,7 @@ impl PortStream {
         port_config_listen: Arc<PortConfigListen>,
     ) -> Result<PortStream> {
         Ok(PortStream {
-            ms,
+            _ms,
             executors,
             server_stream_info: Arc::new(server_stream_info),
             tunnel_publish,
@@ -51,30 +51,25 @@ impl PortStream {
 
     pub async fn start(self, mut stream: StreamFlow) -> Result<()> {
         log::trace!("port stream start");
-        use crate::config::http_core;
-        let ms = self.ms.clone();
-        let http_core_conf = http_core::main_conf_mut(&ms).await;
-
-        let stream_info = StreamInfo::new(
-            self.server_stream_info.clone(),
-            http_core_conf.debug_is_open_stream_work_times,
-            Some(self.executors.clone()),
-        );
+        let stream_info = {
+            let scc = self.port_config_listen.port_config_context.scc.get();
+            let http_core_conf = scc.http_core_conf();
+            StreamInfo::new(
+                self.server_stream_info.clone(),
+                http_core_conf.debug_is_open_stream_work_times,
+                Some(self.executors.clone()),
+                http_core_conf.debug_print_access_log_time,
+                http_core_conf.debug_print_stream_flow_time,
+                http_core_conf.stream_so_singer_time,
+                http_core_conf.debug_is_open_print,
+            )
+        };
         let stream_info = Share::new(stream_info);
 
-        stream.set_stream_info(stream_info.get().client_stream_flow_info.clone());
-        let shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
+        stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
+        let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
 
-        stream_start::do_start(
-            self,
-            stream_info,
-            stream,
-            shutdown_thread_rx,
-            http_core_conf.debug_print_access_log_time,
-            http_core_conf.debug_print_stream_flow_time,
-            http_core_conf.stream_so_singer_time,
-        )
-        .await
+        stream_start::do_start(self, stream_info, stream, shutdown_thread_rx).await
     }
 }
 
@@ -87,7 +82,6 @@ impl proxy::Stream for PortStream {
     ) -> Result<()> {
         let scc = self.port_config_listen.port_config_context.scc.clone();
         stream_info.get_mut().scc = scc.clone();
-        stream_info.get_mut().debug_is_open_print = scc.get().http_core_conf().debug_is_open_print;
 
         #[cfg(feature = "anyproxy-ebpf")]
         let client_stream = if scc.get().http_core_conf().is_port_direct_ebpf
@@ -189,17 +183,18 @@ impl proxy::Stream for PortStream {
                 }
             }
         };
-
-        stream_info.get_mut().request_id = hello.request_id.clone();
         {
-            stream_info.get().protocol_hello.set(Arc::new(hello));
-        }
+            let mut stream_info = stream_info.get_mut();
+            stream_info.request_id = hello.request_id.clone();
 
-        log::debug!(
-            "connect_and_stream request_id:{}, server_stream_info:{:?}",
-            stream_info.get().request_id,
-            self.server_stream_info
-        );
+            stream_info.protocol_hello.set(Arc::new(hello));
+
+            log::debug!(
+                "connect_and_stream request_id:{}, server_stream_info:{:?}",
+                stream_info.request_id,
+                self.server_stream_info
+            );
+        }
 
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];

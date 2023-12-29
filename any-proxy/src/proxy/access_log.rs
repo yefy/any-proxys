@@ -29,6 +29,10 @@ impl AccessLog {
             }),
             false,
             None,
+            0,
+            0,
+            0,
+            false,
         );
 
         let mut access_context = Vec::new();

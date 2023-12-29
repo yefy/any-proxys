@@ -55,7 +55,7 @@ impl TunnelStream {
             //     .await
             //     .map_err(|e| anyhow!("err:self.tunnel_publish.push_peer_stream => e:{}", e))?;
 
-            let mut shutdown_thread_rx = executors.shutdown_thread_tx.subscribe();
+            let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
             let tunnel_publish = tunnel_publish.unwrap();
             executors._start_and_free(move |_| async move {
                 async {
@@ -109,7 +109,7 @@ impl TunnelStream {
             //     .await
             //     .map_err(|e| anyhow!("err:self.tunnel2_publish.push_peer_stream => e:{}", e))?;
 
-            let mut shutdown_thread_rx = executors.shutdown_thread_tx.subscribe();
+            let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
             let tunnel2_publish = tunnel2_publish.unwrap();
             executors._start_and_free(move |_| async move {
                 async {

@@ -271,10 +271,13 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
         let tunnel_conf = tunnel_core::main_conf(&ms).await;
 
-        let tcp_str = self.tcp.tcp.clone();
-        let tcp_config = upstream_tcp_conf.tcp_confs.get(&tcp_str).cloned();
+        let tcp_config_name = &self.tcp.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
         if tcp_config.is_none() {
-            return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
         }
         let client = tunnel_conf.client();
         if client.is_none() {
@@ -358,10 +361,13 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
         let tunnel_conf = tunnel_core::main_conf(&ms).await;
 
-        let tcp_str = self.ssl.tcp.clone();
-        let tcp_config = upstream_tcp_conf.tcp_confs.get(&tcp_str).cloned();
+        let tcp_config_name = &self.ssl.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
         if tcp_config.is_none() {
-            return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
         }
         let client = tunnel_conf.client();
         if client.is_none() {
@@ -447,14 +453,17 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
         let socket_quic_conf = socket_quic::main_conf(&ms).await;
         let tunnel_conf = tunnel_core::main_conf(&ms).await;
 
-        let quic_str = self.quic.quic.clone();
-        let quic_config = socket_quic_conf.quic_confs.get(&quic_str).cloned();
+        let quic_config_name = &self.quic.quic_config_name;
+        let quic_config = socket_quic_conf.quic_confs.get(quic_config_name).cloned();
         if quic_config.is_none() {
-            return Err(anyhow!("err:quic.quic={}", quic_str));
+            return Err(anyhow!(
+                "err:quic_config_name => quic_config_name:{}",
+                quic_config_name
+            ));
         }
         let endpoints = socket_quic_conf
             .endpoints_map
-            .get(&quic_str)
+            .get(quic_config_name)
             .cloned()
             .unwrap();
         let client = tunnel_conf.client();

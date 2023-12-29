@@ -1,3 +1,32 @@
 [workspace]
+resolver = "1"
 members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","anyhow", "awaitgroup"]
 default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","anyhow", "awaitgroup"]
+[profile.dev]
+debug = true
+panic = "unwind"
+incremental = true
+strip = false
+#opt-level = 0
+#split-debuginfo = '...'  # Platform-specific.
+#debug-assertions = true
+#overflow-checks = true
+#lto = false
+#codegen-units = 256
+#rpath = false
+
+[profile.release]
+debug = false
+panic = "abort"
+opt-level = 3
+#这个特性开起来会导致rpm打包失败， deb正常
+lto = true
+codegen-units = 1
+incremental = false
+rpath = false
+debug-assertions = false
+overflow-checks = false
+#性能调试用这个
+#debug = true
+#删除调试信息
+strip = true

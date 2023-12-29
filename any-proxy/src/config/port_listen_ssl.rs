@@ -192,10 +192,13 @@ async fn port_listen_ssl(
         if port_core_conf.port_config_listen_map.get(&key).is_some() {
             return Err(anyhow!("err:addr is exist => addr:{}", addr));
         }
-        let tcp_str = http_core_conf.tcp_conf_name.clone();
-        let tcp_config = upstream_tcp_conf.config(&tcp_str);
+
+        let tcp_config = upstream_tcp_conf.config(&http_core_conf.tcp_config_name);
         if tcp_config.is_none() {
-            return Err(anyhow!("err:tcp_str nil => tcp_str:{}", tcp_str));
+            return Err(anyhow!(
+                "err:tcp_config_name nil => tcp_config_name:{}",
+                http_core_conf.tcp_config_name
+            ));
         }
 
         let listen = config_toml::Listen {

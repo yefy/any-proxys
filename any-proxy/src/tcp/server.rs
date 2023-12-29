@@ -6,7 +6,6 @@ use crate::tcp::stream::Stream;
 use crate::util;
 use crate::Protocol7;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,11 +23,11 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr, reuseport: bool, config: Config) -> Result<Server> {
+    pub fn new(addr: SocketAddr, reuseport: bool, config: Arc<Config>) -> Result<Server> {
         Ok(Server {
             addr,
             reuseport,
-            config: Arc::new(config),
+            config,
         })
     }
 }
@@ -144,7 +143,7 @@ impl server::Connection for Connection {
         let mut stream = StreamFlow::new(fd, stream);
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
-        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+        stream.set_config(read_timeout, write_timeout, None);
         Ok(Some((
             stream,
             ServerStreamInfo {

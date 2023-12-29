@@ -1,14 +1,13 @@
 use crate::config::config_toml::TcpConfig as Config;
-use anyhow::anyhow;
+use crate::tcp::util;
 use anyhow::Result;
-use socket2::{Domain, Protocol, Socket, Type};
-use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
-use std::net::ToSocketAddrs;
 use tokio::net::TcpStream;
 
-pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
+pub fn bind(addr: &SocketAddr, tcp_reuseport: bool) -> Result<StdTcpListener> {
+    util::bind(addr, tcp_reuseport)
+    /*
     let addr = addr
         .to_socket_addrs()?
         .next()
@@ -33,9 +32,13 @@ pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
     sk.listen(1024)
         .map_err(|e| anyhow!("err:sk.listen => e:{}", e))?;
     Ok(sk.into())
+
+         */
 }
 
 pub fn set_stream(tcp_stream: &TcpStream, config: &Config) {
+    util::set_stream(tcp_stream, config)
+    /*
     let socket = socket2::SockRef::from(tcp_stream);
 
     if config.tcp_send_buffer > 0 {
@@ -57,7 +60,8 @@ pub fn set_stream(tcp_stream: &TcpStream, config: &Config) {
         }
     }
 
-    if let Err(_e) = socket.set_nodelay(config.tcp_nodelay) {
+    //if let Err(_e) = socket.set_nodelay(config.tcp_nodelay) {
+    if let Err(_e) = tcp_stream.set_nodelay(config.tcp_nodelay) {
         #[cfg(unix)]
         log::error!(
             "err:set_nodelay => tcp_nodelay:{}, e:{}",
@@ -65,4 +69,6 @@ pub fn set_stream(tcp_stream: &TcpStream, config: &Config) {
             _e
         );
     }
+
+         */
 }

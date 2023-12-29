@@ -194,14 +194,17 @@ impl upstream_core::HeartbeatI for Heartbeat {
         use crate::config::socket_quic;
         let socket_quic_conf = socket_quic::main_conf(&ms).await;
 
-        let quic_str = self.quic.quic.clone();
-        let quic_config = socket_quic_conf.quic_confs.get(&quic_str).cloned();
+        let quic_config_name = &self.quic.quic_config_name;
+        let quic_config = socket_quic_conf.quic_confs.get(quic_config_name).cloned();
         if quic_config.is_none() {
-            return Err(anyhow!("err:quic.quic={}", quic_str));
+            return Err(anyhow!(
+                "err:quic_config_name => quic_config_name:{}",
+                quic_config_name
+            ));
         }
         let endpoints = socket_quic_conf
             .endpoints_map
-            .get(&quic_str)
+            .get(quic_config_name)
             .cloned()
             .unwrap();
         let connect = Box::new(quic_connect::Connect::new(

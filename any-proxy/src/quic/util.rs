@@ -206,7 +206,7 @@ pub async fn listen(
     reuseport: bool,
     addr: &SocketAddr,
     sni: util::Sni,
-    #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: &Option<any_ebpf::AddSockHash>,
+    #[cfg(feature = "anyproxy-ebpf")] ebpf_tx: &Option<any_ebpf::AnyEbpfTx>,
 ) -> Result<quinn::Endpoint> {
     let udp_socket = bind(
         addr,
@@ -238,8 +238,8 @@ pub async fn listen(
             };
 
             log::debug!("cookie:{}, fd:{}", cookie, fd);
-            if ebpf_add_sock_hash.is_some() {
-                ebpf_add_sock_hash
+            if ebpf_tx.is_some() {
+                ebpf_tx
                     .as_ref()
                     .unwrap()
                     .add_reuseport_data(cookie, fd)

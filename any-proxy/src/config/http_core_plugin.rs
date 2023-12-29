@@ -1,6 +1,6 @@
 use crate::config as conf;
 use crate::proxy::stream_info::StreamInfo;
-use crate::proxy::StreamStreamShare;
+use crate::proxy::{StreamStatus, StreamStreamShare};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny, Share, ShareRw};
@@ -14,7 +14,7 @@ pub type PluginHandleLog =
     fn(Share<StreamInfo>) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
 pub type PluginHandleStream =
-    fn(ShareRw<StreamStreamShare>) -> Pin<Box<dyn Future<Output = Result<usize>> + Send>>;
+    fn(ShareRw<StreamStreamShare>) -> Pin<Box<dyn Future<Output = Result<StreamStatus>> + Send>>;
 
 pub type PluginHandleSetStream =
     fn(plugin: PluginHandleStream) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;

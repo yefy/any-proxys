@@ -6,7 +6,7 @@ use crate::stream::stream_flow::StreamFlowInfo;
 use crate::Protocol77;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::future_wait::FutureWait;
-use any_base::typ::{ArcMutex, Share, ShareRw};
+use any_base::typ::{ArcMutex, Share, ShareRw, ValueOption};
 use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
@@ -135,7 +135,7 @@ pub struct StreamInfo {
     pub session_time: f32,
     pub debug_is_open_print: bool,
     pub request_id: ArcString,
-    pub protocol_hello: ArcMutex<Arc<AnyproxyHello>>,
+    pub protocol_hello: ValueOption<Arc<AnyproxyHello>>,
     pub protocol_hello_size: usize,
     pub err_status: ErrStatus,
     pub err_status_str: Option<ArcString>,
@@ -166,6 +166,9 @@ pub struct StreamInfo {
     pub download_read: FutureWait,
     pub upload_close: FutureWait,
     pub download_close: FutureWait,
+    pub debug_print_access_log_time: u64,
+    pub debug_print_stream_flow_time: u64,
+    pub stream_so_singer_time: usize,
 }
 
 impl StreamInfo {
@@ -173,6 +176,10 @@ impl StreamInfo {
         server_stream_info: Arc<ServerStreamInfo>,
         debug_is_open_stream_work_times: bool,
         executors: Option<ExecutorsLocal>,
+        debug_print_access_log_time: u64,
+        debug_print_stream_flow_time: u64,
+        stream_so_singer_time: usize,
+        debug_is_open_print: bool,
     ) -> StreamInfo {
         StreamInfo {
             executors,
@@ -181,9 +188,9 @@ impl StreamInfo {
             local_domain: None,
             remote_domain: None,
             session_time: 0.0,
-            debug_is_open_print: false,
+            debug_is_open_print,
             request_id: ArcString::default(),
-            protocol_hello: ArcMutex::default(),
+            protocol_hello: ValueOption::default(),
             protocol_hello_size: 0,
             err_status: ErrStatus::ClientProtoErr,
             err_status_str: None,
@@ -214,6 +221,9 @@ impl StreamInfo {
             download_read: FutureWait::new(),
             upload_close: FutureWait::new(),
             download_close: FutureWait::new(),
+            debug_print_access_log_time,
+            debug_print_stream_flow_time,
+            stream_so_singer_time,
         }
     }
 

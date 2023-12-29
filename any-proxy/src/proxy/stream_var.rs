@@ -198,50 +198,50 @@ pub fn session_time(stream_info: &StreamInfo) -> Option<VarAnyData> {
 }
 
 pub fn request_id(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::ArcString(protocol_hello.request_id.clone()))
 }
 
 pub fn versions(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::ArcString(protocol_hello.version.clone()))
 }
 
 pub fn client_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::SocketAddr(protocol_hello.client_addr))
 }
 
 pub fn client_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::Str(protocol_hello.client_addr.ip().to_string()))
 }
 
 pub fn client_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::U16(protocol_hello.client_addr.port()))
 }
 
 pub fn domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    let protocol_hello = stream_info.protocol_hello.get();
-    if protocol_hello.is_none() {
+    if stream_info.protocol_hello.is_none() {
         return None;
     }
+    let protocol_hello = stream_info.protocol_hello.get();
     Some(VarAnyData::ArcString(protocol_hello.domain.clone()))
 }
 

@@ -258,7 +258,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     #[cfg(feature = "anyproxy-ebpf")]
     let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
     #[cfg(feature = "anyproxy-ebpf")]
-    let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
+    let ebpf_tx = any_ebpf_core_conf.ebpf();
     use crate::config::socket_quic;
     let socket_quic_conf = socket_quic::main_conf(&ms).await;
     let domain_core_conf = domain_core::main_conf_mut(&ms).await;
@@ -291,7 +291,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         let scc = value.domain_config_contexts[0].scc.get();
         let http_core_conf0 = http_core::currs_conf(scc.http_server_confs());
         socket_quic_conf
-            .config(&http_core_conf0.quic_conf_name)
+            .config(&http_core_conf0.quic_config_name)
             .unwrap()
     };
     let listen_server: Arc<Box<dyn Server>> = Arc::new(Box::new(quic_server::Server::new(
@@ -300,7 +300,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         quic_config,
         sni.clone(),
         #[cfg(feature = "anyproxy-ebpf")]
-        ebpf_add_sock_hash,
+        ebpf_tx,
     )?));
 
     let plugin_handle_protocol = {

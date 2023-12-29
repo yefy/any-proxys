@@ -38,8 +38,7 @@ impl Runtime for ThreadRuntime {
     }
 }
 
-#[derive(Clone)]
-pub struct ExecutorsLocal {
+pub struct ExecutorsLocalContext {
     pub run_time: Arc<Box<dyn Runtime>>,
     pub group_version: i32,
     pub thread_id: std::thread::ThreadId,
@@ -48,7 +47,51 @@ pub struct ExecutorsLocal {
     pub shutdown_thread_tx: broadcast::Sender<bool>,
 }
 
+impl ExecutorsLocalContext {
+    pub fn new(
+        run_time: Arc<Box<dyn Runtime>>,
+        group_version: i32,
+        thread_id: std::thread::ThreadId,
+        cpu_affinity: bool,
+        wait_group_worker: Worker,
+        shutdown_thread_tx: broadcast::Sender<bool>,
+    ) -> Self {
+        ExecutorsLocalContext {
+            run_time,
+            group_version,
+            thread_id,
+            cpu_affinity,
+            wait_group_worker,
+            shutdown_thread_tx,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ExecutorsLocal {
+    pub context: Arc<ExecutorsLocalContext>,
+}
+
 impl ExecutorsLocal {
+    pub fn new(
+        run_time: Arc<Box<dyn Runtime>>,
+        group_version: i32,
+        thread_id: std::thread::ThreadId,
+        cpu_affinity: bool,
+        wait_group_worker: Worker,
+        shutdown_thread_tx: broadcast::Sender<bool>,
+    ) -> Self {
+        ExecutorsLocal {
+            context: Arc::new(ExecutorsLocalContext::new(
+                run_time,
+                group_version,
+                thread_id,
+                cpu_affinity,
+                wait_group_worker,
+                shutdown_thread_tx,
+            )),
+        }
+    }
     pub fn _start<S, F>(&self, #[cfg(feature = "anyspawn-count")] name: String, service: S)
     where
         S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
@@ -77,7 +120,7 @@ impl ExecutorsLocal {
     }
 
     pub fn error(&self, err: anyhow::Error) {
-        self.wait_group_worker.error(err);
+        self.context.wait_group_worker.error(err);
     }
 }
 
@@ -131,14 +174,14 @@ impl ExecutorLocalSpawn {
         let wait_group = WaitGroup::new();
         let wait_group_worker = wait_group.worker();
 
-        let executors = ExecutorsLocal {
+        let executors = ExecutorsLocal::new(
             run_time,
-            group_version: version,
+            version,
             thread_id,
             cpu_affinity,
             wait_group_worker,
             shutdown_thread_tx,
-        };
+        );
 
         return ExecutorLocalSpawn {
             executors,
@@ -150,14 +193,14 @@ impl ExecutorLocalSpawn {
         let (shutdown_thread_tx, _) = broadcast::channel(100);
         let wait_group = WaitGroup::new();
         let wait_group_worker = wait_group.worker();
-        let executors = ExecutorsLocal {
-            run_time: executors.run_time.clone(),
-            group_version: executors.group_version,
-            thread_id: executors.thread_id,
-            cpu_affinity: executors.cpu_affinity,
+        let executors = ExecutorsLocal::new(
+            executors.context.run_time.clone(),
+            executors.context.group_version,
+            executors.context.thread_id,
+            executors.context.cpu_affinity,
             wait_group_worker,
             shutdown_thread_tx,
-        };
+        );
 
         return ExecutorLocalSpawn {
             executors,
@@ -196,17 +239,21 @@ impl ExecutorLocalSpawn {
     pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
         log::debug!(
             "send version:{}, flag:{}, is_fast_shutdown:{}",
-            self.executors.group_version,
+            self.executors.context.group_version,
             flag,
             is_fast_shutdown
         );
-        let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
+        let _ = self
+            .executors
+            .context
+            .shutdown_thread_tx
+            .send(is_fast_shutdown);
     }
 
     pub async fn wait(&self, flag: &str) -> Result<()> {
         log::debug!(
             "wait version:{}, flag:{}",
-            self.executors.group_version,
+            self.executors.context.group_version,
             flag
         );
         self.wait_group.wait().await
@@ -232,7 +279,7 @@ impl ExecutorLocalSpawn {
         log::debug!(
             "stop version:{}, flag:{}, is_fast_shutdown:{}, \
         shutdown_timeout:{}, wait_group.count:{}",
-            self.executors.group_version,
+            self.executors.context.group_version,
             flag,
             is_fast_shutdown,
             shutdown_timeout,
@@ -240,7 +287,11 @@ impl ExecutorLocalSpawn {
         );
 
         if is_fast_shutdown {
-            let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
+            let _ = self
+                .executors
+                .context
+                .shutdown_thread_tx
+                .send(is_fast_shutdown);
         }
 
         loop {
@@ -250,7 +301,7 @@ impl ExecutorLocalSpawn {
                     if let Err(_) = ret {
                         log::error!(
                         "err:wait_group.wait: version:{}, flag:{}, wait_group.count:{}",
-                        self.executors.group_version,
+                        self.executors.context.group_version,
                         flag,
                             self.wait_group.count(),
                         );
@@ -261,10 +312,10 @@ impl ExecutorLocalSpawn {
                     break;
                 },
                 _ = tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
-                    let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
+                    let _ = self.executors.context.shutdown_thread_tx.send(is_fast_shutdown);
                         log::warn!(
                         "stop timeout: version:{}, flag:{}, wait_group.count:{}",
-                        self.executors.group_version,
+                        self.executors.context.group_version,
                         flag,
                             self.wait_group.count(),
                         );
@@ -286,64 +337,68 @@ pub fn _start<S, F>(
     S: FnOnce(ExecutorsLocal) -> F + Send + 'static,
     F: Future<Output = Result<()>> + Send + 'static,
 {
-    let version = executors.group_version;
+    let version = executors.context.group_version;
     log::debug!(
         "start version:{}, worker_threads:{}",
         version,
-        executors.wait_group_worker.count(),
+        executors.context.wait_group_worker.count(),
     );
 
     let wait_group_worker_inner = if is_wait {
-        Some(executors.wait_group_worker.add())
+        Some(executors.context.wait_group_worker.add())
     } else {
         None
     };
 
-    executors.run_time.clone().spawn(Box::pin(async move {
-        scopeguard::defer! {
-            log::debug!("stop executor version:{}", version);
-            if wait_group_worker_inner.is_some() {
-                wait_group_worker_inner.unwrap().done();
+    executors
+        .context
+        .run_time
+        .clone()
+        .spawn(Box::pin(async move {
+            scopeguard::defer! {
+                log::debug!("stop executor version:{}", version);
+                if wait_group_worker_inner.is_some() {
+                    wait_group_worker_inner.unwrap().done();
+                }
+
+                #[cfg(feature = "anyspawn-count")]
+                {
+                    let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                    let count = count_map.get_mut(&name);
+                    if count.is_none() {
+                        log::error!("_start name {} nil", name);
+                    } else {
+                        let count = count.unwrap();
+                        *count -= 1;
+                        log::info!("_start name {} count:{}", name, count);
+                    }
+                }
             }
+            log::debug!("start executor version:{}", version);
 
             #[cfg(feature = "anyspawn-count")]
             {
                 let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
                 let count = count_map.get_mut(&name);
                 if count.is_none() {
-                    log::error!("_start name {} nil", name);
+                    count_map.insert(name.to_string(), 1);
+                    log::info!("-start name {} count:{}", name, 1);
                 } else {
                     let count = count.unwrap();
-                    *count -= 1;
-                    log::info!("_start name {} count:{}", name, count);
+                    *count += 1;
+                    log::info!("-start name {} count:{}", name, count);
                 }
             }
-        }
-        log::debug!("start executor version:{}", version);
 
-        #[cfg(feature = "anyspawn-count")]
-        {
-            let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
-            let count = count_map.get_mut(&name);
-            if count.is_none() {
-                count_map.insert(name.to_string(), 1);
-                log::info!("-start name {} count:{}", name, 1);
-            } else {
-                let count = count.unwrap();
-                *count += 1;
-                log::info!("-start name {} count:{}", name, count);
+            let ret: Result<()> = async {
+                service(executors)
+                    .await
+                    .map_err(|e| anyhow!("err:start service => e:{}", e))?;
+                Ok(())
             }
-        }
-
-        let ret: Result<()> = async {
-            service(executors)
-                .await
-                .map_err(|e| anyhow!("err:start service => e:{}", e))?;
-            Ok(())
-        }
-        .await;
-        ret.unwrap_or_else(|e| log::error!("err:start spawn_local => e:{}", e));
-    }));
+            .await;
+            ret.unwrap_or_else(|e| log::error!("err:start spawn_local => e:{}", e));
+        }));
 }
 
 pub fn _start_and_free<S, F>(service: S)

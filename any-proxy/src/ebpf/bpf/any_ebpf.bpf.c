@@ -6,7 +6,7 @@
 #include <bpf/bpf_endian.h>
 
 
-#define MAP_MAX_ENTRIES 10240
+#define MAP_MAX_ENTRIES 502400
 
 /********sockops,sk_msg*******/
 struct sock_key {
@@ -158,29 +158,45 @@ struct {
 } sk_index_hash SEC(".maps");
 
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAP_MAX_ENTRIES);
+    __type(key, struct sock_map_key);
+    __type(value, __u32);
+} sk_seq_hash SEC(".maps");
+
+
 SEC("sk_skb/stream_parser")
 int bpf_sk_skb__stream_parser(struct __sk_buff *skb)
 {
-    //bpf_printk("bpf_sk_skb__stream_parser skb->len:%u, %p\n", skb->len, skb);
     return skb->len;
+}
+
+static __always_inline
+void bpf_printk_skb(struct __sk_buff *skb, int fd, char *err)
+{
+    bpf_printk("=====================bpf_sk_skb__stream_verdict, %p\n", skb);
+    bpf_printk("verdict err:%s, %p\n", err, skb);
+    bpf_printk("verdict skb->len:%u, %p\n", skb->len, skb);
+    bpf_printk("verdict fd:%d, %p\n", fd, skb);
+    bpf_printk("verdict remote_ip4 = %d.%d\n", (u8)skb->remote_ip4, (u8)(skb->remote_ip4 >> 8));
+    bpf_printk("verdict remote_ip4 = %d.%d\n", (u8)(skb->remote_ip4 >> 16), skb->remote_ip4 >> 24);
+    bpf_printk("verdict remote_ip4 = %u\n", skb->remote_ip4);
+    bpf_printk("verdict remote_port = %d\n", bpf_ntohl(skb->remote_port));
+
+    bpf_printk("verdict local_ip4 = %d.%d\n", (u8)skb->local_ip4, (u8)(skb->local_ip4 >> 8));
+    bpf_printk("verdict local_ip4 = %d.%d\n", (u8)(skb->local_ip4 >> 16), skb->local_ip4 >> 24);
+    bpf_printk("verdict local_ip4 = %u\n", skb->local_ip4);
+    bpf_printk("verdict local_port = %d\n", skb->local_port);
 }
 
 SEC("sk_skb/stream_verdict")
 int bpf_sk_skb__stream_verdict(struct __sk_buff *skb)
 {
-    /*
-    bpf_printk("=====================bpf_sk_skb__stream_verdict, %p\n", skb);
-    bpf_printk("bpf_sk_skb__stream_verdict remote_ip4 = %d.%d\n", (u8)skb->remote_ip4, (u8)(skb->remote_ip4 >> 8));
-    bpf_printk("bpf_sk_skb__stream_verdict remote_ip4 = %d.%d\n", (u8)(skb->remote_ip4 >> 16), skb->remote_ip4 >> 24);
-    bpf_printk("bpf_sk_skb__stream_verdict remote_ip4 = %u\n", skb->remote_ip4);
-    bpf_printk("bpf_sk_skb__stream_verdict remote_port = %d\n", bpf_ntohl(skb->remote_port));
-
-    bpf_printk("bpf_sk_skb__stream_verdict local_ip4 = %d.%d\n", (u8)skb->local_ip4, (u8)(skb->local_ip4 >> 8));
-    bpf_printk("bpf_sk_skb__stream_verdict local_ip4 = %d.%d\n", (u8)(skb->local_ip4 >> 16), skb->local_ip4 >> 24);
-    bpf_printk("bpf_sk_skb__stream_verdict local_ip4 = %u\n", skb->local_ip4);
-    bpf_printk("bpf_sk_skb__stream_verdict local_port = %d\n", skb->local_port);
-     */
-
+	if (skb->family != 2) {
+        bpf_printk_skb(skb, -1, "skb->family != 2");
+        return SK_DROP;
+    }
 
     struct sock_map_key map_key = {};
     map_key.remote_ip4 = skb->remote_ip4;
@@ -191,12 +207,23 @@ int bpf_sk_skb__stream_verdict(struct __sk_buff *skb)
 
     int *fd = bpf_map_lookup_elem(&sk_index_hash, &map_key);
     if (fd == NULL) {
-        bpf_printk("bpf_sk_skb__stream_verdict fd == NULL, %p\n", skb);
-        return 0;
+        bpf_printk_skb(skb, 0, "fd == NULL");
+        return SK_DROP;
     }
 
-    //bpf_printk("bpf_sk_skb__stream_verdict *fd = %d, %p\n", *fd, skb);
-    return bpf_sk_redirect_map(skb, &sk_sockmap, *fd, 0);
+
+	
+	if (skb->len == 0) {
+        bpf_printk_skb(skb, *fd, "skb->len == 0");
+        return SK_DROP;
+    }
+
+    int ret = bpf_sk_redirect_map(skb, &sk_sockmap, *fd, 0);
+    if (ret != SK_PASS) {
+        bpf_printk_skb(skb, *fd, "ret != SK_PASS");
+    }
+
+    return ret;
 }
 
 

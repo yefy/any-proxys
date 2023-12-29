@@ -1,6 +1,6 @@
 use crate::config as conf;
 use crate::config::config_toml;
-use crate::config::config_toml::default_quic;
+use crate::config::config_toml::default_quic_config;
 use crate::config::config_toml::QuicConfig;
 use crate::quic::endpoints;
 use any_base::module::module;
@@ -16,13 +16,13 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuicConfigs {
-    #[serde(default = "default_quic")]
+    #[serde(default = "default_quic_config")]
     #[serde(rename = "quic")]
     confs: Vec<QuicConfig>,
 }
 
 pub struct Conf {
-    pub quic_confs: HashMap<String, QuicConfig>,
+    pub quic_confs: HashMap<String, Arc<QuicConfig>>,
     pub endpoints_map: HashMap<String, Arc<endpoints::Endpoints>>,
 }
 
@@ -37,20 +37,22 @@ impl Conf {
             toml::from_str("").map_err(|e| anyhow!("err: => e:{}", e))?;
 
         for quic_conf in &quic_confs_default.confs {
-            if conf.quic_confs.get(&quic_conf.quic_name).is_some() {
+            if conf.quic_confs.get(&quic_conf.quic_config_name).is_some() {
                 continue;
             }
-            conf.quic_confs
-                .insert(quic_conf.quic_name.clone(), quic_conf.clone());
+            conf.quic_confs.insert(
+                quic_conf.quic_config_name.clone(),
+                Arc::new(quic_conf.clone()),
+            );
             conf.endpoints_map.insert(
-                quic_conf.quic_name.clone(),
+                quic_conf.quic_config_name.clone(),
                 Arc::new(endpoints::Endpoints::new(quic_conf, false)?),
             );
         }
         Ok(conf)
     }
 
-    pub fn config(&self, str: &str) -> Option<config_toml::QuicConfig> {
+    pub fn config(&self, str: &str) -> Option<Arc<config_toml::QuicConfig>> {
         self.quic_confs.get(str).cloned()
     }
 }
@@ -183,13 +185,15 @@ async fn quic(
     log::trace!("socket_quic quic_confs:{:?}", quic_confs);
 
     for quic_conf in &quic_confs.confs {
-        if conf.quic_confs.get(&quic_conf.quic_name).is_some() {
-            return Err(anyhow!("err:{:?}", quic_conf.quic_name));
+        if conf.quic_confs.get(&quic_conf.quic_config_name).is_some() {
+            return Err(anyhow!("err:{:?}", quic_conf.quic_config_name));
         }
-        conf.quic_confs
-            .insert(quic_conf.quic_name.clone(), quic_conf.clone());
+        conf.quic_confs.insert(
+            quic_conf.quic_config_name.clone(),
+            Arc::new(quic_conf.clone()),
+        );
         conf.endpoints_map.insert(
-            quic_conf.quic_name.clone(),
+            quic_conf.quic_config_name.clone(),
             Arc::new(endpoints::Endpoints::new(quic_conf, false)?),
         );
     }

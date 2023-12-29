@@ -27,7 +27,7 @@ use std::time::Instant;
 pub struct PeerStreamConnectTcp {
     host: ArcString,
     address: SocketAddr, //ip:port, domain:port
-    tcp_config: TcpConfig,
+    tcp_config: Arc<TcpConfig>,
     tcp_connect: Arc<tcp_connect::Connect>,
 }
 
@@ -35,7 +35,7 @@ impl PeerStreamConnectTcp {
     pub fn new(
         host: String,
         address: SocketAddr, //ip:port, domain:port
-        tcp_config: TcpConfig,
+        tcp_config: Arc<TcpConfig>,
     ) -> PeerStreamConnectTcp {
         let host = ArcString::new(host);
         let tcp_connect =
@@ -53,10 +53,7 @@ impl PeerStreamConnectTcp {
 #[async_trait]
 impl PeerStreamConnect for PeerStreamConnectTcp {
     async fn connect(&self) -> Result<(StreamFlow, SocketAddr, SocketAddr)> {
-        let (stream, connect_info) = self
-            .tcp_connect
-            .connect(None, ArcMutex::default(), None)
-            .await?;
+        let (stream, connect_info) = self.tcp_connect.connect(None, None, None).await?;
         //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
         //let r = any_base::io::buf_reader::BufReader::new(r);
         //let w = any_base::io::buf_writer::BufWriter::new(w);
@@ -139,7 +136,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
 pub struct PeerStreamConnectSsl {
     host: ArcString,
     address: SocketAddr, //ip:port, domain:port
-    tcp_config: TcpConfig,
+    tcp_config: Arc<TcpConfig>,
     ssl_connect: ArcMutexTokio<ssl_connect::Connect>,
 }
 
@@ -148,7 +145,7 @@ impl PeerStreamConnectSsl {
         host: String,
         address: SocketAddr, //ip:port, domain:port
         ssl_domain: String,
-        tcp_config: TcpConfig,
+        tcp_config: Arc<TcpConfig>,
     ) -> PeerStreamConnectSsl {
         let host = ArcString::new(host);
         let ssl_connect = ssl_connect::Connect::new(
@@ -174,7 +171,7 @@ impl PeerStreamConnect for PeerStreamConnectSsl {
             .ssl_connect
             .get()
             .await
-            .connect(None, ArcMutex::default(), None)
+            .connect(None, None, None)
             .await?;
         //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
         //let r = any_base::io::buf_reader::BufReader::new(r);
@@ -260,7 +257,7 @@ pub struct PeerStreamConnectQuic {
     address: SocketAddr, //ip:port, domain:port
     //ssl_domain: String,
     //endpoints: Arc<endpoints::Endpoints>,
-    quic_config: QuicConfig,
+    quic_config: Arc<QuicConfig>,
     quic_connect: ArcMutexTokio<quic_connect::Connect>,
 }
 
@@ -270,7 +267,7 @@ impl PeerStreamConnectQuic {
         address: SocketAddr, //ip:port, domain:port
         ssl_domain: String,
         endpoints: Arc<endpoints::Endpoints>,
-        quic_config: QuicConfig,
+        quic_config: Arc<QuicConfig>,
     ) -> PeerStreamConnectQuic {
         let host = ArcString::new(host);
         let quic_connect = quic_connect::Connect::new(
@@ -299,7 +296,7 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
             .quic_connect
             .get()
             .await
-            .connect(None, ArcMutex::default(), None)
+            .connect(None, None, None)
             .await?;
         //let (read_timeout, write_timeout, info, r, w, fd) = stream.split_stream();
         //let r = any_base::io::buf_reader::BufReader::new(r);
@@ -410,7 +407,7 @@ impl connect::Connect for Connect {
     async fn connect(
         &self,
         _request_id: Option<ArcString>,
-        stream_info: ArcMutex<StreamFlowInfo>,
+        stream_info: Option<ArcMutex<StreamFlowInfo>>,
         _run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
         let start_time = Instant::now();
@@ -421,7 +418,7 @@ impl connect::Connect for Connect {
             stream_err = stream_flow::StreamFlowErr::WriteErr;
         }
         if stream_info.is_some() {
-            stream_info.get_mut().err = stream_err;
+            stream_info.as_ref().unwrap().get_mut().err = stream_err;
         }
 
         let (stream, local_addr, remote_addr) = connect?;
@@ -431,7 +428,7 @@ impl connect::Connect for Connect {
             tokio::time::Duration::from_secs(self.connect.stream_recv_timeout().await as u64);
         let write_timeout =
             tokio::time::Duration::from_secs(self.connect.stream_send_timeout().await as u64);
-        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+        stream.set_config(read_timeout, write_timeout, None);
 
         Ok((
             stream,

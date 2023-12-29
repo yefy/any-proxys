@@ -193,10 +193,12 @@ async fn port_listen_quic(
             return Err(anyhow!("err:addr is exist => addr:{}", addr));
         }
 
-        let quic_str = http_core_conf.quic_conf_name.clone();
-        let quic_config = socket_quic_conf.config(&quic_str);
+        let quic_config = socket_quic_conf.config(&http_core_conf.quic_config_name);
         if quic_config.is_none() {
-            return Err(anyhow!("err:ups.quic => quic_str:{}", quic_str));
+            return Err(anyhow!(
+                "err:quic_config_name => quic_config_name:{}",
+                http_core_conf.quic_config_name
+            ));
         }
         let quic_config = quic_config.unwrap();
 
@@ -213,7 +215,7 @@ async fn port_listen_quic(
         #[cfg(feature = "anyproxy-ebpf")]
         let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
         #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
+        let ebpf_tx = any_ebpf_core_conf.ebpf();
 
         let listen_server: Arc<Box<dyn server::Server>> =
             Arc::new(Box::new(quic_server::Server::new(
@@ -222,7 +224,7 @@ async fn port_listen_quic(
                 quic_config.clone(),
                 sni,
                 #[cfg(feature = "anyproxy-ebpf")]
-                ebpf_add_sock_hash,
+                ebpf_tx,
             )?));
 
         port_core_conf.port_config_listen_map.insert(

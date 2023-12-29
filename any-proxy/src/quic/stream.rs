@@ -286,10 +286,18 @@ impl tokio::io::AsyncWrite for Stream {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream_tx.as_mut().unwrap()).poll_flush(cx)
+        if self.stream_tx.is_some() {
+            Pin::new(&mut self.stream_tx.as_mut().unwrap()).poll_flush(cx)
+        } else {
+            Poll::Ready(Ok(()))
+        }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream_tx.as_mut().unwrap()).poll_shutdown(cx)
+        if self.stream_tx.is_some() {
+            Pin::new(&mut self.stream_tx.as_mut().unwrap()).poll_shutdown(cx)
+        } else {
+            Poll::Ready(Ok(()))
+        }
     }
 }

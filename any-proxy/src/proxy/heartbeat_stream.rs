@@ -28,7 +28,7 @@ impl HeartbeatStream {
             return Ok(Some((client_buf_reader, stream_info)));
         }
 
-        let mut shutdown_thread_rx = executors.shutdown_thread_tx.subscribe();
+        let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
         executors._start_and_free(move |_| async move {
             async {
                 tokio::select! {

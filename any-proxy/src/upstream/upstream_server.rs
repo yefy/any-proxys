@@ -76,7 +76,7 @@ impl UpstreamServer {
             log::debug!("start ups_name:[{}]", ups_data.ups_config.name);
         }
 
-        let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
+        let mut shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
         loop {
             tokio::select! {
                 biased;

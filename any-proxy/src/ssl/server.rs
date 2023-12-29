@@ -26,13 +26,13 @@ impl Server {
     pub fn new(
         addr: SocketAddr,
         reuseport: bool,
-        config: Config,
+        config: Arc<Config>,
         sni: util::Sni,
     ) -> Result<Server> {
         Ok(Server {
             addr,
             reuseport,
-            config: Arc::new(config),
+            config,
             sni: ArcMutex::new(sni),
         })
     }
@@ -212,7 +212,7 @@ impl server::Connection for Connection {
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
-            stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+            stream.set_config(read_timeout, write_timeout, None);
             Ok(Some((
                 stream,
                 ServerStreamInfo {

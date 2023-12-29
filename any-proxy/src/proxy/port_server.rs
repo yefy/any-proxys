@@ -67,7 +67,7 @@ impl PortServer {
             let (tunnel_listen, tunnel_publish) = tunnel_core_conf
                 .server()
                 .unwrap()
-                .listen(self.executors.run_time.clone())
+                .listen(self.executors.context.run_time.clone())
                 .await;
             (Some(tunnel_listen), Some(tunnel_publish))
         } else {
@@ -86,7 +86,7 @@ impl PortServer {
             .await?;
         }
 
-        let mut shutdown_thread_tx = self.executors.shutdown_thread_tx.subscribe();
+        let mut shutdown_thread_tx = self.executors.context.shutdown_thread_tx.subscribe();
         tokio::select! {
             biased;
             _ret = executor.wait("port_server wait") => {
@@ -141,7 +141,7 @@ impl PortServer {
                                 log::error!(
                                 "err:port_config_listen_map => key:{} invalid, group_version:{}",
                                 key,
-                                executors.group_version
+                                executors.context.group_version
                             );
                                 return Ok(());
                             }

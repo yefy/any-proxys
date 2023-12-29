@@ -1,7 +1,7 @@
 use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
-use crate::typ::ArcMutex;
+use crate::typ::{ArcMutex, ArcMutexWriteGuard};
 use crate::util::StreamMsg;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -69,7 +69,7 @@ impl StreamFlowInfo {
 pub struct StreamFlow {
     read_timeout: tokio::time::Duration,
     write_timeout: tokio::time::Duration,
-    info: ArcMutex<StreamFlowInfo>,
+    info: Option<ArcMutex<StreamFlowInfo>>,
     r: Box<dyn StreamReadFlow>,
     w: Box<dyn StreamWriteFlow>,
     fd: i32,
@@ -79,6 +79,9 @@ unsafe impl Send for StreamFlow {}
 unsafe impl Sync for StreamFlow {}
 
 impl StreamFlow {
+    pub fn info(&self) -> ArcMutexWriteGuard<StreamFlowInfo> {
+        self.info.as_ref().unwrap().get_mut()
+    }
     pub fn split(self) -> (StreamFlowRead, StreamFlowWrite) {
         crate::io::split::split(self)
     }
@@ -87,7 +90,7 @@ impl StreamFlow {
     ) -> (
         tokio::time::Duration,
         tokio::time::Duration,
-        ArcMutex<StreamFlowInfo>,
+        Option<ArcMutex<StreamFlowInfo>>,
         Box<dyn StreamReadFlow>,
         Box<dyn StreamWriteFlow>,
         i32,
@@ -108,7 +111,7 @@ impl StreamFlow {
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
             write_timeout: tokio::time::Duration::from_secs(std::u64::MAX),
-            info: ArcMutex::default(),
+            info: None,
             r: Box::new(r),
             w: Box::new(w),
             fd,
@@ -127,20 +130,20 @@ impl StreamFlow {
         &mut self,
         read_timeout: tokio::time::Duration,
         write_timeout: tokio::time::Duration,
-        info: ArcMutex<StreamFlowInfo>,
+        info: Option<ArcMutex<StreamFlowInfo>>,
     ) {
         self.read_timeout = read_timeout;
         self.write_timeout = write_timeout;
         self.set_stream_info(info)
     }
 
-    pub fn set_stream_info(&mut self, info: ArcMutex<StreamFlowInfo>) {
-        if info.is_some() {
-            let mut info = info.get_mut();
+    pub fn set_stream_info(&mut self, info: Option<ArcMutex<StreamFlowInfo>>) {
+        self.info = info;
+        if self.info.is_some() {
+            let mut info = self.info();
             info.write_timeout = self.get_write_timeout();
             info.read_timeout = self.get_read_timeout();
         }
-        self.info = info;
     }
 
     /*
@@ -257,7 +260,7 @@ impl StreamFlow {
         match ret {
             Err(e) => {
                 if self.info.is_some() {
-                    let mut info = self.info.get_mut();
+                    let mut info = self.info();
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
@@ -266,7 +269,7 @@ impl StreamFlow {
             }
             Ok(usize) => {
                 if self.info.is_some() {
-                    self.info.get_mut().read += usize as i64;
+                    self.info().read += usize as i64;
                 }
                 Ok(())
             }
@@ -389,7 +392,7 @@ impl StreamFlow {
         match ret {
             Err(e) => {
                 if self.info.is_some() {
-                    let mut info = self.info.get_mut();
+                    let mut info = self.info();
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
@@ -398,7 +401,7 @@ impl StreamFlow {
             }
             Ok(usize) => {
                 if self.info.is_some() {
-                    self.info.get_mut().write += usize as i64;
+                    self.info().write += usize as i64;
                 }
                 Ok(usize)
             }

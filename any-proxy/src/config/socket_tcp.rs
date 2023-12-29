@@ -1,6 +1,6 @@
 use crate::config as conf;
 use crate::config::config_toml;
-use crate::config::config_toml::default_tcp;
+use crate::config::config_toml::default_tcp_config;
 use crate::config::config_toml::TcpConfig;
 use any_base::module::module;
 use any_base::typ;
@@ -15,13 +15,13 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpConfigs {
-    #[serde(default = "default_tcp")]
+    #[serde(default = "default_tcp_config")]
     #[serde(rename = "tcp")]
     confs: Vec<TcpConfig>,
 }
 
 pub struct Conf {
-    pub tcp_confs: HashMap<String, TcpConfig>,
+    pub tcp_confs: HashMap<String, Arc<TcpConfig>>,
 }
 
 impl Conf {
@@ -32,15 +32,16 @@ impl Conf {
         let tcp_confs_default: TcpConfigs =
             toml::from_str("").map_err(|e| anyhow!("err: => e:{}", e))?;
         for tcp_conf in tcp_confs_default.confs {
-            if conf.tcp_confs.get(&tcp_conf.tcp_name).is_some() {
+            if conf.tcp_confs.get(&tcp_conf.tcp_config_name).is_some() {
                 continue;
             }
-            conf.tcp_confs.insert(tcp_conf.tcp_name.clone(), tcp_conf);
+            conf.tcp_confs
+                .insert(tcp_conf.tcp_config_name.clone(), Arc::new(tcp_conf));
         }
         Ok(conf)
     }
 
-    pub fn config(&self, str: &str) -> Option<config_toml::TcpConfig> {
+    pub fn config(&self, str: &str) -> Option<Arc<config_toml::TcpConfig>> {
         self.tcp_confs.get(str).cloned()
     }
 }
@@ -173,10 +174,11 @@ async fn tcp(
     log::trace!("socket_tcp tcp_confs:{:?}", tcp_confs);
 
     for tcp_conf in tcp_confs.confs {
-        if conf.tcp_confs.get(&tcp_conf.tcp_name).is_some() {
-            return Err(anyhow!("err:{:?}", tcp_conf.tcp_name));
+        if conf.tcp_confs.get(&tcp_conf.tcp_config_name).is_some() {
+            return Err(anyhow!("err:{:?}", tcp_conf.tcp_config_name));
         }
-        conf.tcp_confs.insert(tcp_conf.tcp_name.clone(), tcp_conf);
+        conf.tcp_confs
+            .insert(tcp_conf.tcp_config_name.clone(), Arc::new(tcp_conf));
     }
     return Ok(());
 }

@@ -8,6 +8,8 @@ use anyhow::Result;
 use libc::c_uint;
 use libc::c_ushort;
 use std::net::SocketAddr;
+use std::os::fd::AsFd;
+use std::os::fd::AsRawFd;
 
 #[path = "bpf/.output/any_ebpf.skel.rs"]
 pub mod any_ebpf;
@@ -24,7 +26,7 @@ pub struct sock_map_key {
 }
 
 #[derive(Clone, Debug)]
-pub struct SockMapData {
+pub struct AddSockHashSocketData {
     client_fd: i32,
     client_peer_addr: SocketAddr,
     client_local_addr: SocketAddr,
@@ -34,39 +36,40 @@ pub struct SockMapData {
 }
 
 #[derive(Clone, Debug)]
-pub struct ReuseportData {
+pub struct AddReuseportData {
     dcid: u64,
     fd: i32,
 }
 
 #[derive(Clone, Debug)]
-pub enum AnyEbofData {
-    AddSockMapData(SockMapData),
-    DelSockMapData(SockMapData),
-    AddReuseportData(ReuseportData),
+pub enum AddData {
+    AddSocketData(AddSockHashSocketData),
+    DelSocketData(AddSockHashSocketData),
+    AddReuseportData(AddReuseportData),
 }
 
 #[derive(Clone, Debug)]
-pub struct AnyEbpfTxData {
-    data: AnyEbofData,
+pub struct AddSockHashData {
+    data: AddData,
     tx: async_channel::Sender<()>,
 }
 
 #[derive(Clone, Debug)]
-pub struct AnyEbpfTx {
-    tx: async_channel::Sender<AnyEbpfTxData>,
+pub struct AddSockHash {
+    tx: async_channel::Sender<AddSockHashData>,
 }
 
-impl AnyEbpfTx {
-    pub fn sock_map_data(
+impl AddSockHash {
+    pub async fn add_socket_data(
+        &self,
         client_fd: i32,
         client_peer_addr: SocketAddr,
         client_local_addr: SocketAddr,
         ups_fd: i32,
         ups_peer_addr: SocketAddr,
         ups_local_addr: SocketAddr,
-    ) -> SockMapData {
-        let sock_map_data = SockMapData {
+    ) -> Result<async_channel::Receiver<()>> {
+        let socket_data = AddSockHashSocketData {
             client_fd,
             client_peer_addr,
             client_local_addr,
@@ -74,44 +77,18 @@ impl AnyEbpfTx {
             ups_peer_addr,
             ups_local_addr,
         };
-        sock_map_data
-    }
-    pub async fn add_sock_map_data(
-        &self,
-        client_fd: i32,
-        client_peer_addr: SocketAddr,
-        client_local_addr: SocketAddr,
-        ups_fd: i32,
-        ups_peer_addr: SocketAddr,
-        ups_local_addr: SocketAddr,
-    ) -> Result<async_channel::Receiver<()>> {
-        let sock_map_data = Self::sock_map_data(
-            client_fd,
-            client_peer_addr,
-            client_local_addr,
-            ups_fd,
-            ups_peer_addr,
-            ups_local_addr,
-        );
 
-        self.add_sock_map_data_ext(sock_map_data).await
-    }
-
-    pub async fn add_sock_map_data_ext(
-        &self,
-        sock_map_data: SockMapData,
-    ) -> Result<async_channel::Receiver<()>> {
         let (tx, rx) = async_channel::bounded(10);
         self.tx
-            .send(AnyEbpfTxData {
-                data: AnyEbofData::AddSockMapData(sock_map_data),
+            .send(AddSockHashData {
+                data: AddData::AddSocketData(socket_data),
                 tx,
             })
             .await?;
         Ok(rx)
     }
 
-    pub async fn del_sock_map_data(
+    pub async fn del_socket_data(
         &self,
         client_fd: i32,
         client_peer_addr: SocketAddr,
@@ -120,26 +97,19 @@ impl AnyEbpfTx {
         ups_peer_addr: SocketAddr,
         ups_local_addr: SocketAddr,
     ) -> Result<async_channel::Receiver<()>> {
-        let sock_map_data = Self::sock_map_data(
+        let socket_data = AddSockHashSocketData {
             client_fd,
             client_peer_addr,
             client_local_addr,
             ups_fd,
             ups_peer_addr,
             ups_local_addr,
-        );
+        };
 
-        self.del_sock_map_data_ext(sock_map_data).await
-    }
-
-    pub async fn del_sock_map_data_ext(
-        &self,
-        sock_map_data: SockMapData,
-    ) -> Result<async_channel::Receiver<()>> {
         let (tx, rx) = async_channel::bounded(10);
         self.tx
-            .send(AnyEbpfTxData {
-                data: AnyEbofData::DelSockMapData(sock_map_data),
+            .send(AddSockHashData {
+                data: AddData::DelSocketData(socket_data),
                 tx,
             })
             .await?;
@@ -151,12 +121,12 @@ impl AnyEbpfTx {
         dcid: u64,
         fd: i32,
     ) -> Result<async_channel::Receiver<()>> {
-        let reuseport_data = ReuseportData { dcid, fd };
+        let reuseport_data = AddReuseportData { dcid, fd };
 
         let (tx, rx) = async_channel::bounded(10);
         self.tx
-            .send(AnyEbpfTxData {
-                data: AnyEbofData::AddReuseportData(reuseport_data),
+            .send(AddSockHashData {
+                data: AddData::AddReuseportData(reuseport_data),
                 tx,
             })
             .await?;
@@ -182,13 +152,13 @@ impl EbpfGroup {
         self.thread_spawn.stop(true, 30).await
     }
 
-    pub async fn start(&mut self, debug_is_open_ebpf_log: bool) -> Result<AnyEbpfTx> {
+    pub async fn start(&mut self, debug_is_open_ebpf_log: bool) -> Result<AddSockHash> {
         let (data_tx, data_rx) = async_channel::bounded(200);
 
         let mut thread_spawn_wait_run = self.thread_spawn.thread_spawn_wait_run();
         thread_spawn_wait_run._start(move |async_context| {
             _block_on(1, 1, move |_| async move {
-                AnyEbpf::create(async_context, data_rx, debug_is_open_ebpf_log)
+                EbpfSockhash::create_sockhash(async_context, data_rx, debug_is_open_ebpf_log)
                     .await
                     .map_err(|e| anyhow!("err:create_sockhash => e:{}", e))?;
                 Ok(())
@@ -198,37 +168,31 @@ impl EbpfGroup {
 
         thread_spawn_wait_run.wait_run().await?;
 
-        Ok(AnyEbpfTx { tx: data_tx })
+        Ok(AddSockHash { tx: data_tx })
     }
 }
 
-pub struct AnyEbpf<'a> {
-    skel: AnyEbpfSkel<'a>,
-}
+pub struct EbpfSockhash {}
 
-impl AnyEbpf<'_> {
-    pub fn create_ebpf(debug_is_open_ebpf_log: bool) -> Result<AnyEbpf<'static>> {
+impl EbpfSockhash {
+    pub async fn create_sockhash(
+        async_context: AsyncThreadContext,
+        data_rx: async_channel::Receiver<AddSockHashData>,
+        debug_is_open_ebpf_log: bool,
+    ) -> Result<()> {
         let mut skel_builder = AnyEbpfSkelBuilder::default();
         skel_builder.obj_builder.debug(debug_is_open_ebpf_log);
+        use libbpf_rs::skel::SkelBuilder;
         let open_skel = skel_builder.open()?;
+        use libbpf_rs::skel::OpenSkel;
         let mut skel = open_skel.load()?;
 
         //bpf_sk_msg_verdict
-        AnyEbpf::msg_verdict(&mut skel)?;
+        EbpfSockhash::msg_verdict(&mut skel)?;
         //bpf_sk_skb__stream_verdict
-        AnyEbpf::stream_verdict(&mut skel)?;
+        EbpfSockhash::stream_verdict(&mut skel)?;
         //bpf_sk_reuseport
-        AnyEbpf::reuseport(&mut skel)?;
-
-        Ok(AnyEbpf { skel })
-    }
-
-    pub async fn create(
-        async_context: AsyncThreadContext,
-        data_rx: async_channel::Receiver<AnyEbpfTxData>,
-        debug_is_open_ebpf_log: bool,
-    ) -> Result<()> {
-        let mut any_ebpf = Self::create_ebpf(debug_is_open_ebpf_log)?;
+        EbpfSockhash::reuseport(&mut skel)?;
 
         log::info!("ebpf running");
 
@@ -236,7 +200,7 @@ impl AnyEbpf<'_> {
         let mut shutdown_thread_rx = async_context.shutdown_thread_tx.subscribe();
         loop {
             let ret: Result<bool> = async {
-                let msg: Result<Option<AnyEbpfTxData>> = async {
+                let msg: Result<Option<AddSockHashData>> = async {
                     tokio::select! {
                         biased;
                         _ = shutdown_thread_rx.recv() => {
@@ -256,20 +220,20 @@ impl AnyEbpf<'_> {
                     return Ok(true);
                 }
                 let msg = msg.unwrap();
-                match &msg.data {
-                    AnyEbofData::AddSockMapData(socket_data) => {
-                        if let Err(e) = AnyEbpf::do_add_sock_map(&mut any_ebpf.skel, socket_data) {
+                match msg.data {
+                    AddData::AddSocketData(socket_data) => {
+                        if let Err(e) = EbpfSockhash::add_sockhash(&mut skel, &socket_data).await {
                             log::error!("err:add_sockhash => e:{}", e);
                         }
                     }
-                    AnyEbofData::DelSockMapData(socket_data) => {
-                        if let Err(e) = AnyEbpf::do_del_sock_map(&mut any_ebpf.skel, socket_data) {
+                    AddData::DelSocketData(socket_data) => {
+                        if let Err(e) = EbpfSockhash::del_sockhash(&mut skel, &socket_data).await {
                             log::error!("err:del_sockhash => e:{}", e);
                         }
                     }
-                    AnyEbofData::AddReuseportData(reuseport_data) => {
+                    AddData::AddReuseportData(reuseport_data) => {
                         if let Err(e) =
-                            AnyEbpf::do_add_reuseport(&mut any_ebpf.skel, reuseport_data)
+                            EbpfSockhash::add_reuseport(&mut skel, &reuseport_data).await
                         {
                             log::error!("err:add_reuseport => e:{}", e);
                         }
@@ -307,7 +271,7 @@ impl AnyEbpf<'_> {
             .write(false)
             .open("/sys/fs/cgroup/")
             .map_err(|e| anyhow::anyhow!("open e:{}", e))?;
-        use std::os::unix::io::AsRawFd;
+
         let cgroup_fd = f.as_raw_fd();
         log::info!("cgroup_fd:{}", cgroup_fd);
 
@@ -327,7 +291,8 @@ impl AnyEbpf<'_> {
             "bpf_sk_msg_verdict section:{:?}",
             bpf_sk_msg_verdict.section()
         );
-        let sock_hash_fd = skel.maps_mut().sk_sockhash().fd();
+
+        let sock_hash_fd = skel.maps_mut().sk_sockhash().as_fd().as_raw_fd();
         let _bpf_sk_msg_verdict = skel
             .progs_mut()
             .bpf_sk_msg_verdict()
@@ -353,7 +318,7 @@ impl AnyEbpf<'_> {
     pub fn stream_verdict(skel: &mut AnyEbpfSkel) -> Result<()> {
         log::info!("stream_verdict");
         //bpf_sk_skb__stream_parser
-        let sk_sockmap_fd = skel.maps().sk_sockmap().fd();
+        let sk_sockmap_fd = skel.maps().sk_sockmap().as_fd().as_raw_fd();
         let progs = skel.progs();
         let bpf_sk_skb_stream_parser = progs.bpf_sk_skb__stream_parser();
         log::info!(
@@ -424,7 +389,7 @@ impl AnyEbpf<'_> {
         log::info!("bpf_sk_reuseport name:{:?}", bpf_sk_reuseport.name());
         log::info!("bpf_sk_reuseport section:{:?}", bpf_sk_reuseport.section());
 
-        let quic_sockhash_fd = skel.maps().quic_sockhash().fd();
+        let quic_sockhash_fd = skel.maps().quic_sockhash().as_fd().as_raw_fd();
         let _bpf_sk_reuseport = skel
             .progs_mut()
             .bpf_sk_reuseport()
@@ -433,13 +398,9 @@ impl AnyEbpf<'_> {
         Ok(())
     }
 
-    pub fn add_sock_map(&mut self, socket_data: &SockMapData) -> anyhow::Result<()> {
-        Self::do_add_sock_map(&mut self.skel, socket_data)
-    }
-
-    pub fn do_add_sock_map(
+    pub async fn add_sockhash(
         skel: &mut AnyEbpfSkel<'_>,
-        socket_data: &SockMapData,
+        socket_data: &AddSockHashSocketData,
     ) -> anyhow::Result<()> {
         let mut maps_mut = skel.maps_mut();
 
@@ -490,6 +451,15 @@ impl AnyEbpf<'_> {
                 .sk_index_hash()
                 .update(
                     key_bytes,
+                    &socket_data.ups_fd.to_le_bytes(),
+                    libbpf_rs::MapFlags::ANY,
+                )
+                .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
+
+            maps_mut
+                .sk_sockmap()
+                .update(
+                    &socket_data.ups_fd.to_le_bytes(),
                     &socket_data.ups_fd.to_le_bytes(),
                     libbpf_rs::MapFlags::ANY,
                 )
@@ -550,25 +520,12 @@ impl AnyEbpf<'_> {
                     libbpf_rs::MapFlags::ANY,
                 )
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
-        }
 
-        if socket_data.client_fd > 0 {
             maps_mut
                 .sk_sockmap()
                 .update(
                     &socket_data.client_fd.to_le_bytes(),
                     &socket_data.client_fd.to_le_bytes(),
-                    libbpf_rs::MapFlags::ANY,
-                )
-                .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
-        }
-
-        if socket_data.ups_fd > 0 {
-            maps_mut
-                .sk_sockmap()
-                .update(
-                    &socket_data.ups_fd.to_le_bytes(),
-                    &socket_data.ups_fd.to_le_bytes(),
                     libbpf_rs::MapFlags::ANY,
                 )
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
@@ -579,31 +536,13 @@ impl AnyEbpf<'_> {
         Ok(())
     }
 
-    pub fn del_sock_map(&mut self, socket_data: &SockMapData) -> anyhow::Result<()> {
-        Self::do_del_sock_map(&mut self.skel, socket_data)
-    }
-
-    pub fn do_del_sock_map(
+    pub async fn del_sockhash(
         skel: &mut AnyEbpfSkel<'_>,
-        socket_data: &SockMapData,
+        socket_data: &AddSockHashSocketData,
     ) -> anyhow::Result<()> {
         let mut maps_mut = skel.maps_mut();
 
         log::trace!("del socket_data:{:?}", socket_data);
-
-        // if socket_data.ups_fd > 0 {
-        //     let _ = maps_mut
-        //         .sk_sockmap()
-        //         .delete(&socket_data.ups_fd.to_le_bytes())
-        //         .map_err(|e| anyhow::anyhow!("update e:{}", e));
-        // }
-        //
-        // if socket_data.client_fd > 0 {
-        //     let _ = maps_mut
-        //         .sk_sockmap()
-        //         .delete(&socket_data.client_fd.to_le_bytes())
-        //         .map_err(|e| anyhow::anyhow!("update e:{}", e));
-        // }
 
         if socket_data.ups_fd > 0 {
             let ip = &socket_data.client_peer_addr.ip().to_string();
@@ -642,6 +581,11 @@ impl AnyEbpf<'_> {
                 .sk_index_hash()
                 .delete(key_bytes)
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
+
+            // let _ = maps_mut
+            //     .sk_sockmap()
+            //     .delete(&socket_data.ups_fd.to_le_bytes())
+            //     .map_err(|e| anyhow::anyhow!("update e:{}", e));
         }
 
         if socket_data.client_fd > 0 {
@@ -685,6 +629,11 @@ impl AnyEbpf<'_> {
                 .sk_index_hash()
                 .delete(key_bytes)
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
+
+            // let _ = maps_mut
+            //     .sk_sockmap()
+            //     .delete(&socket_data.client_fd.to_le_bytes())
+            //     .map_err(|e| anyhow::anyhow!("update e:{}", e));
         }
 
         log::trace!("ebpf  success");
@@ -692,13 +641,9 @@ impl AnyEbpf<'_> {
         Ok(())
     }
 
-    pub fn add_reuseport(&mut self, reuseport_data: &ReuseportData) -> anyhow::Result<()> {
-        Self::do_add_reuseport(&mut self.skel, reuseport_data)
-    }
-
-    pub fn do_add_reuseport(
+    pub async fn add_reuseport(
         skel: &mut AnyEbpfSkel<'_>,
-        reuseport_data: &ReuseportData,
+        reuseport_data: &AddReuseportData,
     ) -> anyhow::Result<()> {
         if !cfg!(feature = "anyproxy-reuseport") {
             return Ok(());

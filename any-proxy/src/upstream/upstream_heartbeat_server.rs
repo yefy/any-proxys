@@ -80,7 +80,7 @@ impl UpstreamHeartbeatServer {
             )
         };
 
-        let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
+        let mut shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
         let mut r: Option<BufReader<StreamFlowRead>> = None;
         let mut w: Option<BufWriter<StreamFlowWrite>> = None;
 
@@ -103,11 +103,7 @@ impl UpstreamHeartbeatServer {
             let ret: Result<()> = async {
                 if r.is_none() {
                     let connect_info = connect
-                        .connect(
-                            None,
-                            ArcMutex::default(),
-                            Some(self.executors.run_time.clone()),
-                        )
+                        .connect(None, None, Some(self.executors.context.run_time.clone()))
                         .await
                         .map_err(|e| anyhow!("err:connect => e:{}", e))?;
 

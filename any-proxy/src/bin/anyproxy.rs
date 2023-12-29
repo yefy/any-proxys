@@ -8,6 +8,7 @@ use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 extern crate page_size;
+use any_proxy::anyproxy::anymodule;
 
 /// unix内存管理器
 #[cfg(unix)]
@@ -80,6 +81,8 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "anyproxy-openssl")]
     log::info!("anyproxy-openssl");
+
+    anymodule::add_modules()?;
 
     let arg_config = ArgsConfig::load_from_args();
     log::info!("arg_config:{:?}", arg_config);

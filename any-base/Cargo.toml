@@ -1,9 +1,39 @@
 [package]
 name = "any-base"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[profile.dev]
+debug = true
+panic = "unwind"
+incremental = true
+strip = false
+#opt-level = 0
+#split-debuginfo = '...'  # Platform-specific.
+#debug-assertions = true
+#overflow-checks = true
+#lto = false
+#codegen-units = 256
+#rpath = false
+
+[profile.release]
+debug = false
+panic = "abort"
+opt-level = 3
+#这个特性开起来会导致rpm打包失败， deb正常
+lto = true
+codegen-units = 1
+incremental = false
+rpath = false
+debug-assertions = false
+overflow-checks = false
+#性能调试用这个
+#debug = true
+#删除调试信息
+strip = true
 
 
 [features]
@@ -15,16 +45,16 @@ anyspawn-std-sync = []
 [dependencies]
 anyhow = {path = "../anyhow"}
 awaitgroup = {path = "../awaitgroup"}
-tokio = { version = "1.24.1", features = ["full"] }
+tokio = { version = "1.35.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
 futures-util = { version = "0.3", default-features = false, features = ["async-await", "sink", "std"] }
 lazy_static = "1.4.0"
 log = "0.4.14"
 libc = "0.2.109"
-toml = "0.5.8"
+toml = "0.5.10"
 log4rs = "1.0.0"
-bytes = "1.1.0"
+bytes = "1.5.0"
 async-trait = "0.1.52"
 hashbrown = "0.11.2"
 async-channel = "1.8.0"
@@ -37,4 +67,4 @@ pin-project-lite = "0.2.9"
 core_affinity = "0.7.6"
 futures-core = "0.3.26"
 async-recursion = "1.0.5"
-parking_lot = "0.11"
+parking_lot = "0.12.1"

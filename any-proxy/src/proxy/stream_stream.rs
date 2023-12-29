@@ -4,9 +4,8 @@ use super::stream_info::StreamInfo;
 use super::StreamConfigContext;
 use super::StreamStreamContext;
 use crate::protopack;
-use crate::proxy::{
-    get_flag, util as proxy_util, StreamStatus, StreamStreamData, StreamStreamShare,
-};
+use crate::proxy::{get_flag, util as proxy_util, StreamStreamData, StreamStreamShare};
+use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::future_wait::FutureWait;
 use any_base::stream_flow::{StreamFlow, StreamFlowRead, StreamFlowWrite};
 use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
@@ -17,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 pub struct StreamStream {}
@@ -35,26 +35,66 @@ impl StreamStream {
             proxy_util::get_proxy_hello(is_proxy_protocol_hello, stream_info.clone(), scc.clone())
                 .await;
 
-        if hello.is_some() {
-            stream_info.get_mut().protocol_hello_size = protopack::anyproxy::write_pack(
-                &mut upstream_stream,
+        // if hello.is_some() {
+        //     stream_info.get_mut().protocol_hello_size = protopack::anyproxy::write_pack(
+        //         &mut upstream_stream,
+        //         protopack::anyproxy::AnyproxyHeaderType::Hello,
+        //         &*hello.unwrap(),
+        //     )
+        //     .await
+        //     .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
+        // }
+
+        let mut datas = if hello.is_some() {
+            let hello_datas = protopack::anyproxy::pack_to_vec(
                 protopack::anyproxy::AnyproxyHeaderType::Hello,
                 &*hello.unwrap(),
             )
             .await
             .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
-        }
+            log::trace!("hello len:{:?}", hello_datas.len());
+            Some(hello_datas)
+        } else {
+            None
+        };
 
-        if client_buffer.len() > 0 {
-            log::trace!("write:{:?}", &client_buffer[0..client_buffer.len()]);
-            upstream_stream
-                .write(client_buffer)
-                .await
-                .map_err(|e| anyhow!("err:client_buf_reader.buffer => e:{}", e))?;
+        let client_buffer = if client_buffer.len() > 0 {
+            let len = client_buffer.len();
+            log::trace!("first cache len:{}, data:{:?}", len, &client_buffer[0..len]);
+            if datas.is_some() {
+                let datas = datas.as_mut().unwrap();
+                datas.extend_from_slice(&client_buffer[0..len]);
+                Some(datas.as_slice())
+            } else {
+                Some(&client_buffer[0..len])
+            }
+        } else {
+            if datas.is_some() {
+                let datas = datas.as_mut().unwrap();
+                Some(datas.as_slice())
+            } else {
+                None
+            }
+        };
 
-            stream_info
-                .get_mut()
-                .add_work_time(&format!("first cache write {}", get_flag(true)));
+        if client_buffer.is_some() {
+            let client_buffer = client_buffer.unwrap();
+            if client_buffer.len() > 0 {
+                let len = client_buffer.len();
+                log::trace!("write:{:?}", &client_buffer[0..len]);
+                upstream_stream
+                    .write(&client_buffer[0..len])
+                    .await
+                    .map_err(|e| anyhow!("err:upstream_stream.write => e:{}", e))?;
+
+                let _ = upstream_stream.flush().await;
+
+                stream_info.get_mut().add_work_time(&format!(
+                    "first cache write {}: len={}",
+                    get_flag(true),
+                    len
+                ));
+            }
         }
 
         Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await
@@ -70,8 +110,8 @@ impl StreamStream {
         use crate::Protocol7;
         let ms = scc.get().ms.clone();
         let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
-        if ebpf_add_sock_hash.is_none() {
+        let ebpf_tx = any_ebpf_core_conf.ebpf();
+        if ebpf_tx.is_none() {
             return Ok(Some(client_stream));
         }
 
@@ -91,149 +131,182 @@ impl StreamStream {
         }
     }
 
+    pub async fn wait_ebpf_stream(
+        _scc: ShareRw<StreamConfigContext>,
+        stream_info: Share<StreamInfo>,
+        client_stream: StreamFlow,
+        upstream_stream: StreamFlow,
+    ) -> Result<()> {
+        let data_len = 8192;
+        let (mut client_read, mut client_write) = client_stream.split();
+        let (mut upstream_read, mut upstream_write) = upstream_stream.split();
+        let executors = stream_info.get().executors.clone().unwrap();
+        let mut executor = ExecutorLocalSpawn::new(executors);
+        executor._start(
+            #[cfg(feature = "anyspawn-count")]
+            format!("{}:{}", file!(), line!()),
+            move |_| async move {
+                let mut data = Vec::with_capacity(data_len);
+                unsafe { data.set_len(data_len) };
+                let data = data.as_mut_slice();
+                loop {
+                    let n = client_read.read(data).await;
+                    if n.is_err() {
+                        break;
+                    }
+                    let n = n.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+
+                    let n = upstream_write.write_all(&data[0..n]).await;
+                    if n.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            },
+        );
+
+        let mut data = Vec::with_capacity(data_len);
+        unsafe { data.set_len(data_len) };
+        let data = data.as_mut_slice();
+        loop {
+            let n = upstream_read.read(data).await;
+            if n.is_err() {
+                break;
+            }
+            let n = n.unwrap();
+            if n == 0 {
+                break;
+            }
+            let n = client_write.write_all(&data[0..n]).await;
+            if n.is_err() {
+                break;
+            }
+        }
+        let _ = executor.wait("ebpf").await;
+        Ok(())
+    }
+
     pub async fn ebpf_and_stream(
         scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
-        #[cfg(feature = "anyproxy-ebpf")] mut client_stream: StreamFlow,
-        #[cfg(not(feature = "anyproxy-ebpf"))] client_stream: StreamFlow,
-        #[cfg(feature = "anyproxy-ebpf")] mut upstream_stream: StreamFlow,
-        #[cfg(not(feature = "anyproxy-ebpf"))] upstream_stream: StreamFlow,
+        client_stream: StreamFlow,
+        _upstream_stream: StreamFlow,
     ) -> Result<()> {
         #[cfg(feature = "anyproxy-ebpf")]
-        let client_local_addr = stream_info
-            .get()
-            .server_stream_info
-            .local_addr
-            .clone()
-            .unwrap();
-        #[cfg(feature = "anyproxy-ebpf")]
-        let client_remote_addr = stream_info.get().server_stream_info.remote_addr;
+        if scc.get().http_core_conf().is_open_ebpf {
+            use crate::config::any_ebpf_core;
+            use crate::ebpf::any_ebpf::AnyEbpfTx;
+            let ms = scc.get().ms.clone();
+            let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
+            let ebpf_tx = any_ebpf_core_conf.ebpf();
+            if ebpf_tx.is_some() && client_stream.fd() > 0 && _upstream_stream.fd() > 0 {
+                let sock_map_data = {
+                    let mut stream_info = stream_info.get_mut();
+                    let upstream_connect_info = stream_info.upstream_connect_info.clone();
+                    let upstream_connect_info = upstream_connect_info.get();
 
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ups_remote_addr = stream_info
-            .get()
-            .upstream_connect_info
-            .get()
-            .remote_addr
-            .clone();
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ups_local_addr = stream_info
-            .get()
-            .upstream_connect_info
-            .get()
-            .local_addr
-            .clone();
+                    stream_info.is_discard_timeout = true;
+                    stream_info.add_work_time("ebpf");
+                    stream_info.is_open_ebpf = true;
 
-        #[cfg(feature = "anyproxy-ebpf")]
-        use crate::config::any_ebpf_core;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ms = scc.get().ms.clone();
-        #[cfg(feature = "anyproxy-ebpf")]
-        let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
-        #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
+                    AnyEbpfTx::sock_map_data(
+                        client_stream.fd(),
+                        stream_info.server_stream_info.remote_addr,
+                        stream_info.server_stream_info.local_addr.clone().unwrap(),
+                        _upstream_stream.fd(),
+                        upstream_connect_info.remote_addr.clone(),
+                        upstream_connect_info.local_addr.clone(),
+                    )
+                };
 
-        let mut _is_open_ebpf = false;
-        #[cfg(feature = "anyproxy-ebpf")]
-        if scc.get().http_core_conf().is_open_ebpf
-            && ebpf_add_sock_hash.is_some()
-            && client_stream.fd() > 0
-            && upstream_stream.fd() > 0
-        {
-            _is_open_ebpf = true;
-            stream_info.get_mut().is_discard_timeout = true;
-            stream_info.get_mut().add_work_time("ebpf");
+                log::trace!("ebpf sock_map_data:{:?}", sock_map_data);
 
-            stream_info.get_mut().is_open_ebpf = true;
+                let rx = ebpf_tx
+                    .as_ref()
+                    .unwrap()
+                    .add_sock_map_data_ext(sock_map_data.clone())
+                    .await?;
+                let _ = rx.recv().await;
 
-            log::trace!(
-                "ebpf client_stream.fd():{},  upstream_stream.fd():{}",
-                client_stream.fd(),
-                upstream_stream.fd()
-            );
-            log::trace!(
-                "ebpf client_remote_addr.fd():{},  client_local_addr.fd():{}",
-                client_remote_addr,
-                client_local_addr
-            );
+                stream_info.get_mut().add_work_time("stream_to_stream");
 
-            log::trace!(
-                "ebpf ups_remote_addr.fd():{},  ups_local_addr.fd():{}",
-                ups_remote_addr,
-                ups_local_addr
-            );
-
-            let rx = ebpf_add_sock_hash
-                .as_ref()
-                .unwrap()
-                .add_socket_data(
-                    client_stream.fd(),
-                    client_remote_addr.clone(),
-                    client_local_addr.clone(),
-                    upstream_stream.fd(),
-                    ups_remote_addr,
-                    ups_local_addr,
+                let ret = StreamStream::wait_ebpf_stream(
+                    scc.clone(),
+                    stream_info.clone(),
+                    client_stream,
+                    _upstream_stream,
                 )
-                .await?;
-            let _ = rx.recv().await;
+                .await
+                .map_err(|e| {
+                    anyhow!(
+                        "err:stream_to_stream => request_id:{}, e:{}",
+                        stream_info.get().request_id,
+                        e
+                    )
+                });
 
-            upstream_stream
-                .write("".as_bytes())
-                .await
-                .map_err(|e| anyhow!("err:upstream_stream.write => e:{}", e))?;
-            client_stream
-                .write("".as_bytes())
-                .await
-                .map_err(|e| anyhow!("err:client_stream.write => e:{}", e))?;
+                stream_info.get_mut().add_work_time("stream_to_stream end");
+
+                let rx = ebpf_tx
+                    .as_ref()
+                    .unwrap()
+                    .del_sock_map_data_ext(sock_map_data)
+                    .await?;
+                let _ = rx.recv().await;
+                return ret;
+            }
         }
-        stream_info.get_mut().add_work_time("stream_to_stream");
-
-        let _client_stream_fd = client_stream.fd();
-        let _upstream_stream_fd = upstream_stream.fd();
 
         #[cfg(unix)]
         let (client_sendfile, upstream_sendfile) = {
+            let mut stream_info = stream_info.get_mut();
             let scc = scc.get();
             let http_core_conf = scc.http_core_conf();
-            if http_core_conf.is_open_sendfile && !_is_open_ebpf {
+            if http_core_conf.is_open_sendfile {
+                let client_stream_fd = client_stream.fd();
                 let client_sendfile =
-                    if _client_stream_fd > 0 && http_core_conf.upload_tmp_file_size > 0 {
-                        stream_info.get_mut().open_sendfile = Some("sendfile_upload".to_string());
+                    if client_stream_fd > 0 && http_core_conf.upload_tmp_file_size > 0 {
+                        stream_info.open_sendfile = Some("sendfile_upload".to_string());
                         ArcMutexTokio::new(SendFile::new(
-                            _client_stream_fd,
-                            stream_info.get().client_stream_flow_info.clone(),
+                            client_stream_fd,
+                            stream_info.client_stream_flow_info.clone(),
                         ))
                     } else {
                         ArcMutexTokio::default()
                     };
 
-                let upstream_sendfile = if _upstream_stream_fd > 0
-                    && http_core_conf.download_tmp_file_size > 0
-                {
-                    if stream_info.get_mut().open_sendfile.is_none() {
-                        stream_info.get_mut().open_sendfile = Some("sendfile_upload".to_string());
+                let upstream_stream_fd = _upstream_stream.fd();
+                let upstream_sendfile =
+                    if upstream_stream_fd > 0 && http_core_conf.download_tmp_file_size > 0 {
+                        if stream_info.open_sendfile.is_none() {
+                            stream_info.open_sendfile = Some("sendfile_upload".to_string());
+                        } else {
+                            let open_sendfile = stream_info.open_sendfile.take().unwrap();
+                            stream_info.open_sendfile = Some(open_sendfile + "_download");
+                        }
+                        ArcMutexTokio::new(SendFile::new(
+                            upstream_stream_fd,
+                            stream_info.upstream_stream_flow_info.clone(),
+                        ))
                     } else {
-                        let open_sendfile = stream_info.get_mut().open_sendfile.take().unwrap();
-                        stream_info.get_mut().open_sendfile = Some(open_sendfile + "_download");
-                    }
-                    ArcMutexTokio::new(SendFile::new(
-                        _upstream_stream_fd,
-                        stream_info.get().upstream_stream_flow_info.clone(),
-                    ))
-                } else {
-                    ArcMutexTokio::default()
-                };
+                        ArcMutexTokio::default()
+                    };
                 (client_sendfile, upstream_sendfile)
             } else {
                 (ArcMutexTokio::default(), ArcMutexTokio::default())
             }
         };
 
+        stream_info.get_mut().add_work_time("stream_to_stream");
+
         let ret = StreamStream::stream_to_stream(
             scc.clone(),
             stream_info.clone(),
             client_stream,
-            upstream_stream,
+            _upstream_stream,
             #[cfg(unix)]
             client_sendfile,
             #[cfg(unix)]
@@ -249,23 +322,6 @@ impl StreamStream {
                 e
             )
         });
-
-        #[cfg(feature = "anyproxy-ebpf")]
-        if _is_open_ebpf && _client_stream_fd > 0 && _upstream_stream_fd > 0 {
-            let rx = ebpf_add_sock_hash
-                .as_ref()
-                .unwrap()
-                .del_socket_data(
-                    _client_stream_fd,
-                    client_remote_addr.clone(),
-                    client_local_addr.clone(),
-                    _upstream_stream_fd,
-                    ups_remote_addr,
-                    ups_local_addr,
-                )
-                .await?;
-            let _ = rx.recv().await;
-        }
 
         stream_info.get_mut().add_work_time("stream_to_stream end");
 
@@ -544,13 +600,12 @@ impl StreamStream {
             read_buffer: None,
             read_buffer_ret: None,
             read_err: None,
-            stream_status: StreamStatus::DataEmpty,
             caches: LinkedList::new(),
             buffer_pool: ValueOption::default(),
             write_err: None,
             plugins,
             is_first_write: true,
-            is_cache: false,
+            is_stream_cache: false,
         };
         let sss = ShareRw::new(sss);
 
@@ -564,7 +619,7 @@ impl StreamStream {
         };
 
         let plugin_handle_stream = plugin_handle_stream.get().await;
-        (plugin_handle_stream)(sss).await?;
+        let _ = (plugin_handle_stream)(sss).await?;
         Ok(())
     }
 }

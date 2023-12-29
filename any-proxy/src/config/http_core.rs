@@ -129,8 +129,8 @@ pub struct Conf {
     pub upload_tmp_file_size: u64,
     pub debug_is_open_print: bool,
     pub is_open_sendfile: bool,
-    pub tcp_conf_name: String,
-    pub quic_conf_name: String,
+    pub tcp_config_name: String,
+    pub quic_config_name: String,
     pub is_proxy_protocol_hello: bool,
     pub domain: ArcString,
     pub is_open_ebpf: bool,
@@ -143,8 +143,8 @@ pub struct Conf {
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
-const TCP_CONF_NAME_DEFAULT: &str = "tcp_config_1";
-const QUIC_CONF_NAME_DEFAULT: &str = "quic_config_1";
+const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_1";
+const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_1";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
 const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 2;
 const OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT: u64 = 100;
@@ -169,8 +169,8 @@ impl Conf {
             upload_tmp_file_size: 0,
             debug_is_open_print: false,
             is_open_sendfile: false,
-            tcp_conf_name: TCP_CONF_NAME_DEFAULT.to_string(),
-            quic_conf_name: QUIC_CONF_NAME_DEFAULT.to_string(),
+            tcp_config_name: TCP_CONFIG_NAME_DEFAULT.to_string(),
+            quic_config_name: QUIC_CONFIG_NAME_DEFAULT.to_string(),
             is_proxy_protocol_hello: false,
             domain: ArcString::default(),
             is_open_ebpf: false,
@@ -179,7 +179,7 @@ impl Conf {
             download: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
             upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
             read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
-            is_port_direct_ebpf: false,
+            is_port_direct_ebpf: true,
         }
     }
 }
@@ -351,16 +351,16 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
-            name: "tcp_conf_name".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(tcp_conf_name(ms, conf_arg, cmd, conf)),
+            name: "tcp_config_name".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(tcp_config_name(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
-            name: "quic_conf_name".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(quic_conf_name(ms, conf_arg, cmd, conf)),
+            name: "quic_config_name".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(quic_config_name(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
@@ -558,14 +558,15 @@ async fn merge_conf(
         if child_conf.is_open_sendfile == false {
             child_conf.is_open_sendfile = parent_conf.is_open_sendfile;
         }
-        if child_conf.tcp_conf_name == TCP_CONF_NAME_DEFAULT && parent_conf.tcp_conf_name.len() > 0
+        if child_conf.tcp_config_name == TCP_CONFIG_NAME_DEFAULT
+            && parent_conf.tcp_config_name.len() > 0
         {
-            child_conf.tcp_conf_name = parent_conf.tcp_conf_name.clone();
+            child_conf.tcp_config_name = parent_conf.tcp_config_name.clone();
         }
-        if child_conf.quic_conf_name == QUIC_CONF_NAME_DEFAULT
-            && parent_conf.quic_conf_name.len() > 0
+        if child_conf.quic_config_name == QUIC_CONFIG_NAME_DEFAULT
+            && parent_conf.quic_config_name.len() > 0
         {
-            child_conf.quic_conf_name = parent_conf.quic_conf_name.clone();
+            child_conf.quic_config_name = parent_conf.quic_config_name.clone();
         }
         if child_conf.is_proxy_protocol_hello == false {
             child_conf.is_proxy_protocol_hello = parent_conf.is_proxy_protocol_hello;
@@ -586,7 +587,7 @@ async fn merge_conf(
             child_conf.read_buffer_page_size = parent_conf.read_buffer_page_size.clone();
         }
 
-        if child_conf.is_port_direct_ebpf == false {
+        if child_conf.is_port_direct_ebpf == true {
             child_conf.is_port_direct_ebpf = parent_conf.is_port_direct_ebpf.clone();
         }
 
@@ -923,33 +924,33 @@ async fn is_open_sendfile(
     log::trace!("c.is_open_sendfile:{:?}", c.is_open_sendfile);
     return Ok(());
 }
-async fn tcp_conf_name(
+async fn tcp_config_name(
     _ms: module::Modules,
     conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    let tcp_conf_name = conf_arg.value.get::<String>().clone();
-    if tcp_conf_name.len() > 0 {
-        c.tcp_conf_name = tcp_conf_name;
+    let tcp_config_name = conf_arg.value.get::<String>().clone();
+    if tcp_config_name.len() > 0 {
+        c.tcp_config_name = tcp_config_name;
     }
-    log::trace!("c.tcp_conf_name:{:?}", c.tcp_conf_name);
+    log::trace!("c.tcp_config_name:{:?}", c.tcp_config_name);
     return Ok(());
 }
-async fn quic_conf_name(
+async fn quic_config_name(
     _ms: module::Modules,
     conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    let quic_conf_name = conf_arg.value.get::<String>().clone();
-    if quic_conf_name.len() > 0 {
-        c.quic_conf_name = quic_conf_name;
+    let quic_config_name = conf_arg.value.get::<String>().clone();
+    if quic_config_name.len() > 0 {
+        c.quic_config_name = quic_config_name;
     }
 
-    log::trace!("c.quic_conf_name:{:?}", c.quic_conf_name);
+    log::trace!("c.quic_config_name:{:?}", c.quic_config_name);
     return Ok(());
 }
 
@@ -998,8 +999,8 @@ async fn is_open_ebpf(
     if c.is_open_ebpf {
         use crate::config::any_ebpf_core;
         let any_ebpf_core_conf = any_ebpf_core::main_conf(&_ms).await;
-        let ebpf_add_sock_hash = any_ebpf_core_conf.ebpf();
-        if ebpf_add_sock_hash.is_none() {
+        let ebpf_tx = any_ebpf_core_conf.ebpf();
+        if ebpf_tx.is_none() {
             return Err(anyhow::anyhow!("err:is_open_ebpf is close"));
         }
     }

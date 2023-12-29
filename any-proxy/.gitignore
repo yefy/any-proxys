@@ -38,4 +38,8 @@ logs
 vmlinux.h
 any-proxy/examples/anyproxy/examples/anyproxy.exe
 any-proxy/examples/anyproxy/examples/anyproxy
+any-proxy/examples/anyproxy/examples/tokio_proxy.exe
+any-proxy/examples/anyproxy/examples/tokio_proxy
 .output
+*.tmp
+*.err

@@ -20,7 +20,7 @@ lazy_static! {
 
 #[cfg(feature = "anyproxy-ebpf")]
 lazy_static! {
-    pub static ref EBPF_CHANNEL: typ::ArcMutex<any_ebpf::AddSockHash> = typ::ArcMutex::default();
+    pub static ref EBPF_TX: typ::ArcMutex<any_ebpf::AnyEbpfTx> = typ::ArcMutex::default();
 }
 
 fn default_debug_is_open_ebpf_log() -> bool {
@@ -51,7 +51,7 @@ impl EbpfConf {
 pub struct Conf {
     ebpf_conf: EbpfConf,
     #[cfg(feature = "anyproxy-ebpf")]
-    ebpf_channel: Option<any_ebpf::AddSockHash>,
+    ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
 }
 
 impl Conf {
@@ -59,13 +59,13 @@ impl Conf {
         Conf {
             ebpf_conf: EbpfConf::new(),
             #[cfg(feature = "anyproxy-ebpf")]
-            ebpf_channel: None,
+            ebpf_tx: None,
         }
     }
     #[cfg(feature = "anyproxy-ebpf")]
-    pub fn ebpf(&self) -> Option<any_ebpf::AddSockHash> {
-        if !self.ebpf_channel.is_none() {
-            self.ebpf_channel.clone()
+    pub fn ebpf(&self) -> Option<any_ebpf::AnyEbpfTx> {
+        if !self.ebpf_tx.is_none() {
+            self.ebpf_tx.clone()
         } else {
             None
         }
@@ -178,8 +178,8 @@ async fn merge_old_conf(
     #[cfg(feature = "anyproxy-ebpf")]
     let conf = _conf.get_mut::<Conf>();
     #[cfg(feature = "anyproxy-ebpf")]
-    if conf.ebpf_conf.is_open_ebpf && EBPF_CHANNEL.is_some() {
-        conf.ebpf_channel = Some(EBPF_CHANNEL.get().clone());
+    if conf.ebpf_conf.is_open_ebpf && EBPF_TX.is_some() {
+        conf.ebpf_tx = Some(EBPF_TX.get().clone());
     }
     return Ok(());
 }
@@ -210,11 +210,11 @@ async fn data(
         #[cfg(feature = "anyproxy-ebpf")]
         let mut ebpf_group = any_ebpf::EbpfGroup::new(false, 0);
         #[cfg(feature = "anyproxy-ebpf")]
-        let ebpf_add_sock_hash = ebpf_group.start(ebpf_conf.debug_is_open_ebpf_log).await?;
+        let ebpf_tx = ebpf_group.start(ebpf_conf.debug_is_open_ebpf_log).await?;
         #[cfg(feature = "anyproxy-ebpf")]
         EBPF_GROUP.set(ebpf_group);
         #[cfg(feature = "anyproxy-ebpf")]
-        EBPF_CHANNEL.set(ebpf_add_sock_hash);
+        EBPF_TX.set(ebpf_tx);
         Ok(())
     })
     .await;

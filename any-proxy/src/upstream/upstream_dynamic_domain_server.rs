@@ -63,7 +63,7 @@ impl UpstreamDynamicDomainServer {
             ups_config_name,
             host
         );
-        let mut shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
+        let mut shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
         loop {
             tokio::select! {
                 biased;

@@ -8,7 +8,6 @@ use crate::stream::server::ServerStreamInfo;
 use crate::util;
 use crate::Protocol7;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -22,24 +21,24 @@ pub struct Server {
     addr: SocketAddr,
     sni: Mutex<util::Sni>,
     #[cfg(feature = "anyproxy-ebpf")]
-    ebpf_add_sock_hash: Option<any_ebpf::AddSockHash>,
+    ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
 }
 
 impl Server {
     pub fn new(
         addr: SocketAddr,
         reuseport: bool,
-        config: Config,
+        config: Arc<Config>,
         sni: util::Sni,
-        #[cfg(feature = "anyproxy-ebpf")] ebpf_add_sock_hash: Option<any_ebpf::AddSockHash>,
+        #[cfg(feature = "anyproxy-ebpf")] ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
     ) -> Result<Server> {
         Ok(Server {
-            config: Arc::new(config),
+            config,
             reuseport,
             addr,
             sni: Mutex::new(sni),
             #[cfg(feature = "anyproxy-ebpf")]
-            ebpf_add_sock_hash,
+            ebpf_tx,
         })
     }
 }
@@ -60,7 +59,7 @@ impl server::Server for Server {
             &self.addr,
             sni,
             #[cfg(feature = "anyproxy-ebpf")]
-            &self.ebpf_add_sock_hash,
+            &self.ebpf_tx,
         )
         .await
         .map_err(|e| anyhow!("err:quic_util::listen => e:{}", e))?;
@@ -246,7 +245,7 @@ impl server::Connection for Connection {
                 let read_timeout = tokio::time::Duration::from_secs(quic_recv_timeout);
                 let quic_send_timeout = self.config.quic_send_timeout as u64;
                 let write_timeout = tokio::time::Duration::from_secs(quic_send_timeout);
-                stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+                stream.set_config(read_timeout, write_timeout, None);
                 return Ok(Some((
                     stream,
                     ServerStreamInfo {

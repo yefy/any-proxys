@@ -60,7 +60,7 @@ pub async fn http_handle(
     req: Request<Body>,
     handle: Handle,
 ) -> Result<Response<Body>> {
-    let mut shutdown_thread_rx = arg.executors.shutdown_thread_tx.subscribe();
+    let mut shutdown_thread_rx = arg.executors.context.shutdown_thread_tx.subscribe();
     tokio::select! {
         biased;
         ret = do_http_handle(arg, req, handle) => {
@@ -96,6 +96,10 @@ pub async fn do_http_handle(
         arg.server_stream_info.clone(),
         http_core_conf.debug_is_open_stream_work_times,
         Some(arg.executors.clone()),
+        http_core_conf.debug_print_access_log_time,
+        http_core_conf.debug_print_stream_flow_time,
+        http_core_conf.stream_so_singer_time,
+        http_core_conf.debug_is_open_print,
     );
     let stream_info = Share::new(stream_info);
     let version = req.version();
@@ -326,10 +330,12 @@ impl HttpServer {
 
                 let upstream_stream = Stream::new(client_res_body, client_req_sender);
                 let mut upstream_stream = StreamFlow::new(0, upstream_stream);
-                upstream_stream
-                    .set_stream_info(http_arg.stream_info.get().upstream_stream_flow_info.clone());
+                upstream_stream.set_stream_info(Some(
+                    http_arg.stream_info.get().upstream_stream_flow_info.clone(),
+                ));
 
-                let mut shutdown_thread_rx = http_arg.executors.shutdown_thread_tx.subscribe();
+                let mut shutdown_thread_rx =
+                    http_arg.executors.context.shutdown_thread_tx.subscribe();
                 tokio::select! {
                     biased;
                     ret = HttpStream::new(http_arg, scc, upstream_stream, is_single)

@@ -3,9 +3,10 @@
 use super::cache;
 use super::domain_index::DomainIndex;
 use super::SniContext;
-use any_base::typ::ArcRwLock;
+use any_base::typ::{ArcMutex, ArcRwLock};
 use anyhow::anyhow;
 use anyhow::Result;
+use lazy_static::lazy_static;
 use once_cell::sync::OnceCell;
 use openssl::error::ErrorStack;
 use openssl::ex_data::Index;
@@ -16,6 +17,15 @@ use openssl::ssl::{SslContext, SslContextBuilder};
 use openssl::ssl::{SslFiletype, SslMethod};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+lazy_static! {
+    pub static ref SESSION_CACHE: ArcMutex<cache::SessionCache> =
+        ArcMutex::new(cache::SessionCache::new());
+}
+
+pub fn session_cache() -> ArcMutex<cache::SessionCache> {
+    SESSION_CACHE.clone()
+}
 
 pub fn key_index() -> Result<Index<Ssl, cache::SessionKey>, ErrorStack> {
     static IDX: OnceCell<Index<Ssl, cache::SessionKey>> = OnceCell::new();

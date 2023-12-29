@@ -271,12 +271,11 @@ pub struct StreamStreamShare {
     read_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
     read_buffer_ret: Option<std::io::Result<usize>>,
     read_err: Option<Result<()>>,
-    stream_status: StreamStatus,
     caches: LinkedList<StreamCache>,
     buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
     plugins: Vec<Option<ArcUnsafeAny>>,
     is_first_write: bool,
-    is_cache: bool,
+    is_stream_cache: bool,
 }
 
 impl StreamStreamShare {
@@ -317,13 +316,16 @@ impl StreamStreamShare {
         self.is_read_empty() && self.is_write_empty()
     }
 
-    pub async fn is_sendfile_close(_sss: ShareRw<StreamStreamShare>) -> bool {
+    pub async fn is_sendfile_close(
+        _sss: ShareRw<StreamStreamShare>,
+        _stream_status: &StreamStatus,
+    ) -> bool {
         #[cfg(unix)]
         {
             let sendfile = _sss.get().sendfile.clone();
             let is_sendfile_some = sendfile.get().await.is_some();
             let _sss = _sss.get();
-            let is_stream_full = if let StreamStatus::Full = _sss.stream_status {
+            let is_stream_full = if let &StreamStatus::Full = _stream_status {
                 true
             } else {
                 false
@@ -335,17 +337,17 @@ impl StreamStreamShare {
         return false;
     }
 
-    pub async fn stream_status_sleep(stream_status: StreamStatus, is_client: bool) {
+    pub async fn stream_status_sleep(stream_status: &StreamStatus, is_client: bool) {
         match stream_status {
-            StreamStatus::Limit => {
+            &StreamStatus::Limit => {
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            StreamStatus::Full => {}
-            StreamStatus::Ok(_) => {
+            &StreamStatus::Full => {}
+            &StreamStatus::Ok(_) => {
                 log::error!("err:{} -> StreamStatus::Ok", get_flag(is_client));
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            StreamStatus::DataEmpty => {
+            &StreamStatus::DataEmpty => {
                 log::error!(
                     "err:{} -> StreamStatus::DataEmpty from sleep",
                     get_flag(is_client)

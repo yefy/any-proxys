@@ -34,36 +34,36 @@ anyspawn-count = []
 
 
 [profile.dev]
-#incremental = false
 debug = true
 panic = "unwind"
+incremental = true
+strip = false
 #opt-level = 0
 #split-debuginfo = '...'  # Platform-specific.
 #debug-assertions = true
 #overflow-checks = true
 #lto = false
-#incremental = true
 #codegen-units = 256
 #rpath = false
 
 [profile.release]
 debug = false
-#debug = true
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常
-#lto = true
-lto = false
+lto = true
 codegen-units = 1
 incremental = false
+rpath = false
+debug-assertions = false
+overflow-checks = false
 #性能调试用这个
 #debug = true
 #删除调试信息
-#strip ./target/release/anyproxy
+strip = true
 
 [dependencies]
 any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-#any-base = {path = "../any-base"}
 anyhow = {path = "../anyhow"}
 awaitgroup = {path = "../awaitgroup"}
 any-tunnel = {path = "../any-tunnel", features = ["anypool-dynamic-pool"], default-features = false}
@@ -79,10 +79,10 @@ core_affinity = "0.7.6"
 scopeguard = "1.1.0"
 toml = "0.5.10"
 serde = "1.0.152"
-tokio = { version = "1.24.1", features = ["full"], default-features = false}
+tokio = { version = "1.35.1", features = ["full"], default-features = false}
 async-trait = "0.1.61"
-regex = "1.7.1"
-futures-util = { version = "0.3.25", default-features = false, features = ["async-await", "sink", "std"] }
+regex = "1.10.2"
+futures-util = { version = "0.3.29", default-features = false, features = ["async-await", "sink", "std"] }
 rlimit = "0.9.0"
 byteorder = "1.4.3"
 byte = "0.2.6"
@@ -90,7 +90,7 @@ pin-project-lite = "0.2.9"
 chrono = "0.4.23"
 rand = "0.8.5"
 structopt = "0.3.26"
-async-channel = "1.8.0"
+async-channel = "2.1.1"
 serde_json = "1.0.91"
 reqwest = "0.11.13"
 rustls = { version = "0.20", default-features = false, features = ["quic", "dangerous_configuration"]}
@@ -111,20 +111,20 @@ tokio-tungstenite = "0.18.0"
 #tokio-tungstenite = {path = "../tokio-tungstenite-0.18.0"}
 http = "0.2.9"
 hyper-rustls = "0.23.2"
-bytes = "1.2.1"
+bytes = "1.5.0"
 base64 = "0.21.0"
-parking_lot = "0.11"
+parking_lot = "0.12.1"
 linked_hash_set = "0.1"
 once_cell = "1.0"
 url = "2.3.1"
 futures-core = "0.3.29"
 
 [dependencies.libbpf-rs]
-version = "0.19.1"
+version = "0.20"
 optional = true
 
 [build-dependencies.libbpf-cargo]
-version = "0.13.1"
+version = "0.20"
 optional = true
 
 [build-dependencies.zip]

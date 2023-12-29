@@ -7,12 +7,17 @@ use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-pub struct Client {
+pub struct ClientContext {
     addr: SocketAddr,
     timeout: tokio::time::Duration,
+    ssl_domain: Arc<String>,
+}
+
+pub struct Client {
+    context: Arc<ClientContext>,
     endpoint: quinn::Endpoint,
-    ssl_domain: String,
 }
 
 impl Client {
@@ -20,13 +25,15 @@ impl Client {
         addr: SocketAddr,
         timeout: tokio::time::Duration,
         endpoint: quinn::Endpoint,
-        ssl_domain: &String,
+        ssl_domain: Arc<String>,
     ) -> Result<Client> {
         Ok(Client {
-            addr,
-            timeout,
+            context: Arc::new(ClientContext {
+                addr,
+                timeout,
+                ssl_domain,
+            }),
             endpoint,
-            ssl_domain: ssl_domain.clone(),
         })
     }
 }
@@ -35,7 +42,7 @@ impl Client {
 impl client::Client for Client {
     async fn connect(
         &self,
-        info: ArcMutex<StreamFlowInfo>,
+        info: Option<ArcMutex<StreamFlowInfo>>,
     ) -> Result<Box<dyn client::Connection + Send>> {
         let local_addr = self
             .endpoint
@@ -45,16 +52,22 @@ impl client::Client for Client {
         let ret: Result<quinn::Connection> = async {
             let connect = self
                 .endpoint
-                .connect(self.addr.clone(), self.ssl_domain.as_str())
-                .map_err(|e| anyhow!("err:endpoint.connect => addr:{}, e:{}", self.addr, e))?;
-            match tokio::time::timeout(self.timeout, connect).await {
+                .connect(self.context.addr.clone(), self.context.ssl_domain.as_str())
+                .map_err(|e| {
+                    anyhow!(
+                        "err:endpoint.connect => addr:{}, e:{}",
+                        self.context.addr,
+                        e
+                    )
+                })?;
+            match tokio::time::timeout(self.context.timeout, connect).await {
                 Ok(ret) => match ret {
                     Err(e) => {
                         stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!(
                             "err:client.connect =>  addr:{}, ssl_domain:{}, e:{}",
-                            self.addr,
-                            self.ssl_domain,
+                            self.context.addr,
+                            self.context.ssl_domain,
                             e
                         ))
                     }
@@ -64,8 +77,8 @@ impl client::Client for Client {
                     stream_err = StreamFlowErr::WriteTimeout;
                     Err(anyhow!(
                         "err:client.connect timeout =>  addr:{}, ssl_domain:{}",
-                        self.addr,
-                        self.ssl_domain,
+                        self.context.addr,
+                        self.context.ssl_domain,
                     ))
                 }
             }
@@ -75,15 +88,13 @@ impl client::Client for Client {
         match ret {
             Err(e) => {
                 if info.is_some() {
-                    info.get_mut().err = stream_err;
+                    info.as_ref().unwrap().get_mut().err = stream_err;
                 }
                 Err(e)
             }
             Ok(connection) => Ok(Box::new(Connection {
+                context: self.context.clone(),
                 local_addr,
-                addr: self.addr.clone(),
-                timeout: self.timeout.clone(),
-                ssl_domain: self.ssl_domain.clone(),
                 connection,
             })),
         }
@@ -91,26 +102,20 @@ impl client::Client for Client {
 }
 
 pub struct Connection {
+    context: Arc<ClientContext>,
     local_addr: SocketAddr,
-    addr: SocketAddr,
-    timeout: tokio::time::Duration,
-    ssl_domain: String,
     connection: quinn::Connection,
 }
 
 impl Connection {
     pub fn new(
+        context: Arc<ClientContext>,
         local_addr: SocketAddr,
-        addr: SocketAddr,
-        timeout: tokio::time::Duration,
-        ssl_domain: &String,
         connection: quinn::Connection,
     ) -> Result<Connection> {
         Ok(Connection {
+            context,
             local_addr,
-            addr,
-            timeout,
-            ssl_domain: ssl_domain.clone(),
             connection,
         })
     }
@@ -120,21 +125,21 @@ impl Connection {
 impl client::Connection for Connection {
     async fn stream(
         &self,
-        info: ArcMutex<StreamFlowInfo>,
+        info: Option<ArcMutex<StreamFlowInfo>>,
     ) -> Result<(Protocol7, StreamFlow, SocketAddr, SocketAddr)> {
         let local_addr = self.local_addr.clone();
         let remote_addr = self.connection.remote_address();
         let mut stream_err: StreamFlowErr = StreamFlowErr::Init;
         let ret: Result<(quinn::SendStream, quinn::RecvStream)> = async {
-            match tokio::time::timeout(self.timeout, self.connection.open_bi()).await {
+            match tokio::time::timeout(self.context.timeout, self.connection.open_bi()).await {
                 Ok(ret) => match ret {
                     Ok(stream) => Ok(stream),
                     Err(e) => {
                         stream_err = StreamFlowErr::WriteErr;
                         Err(anyhow!(
                             "err:client.stream =>  addr:{}, ssl_domain:{}, e:{}",
-                            self.addr,
-                            self.ssl_domain,
+                            self.context.addr,
+                            self.context.ssl_domain,
                             e
                         ))
                     }
@@ -143,8 +148,8 @@ impl client::Connection for Connection {
                     stream_err = StreamFlowErr::WriteTimeout;
                     Err(anyhow!(
                         "err:client.stream timeout => addr:{}, ssl_domain:{}",
-                        self.addr,
-                        self.ssl_domain
+                        self.context.addr,
+                        self.context.ssl_domain
                     ))
                 }
             }
@@ -153,7 +158,7 @@ impl client::Connection for Connection {
         match ret {
             Err(e) => {
                 if info.is_some() {
-                    info.get_mut().err = stream_err;
+                    info.as_ref().unwrap().get_mut().err = stream_err;
                 }
                 Err(e)
             }

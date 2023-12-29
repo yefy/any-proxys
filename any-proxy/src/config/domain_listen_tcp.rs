@@ -271,7 +271,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         let scc = value.domain_config_contexts[0].scc.get();
         let http_core_conf0 = http_core::currs_conf(scc.http_server_confs());
         upstream_tcp_conf
-            .config(&http_core_conf0.tcp_conf_name)
+            .config(&http_core_conf0.tcp_config_name)
             .unwrap()
     };
     let listen_server: Arc<Box<dyn Server>> = Arc::new(Box::new(tcp_server::Server::new(

@@ -63,21 +63,16 @@ impl DomainStream {
             self.server_stream_info.clone(),
             http_core_conf.debug_is_open_stream_work_times,
             Some(self.executors.clone()),
-        );
-        let stream_info = Share::new(stream_info);
-        stream.set_stream_info(stream_info.get().client_stream_flow_info.clone());
-        let shutdown_thread_rx = self.executors.shutdown_thread_tx.subscribe();
-
-        stream_start::do_start(
-            self,
-            stream_info,
-            stream,
-            shutdown_thread_rx,
             http_core_conf.debug_print_access_log_time,
             http_core_conf.debug_print_stream_flow_time,
             http_core_conf.stream_so_singer_time,
-        )
-        .await
+            http_core_conf.debug_is_open_print,
+        );
+        let stream_info = Share::new(stream_info);
+        stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
+        let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
+
+        stream_start::do_start(self, stream_info, stream, shutdown_thread_rx).await
     }
 }
 

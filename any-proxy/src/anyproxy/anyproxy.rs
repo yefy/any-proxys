@@ -1,5 +1,4 @@
 use super::anyproxy_group;
-use crate::anyproxy::anymodule;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
 use crate::util::default_config;
 use crate::util::signal;
@@ -14,11 +13,28 @@ use structopt::StructOpt;
 pub struct ArgsConfig {
     #[structopt(long = "sig", short = "s")]
     pub signal: Option<String>,
+    #[structopt(long = "sigfile")]
+    pub signal_file: Option<String>,
     #[structopt(long, short = "t")]
     pub check_config: bool,
     #[structopt(long, short = "c")]
     pub config: Option<String>,
+    #[structopt(long = "hot")]
+    pub hot: Option<String>,
 }
+/*
+命令:anyproxy -s quit 正常关闭，可设置超时时间
+命令:anyproxy -s stop 快速关闭
+命令:anyproxy -s reload 配置热加载
+命令:anyproxy -s reinit 重新分配线程，并配置热加载
+命令:anyproxy -t 配置正确性检查
+命令:anyproxy -c 指定配置文件路径
+命令:anyproxy --hot 指定pid文件路径
+命令:anyproxy --sigfile quit 正常关闭，可设置超时时间
+命令:anyproxy --sigfile stop 快速关闭
+命令:anyproxy --sigfile reload 配置热加载
+命令:anyproxy --sigfile reinit 重新分配线程，并配置热加载
+ */
 
 impl ArgsConfig {
     /// Load configs from args.
@@ -72,10 +88,89 @@ impl Anyproxy {
         })
     }
 
+    pub fn set_hot_pid(hot: &str) -> Result<bool> {
+        let pid = std::fs::read_to_string(hot)
+            .map_err(|e| anyhow::anyhow!("err:hot anyproxy not run => e:{}", e))?;
+        let _ = pid
+            .parse::<usize>()
+            .map_err(|e| anyhow::anyhow!("err:hot pid => e:{}", e))?;
+        default_config::HOT_PID.set(pid);
+        return Ok(false);
+    }
+
+    pub fn run_linux_signal(sig: &str, pid: &str) -> Result<String> {
+        use std::process::Command;
+        let mut cmd = Command::new("/bin/kill");
+        cmd.arg("-s");
+        cmd.arg(sig);
+        cmd.arg(pid);
+
+        let output = cmd.output()?;
+        let output_str = String::from_utf8(output.stdout)?;
+        Ok(output_str)
+    }
+
+    pub fn run_signal(sig: &str) -> Result<bool> {
+        let pid = Anyproxy::read_pid_file().map_err(|e| anyhow!("err:pid is nil => e:{}", e))?;
+        let sig_linux = match sig {
+            "quit" => "QUIT",
+            "stop" => "TERM",
+            "reload" => "HUP",
+            "reinit" => "USR1",
+            _ => {
+                log::error!("err:not support signal:{}", sig);
+                return Err(anyhow!("err:not support signal:{}", sig));
+            }
+        };
+
+        match Self::run_linux_signal(sig_linux, &pid) {
+            Ok(output) => {
+                log::info!("signal pid {} info:{}", pid, output);
+            }
+            Err(e) => {
+                log::error!("err:signal pid :{} => e:{}", pid, e);
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn run_hot_pid() -> Result<()> {
+        if default_config::HOT_PID.is_none() {
+            return Ok(());
+        }
+        let pid = unsafe { default_config::HOT_PID.take() };
+        match Self::run_linux_signal("QUIT", &pid) {
+            Ok(output) => {
+                log::info!("hot pid {} info:{}", pid, output);
+            }
+            Err(e) => {
+                log::error!("err:hot pid :{} => e:{}", pid, e);
+            }
+        }
+        Ok(())
+    }
+
     pub fn parse_args(arg_config: &ArgsConfig) -> Result<bool> {
         if arg_config.signal.is_some() {
-            if Anyproxy::write_signal(arg_config.signal.as_ref().unwrap())
-                .map_err(|e| anyhow::anyhow!("err:signal => e:{}", e))?
+            let signal = arg_config.signal.as_ref().unwrap();
+            #[cfg(unix)]
+            {
+                if Anyproxy::run_signal(signal)
+                    .map_err(|e| anyhow::anyhow!("err:signal_file => e:{}", e))?
+                {
+                    return Ok(true);
+                }
+            }
+            log::error!(
+                "err:system not support, please use: anyproxy --sigfile {}",
+                signal
+            );
+            return Ok(true);
+        }
+
+        if arg_config.signal_file.is_some() {
+            if Anyproxy::write_signal(arg_config.signal_file.as_ref().unwrap())
+                .map_err(|e| anyhow::anyhow!("err:signal_file => e:{}", e))?
             {
                 return Ok(true);
             }
@@ -84,6 +179,15 @@ impl Anyproxy {
         if arg_config.config.is_some() {
             let config = arg_config.config.clone().unwrap();
             default_config::ANYPROXY_CONF_FULL_PATH.set(config);
+        }
+
+        if arg_config.hot.is_some() {
+            #[cfg(unix)]
+            if true {
+                return Anyproxy::set_hot_pid(arg_config.hot.as_ref().unwrap());
+            }
+            log::error!("err:system not support hot");
+            return Ok(true);
         }
 
         if arg_config.check_config {
@@ -105,19 +209,16 @@ impl Anyproxy {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        log::trace!("anyproxy start");
         scopeguard::defer! {
-            Anyproxy::remove_pid_file();
             Anyproxy::remove_signal_file();
             log::info!("anyproxy end");
         };
 
         log::info!("anyproxy start");
+        Anyproxy::remove_signal_file();
+        Anyproxy::remove_pid_file();
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
-        Anyproxy::remove_signal_file();
-
-        anymodule::add_modules()?;
 
         let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
         let mut ms = module::Modules::new(None);
@@ -138,6 +239,9 @@ impl Anyproxy {
             .start()
             .await
             .map_err(|e| anyhow!("err:anyproxy start => e:{}", e))?;
+
+        #[cfg(unix)]
+        Self::run_hot_pid()?;
 
         loop {
             let anyproxy_state = Anyproxy::read_signal().await;
@@ -308,7 +412,7 @@ impl Anyproxy {
     pub fn write_signal(sig: &str) -> Result<bool> {
         let pid = Anyproxy::read_pid_file();
         if pid.is_err() {
-            log::error!("err:anyproxy not run");
+            log::error!("err:pid is nil");
         }
         let is_sig = match sig {
             "quit" => true,
@@ -350,6 +454,13 @@ impl Anyproxy {
             sig = signal::quit() =>  {
                 if sig {
                     return AnyproxyState::Quit;
+                } else {
+                    return AnyproxyState::Skip;
+                }
+            },
+            sig = signal::stop() =>  {
+                if sig {
+                    return AnyproxyState::Stop;
                 } else {
                     return AnyproxyState::Skip;
                 }

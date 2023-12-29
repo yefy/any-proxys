@@ -192,10 +192,13 @@ impl upstream_core::HeartbeatI for Heartbeat {
     ) -> Result<Share<UpstreamHeartbeatData>> {
         use crate::config::socket_tcp;
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
-        let tcp_str = self.tcp.tcp.clone();
-        let tcp_config = upstream_tcp_conf.tcp_confs.get(&tcp_str).cloned();
+        let tcp_config_name = &self.tcp.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
         if tcp_config.is_none() {
-            return Err(anyhow!("err:tcp.tcp={}", tcp_str));
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
         }
         let connect = Box::new(tcp_connect::Connect::new(
             host.into(),

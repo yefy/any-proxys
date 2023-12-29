@@ -6,6 +6,7 @@ use any_tunnel2::protopack as protopack2;
 use any_tunnel2::protopack::TUNNEL_VERSION as TUNNEL2_VERSION;
 use anyhow::anyhow;
 use anyhow::Result;
+use bytes::BufMut;
 use serde::ser;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -199,6 +200,23 @@ where
         .await
         .map_err(|e| anyhow!("err:buf_writer.flush => e:{}", e))?;
     Ok(pack_size)
+}
+
+pub async fn pack_to_vec<T: ?Sized>(typ: AnyproxyHeaderType, value: &T) -> Result<Vec<u8>>
+where
+    T: ser::Serialize,
+{
+    let mut datas = Vec::with_capacity(100);
+    let slice = toml::to_vec(value).map_err(|e| anyhow!("err:toml::to_vec => e:{}", e))?;
+    let header_slice = toml::to_vec(&AnyproxyHeader {
+        header_type: typ as u8,
+        body_size: slice.len() as u16,
+    })?;
+    datas.extend_from_slice(ANYPROXY_FLAG.as_bytes());
+    datas.put_u16(header_slice.len() as u16);
+    datas.extend_from_slice(&header_slice);
+    datas.extend_from_slice(&slice);
+    Ok(datas)
 }
 
 pub async fn read_pack_rollback<R: AsyncRead + Unpin>(

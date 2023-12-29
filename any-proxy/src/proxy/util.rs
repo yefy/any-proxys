@@ -71,15 +71,14 @@ where
         }
     };
 
-    arg.stream_info.get_mut().request_id = hello.request_id.clone();
-    {
-        arg.stream_info.get().protocol_hello.set(Arc::new(hello));
-    }
-
     let domain_index = {
+        let mut stream_info = arg.stream_info.get_mut();
+        stream_info.request_id = hello.request_id.clone();
+        stream_info.protocol_hello.set(Arc::new(hello));
+
         arg.domain_config_listen
             .domain_index
-            .index(&arg.stream_info.get().protocol_hello.get().domain)
+            .index(&stream_info.protocol_hello.get().domain)
             .map_err(|e| anyhow!("err:domain_index.index => e:{}", e))?
     };
     let domain_config_context = arg
@@ -93,19 +92,18 @@ where
         ))?;
 
     let scc = domain_config_context.scc.clone();
-    let (debug_is_open_print, debug_is_open_stream_work_times) = {
-        let scc = scc.get();
-        use crate::config::http_core;
-        let http_core_conf = http_core::currs_conf(&scc.http_server_confs());
-        (
-            http_core_conf.debug_is_open_print,
-            http_core_conf.debug_is_open_stream_work_times,
-        )
-    };
-
-    arg.stream_info.get_mut().scc = scc.clone();
-    arg.stream_info.get_mut().debug_is_open_print = debug_is_open_print;
-    arg.stream_info.get_mut().debug_is_open_stream_work_times = debug_is_open_stream_work_times;
+    {
+        let mut stream_info = arg.stream_info.get_mut();
+        let scc_ = scc.get();
+        let http_core_conf = scc_.http_core_conf();
+        stream_info.scc = scc.clone();
+        stream_info.debug_is_open_print = http_core_conf.debug_is_open_print;
+        stream_info.debug_is_open_stream_work_times =
+            http_core_conf.debug_is_open_stream_work_times;
+        stream_info.debug_print_access_log_time = http_core_conf.debug_print_access_log_time;
+        stream_info.debug_print_stream_flow_time = http_core_conf.debug_print_stream_flow_time;
+        stream_info.stream_so_singer_time = http_core_conf.stream_so_singer_time;
+    }
     Ok(scc)
 }
 
@@ -154,8 +152,8 @@ pub async fn upsteam_do_connect(
     let connect_info = connect_func
         .connect(
             Some(request_id.clone()),
-            upstream_connect_flow_info,
-            Some(executors.run_time),
+            Some(upstream_connect_flow_info),
+            Some(executors.context.run_time.clone()),
         )
         .await
         .map_err(|e| {
@@ -188,7 +186,7 @@ pub async fn upsteam_do_connect(
         .get_mut()
         .upstream_connect_info
         .set(upstream_connect_info);
-    upstream_stream.set_stream_info(stream_info.get().upstream_stream_flow_info.clone());
+    upstream_stream.set_stream_info(Some(stream_info.get().upstream_stream_flow_info.clone()));
 
     Ok(upstream_stream)
 }

@@ -70,7 +70,7 @@ impl PeerStream {
         stream.set_config(
             tokio::time::Duration::from_secs(60 * 10),
             tokio::time::Duration::from_secs(60 * 10),
-            stream_info.clone(),
+            Some(stream_info.clone()),
         );
         let (r, w) = stream.split();
         let r = any_base::io::buf_reader::BufReader::new(r);

@@ -2,7 +2,6 @@ use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
-use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use any_tunnel::server as tunnel_server;
 use any_tunnel::stream as tunnel_stream;
@@ -119,7 +118,7 @@ impl server::Connection for Connection {
         let mut stream = stream_flow::StreamFlow::new(0, stream);
         let read_timeout = tokio::time::Duration::from_secs(self.stream_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
-        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+        stream.set_config(read_timeout, write_timeout, None);
         Ok(Some((
             stream,
             ServerStreamInfo {

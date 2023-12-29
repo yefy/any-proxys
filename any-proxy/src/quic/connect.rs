@@ -20,9 +20,9 @@ use std::time::Instant;
 pub struct ConnectContext {
     host: ArcString,
     address: SocketAddr, //ip:port, domain:port
-    ssl_domain: String,
+    ssl_domain: Arc<String>,
     endpoints: Arc<endpoints::Endpoints>,
-    quic_config: QuicConfig,
+    quic_config: Arc<QuicConfig>,
 }
 
 pub struct Connect {
@@ -35,13 +35,13 @@ impl Connect {
         address: SocketAddr, //ip:port, domain:port
         ssl_domain: String,
         endpoints: Arc<endpoints::Endpoints>,
-        quic_config: QuicConfig,
+        quic_config: Arc<QuicConfig>,
     ) -> Connect {
         Connect {
             context: Arc::new(ConnectContext {
                 host: host.into(),
                 address,
-                ssl_domain,
+                ssl_domain: Arc::new(ssl_domain),
                 endpoints,
                 quic_config,
             }),
@@ -54,7 +54,7 @@ impl connect::Connect for Connect {
     async fn connect(
         &self,
         _request_id: Option<ArcString>,
-        info: ArcMutex<StreamFlowInfo>,
+        info: Option<ArcMutex<StreamFlowInfo>>,
         _run_time: Option<Arc<Box<dyn Runtime>>>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
         let quic_connect_timeout = self.context.quic_config.quic_connect_timeout as u64;
@@ -64,9 +64,13 @@ impl connect::Connect for Connect {
         let addr = self.context.address.clone();
         let endpoint = self.context.endpoints.endpoint()?;
 
-        let client =
-            quic_client::Client::new(addr, timeout, endpoint.clone(), &self.context.ssl_domain)
-                .map_err(|e| anyhow!("err:quic_client::Client::new => e:{}", e))?;
+        let client = quic_client::Client::new(
+            addr,
+            timeout,
+            endpoint.clone(),
+            self.context.ssl_domain.clone(),
+        )
+        .map_err(|e| anyhow!("err:quic_client::Client::new => e:{}", e))?;
         let connection = {
             client
                 .connect(info.clone())
@@ -82,7 +86,7 @@ impl connect::Connect for Connect {
             tokio::time::Duration::from_secs(self.context.quic_config.quic_recv_timeout as u64);
         let write_timeout =
             tokio::time::Duration::from_secs(self.context.quic_config.quic_send_timeout as u64);
-        stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+        stream.set_config(read_timeout, write_timeout, None);
 
         Ok((
             stream,

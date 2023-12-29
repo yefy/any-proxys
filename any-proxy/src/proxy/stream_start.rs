@@ -3,12 +3,11 @@ use super::proxy;
 use super::stream_info;
 use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
-use super::StreamConfigContext;
 use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
 use any_base::stream_flow;
-use any_base::typ::{ArcMutex, Share, ShareRw};
+use any_base::typ::{ArcMutex, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -22,9 +21,6 @@ pub async fn do_start(
     stream_info: Share<StreamInfo>,
     stream: stream_flow::StreamFlow,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
-    debug_print_access_log_time: u64,
-    debug_print_stream_flow_time: u64,
-    stream_so_singer_time: usize,
 ) -> Result<()> {
     let start_time = Instant::now();
     let stream_timeout = StreamTimeout::new();
@@ -71,10 +67,10 @@ pub async fn do_start(
             ) => {
                 return Some(_ret);
             }
-            _ret = debug_print_access_log(debug_print_access_log_time, stream_info.clone()) => {
+            _ret = debug_print_access_log(stream_info.clone()) => {
                 return Some(_ret);
             }
-             _ret = debug_print_stream_flow(debug_print_stream_flow_time, stream_info.clone()) => {
+             _ret = debug_print_stream_flow(stream_info.clone()) => {
                 return Some(_ret);
             }
             _ = shutdown_thread_rx.recv() => {
@@ -89,7 +85,18 @@ pub async fn do_start(
     }
     .await;
 
-    if stream_info.get().debug_is_open_print {
+    let (debug_is_open_print, scc, stream_so_singer_time) = {
+        let session_time = start_time.elapsed().as_secs_f32();
+        let mut stream_info = stream_info.get_mut();
+        stream_info.session_time = session_time;
+        (
+            stream_info.debug_is_open_print,
+            stream_info.scc.clone(),
+            stream_info.stream_so_singer_time,
+        )
+    };
+
+    if debug_is_open_print {
         let stream_info = stream_info.get();
         log::info!(
             "{}---{:?}:do_start end",
@@ -98,17 +105,13 @@ pub async fn do_start(
         );
     }
 
-    let session_time = start_time.elapsed().as_secs_f32();
-    stream_info.get_mut().session_time = session_time;
-
     let (is_close, is_ups_close) = stream_info_parse(stream_timeout, stream_info.clone())
         .await
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
 
-    if stream_info.get().scc.is_some() {
+    if scc.is_some() {
         let plugin_handle_logs = {
-            let stream_info = stream_info.get();
-            let scc = stream_info.scc.get();
+            let scc = scc.get();
             use crate::config::http_core_plugin;
             let http_core_plugin_conf = http_core_plugin::currs_conf(scc.http_main_confs());
             http_core_plugin_conf.plugin_handle_logs.clone()
@@ -487,30 +490,35 @@ pub async fn write_timeout(
     }
 }
 
-pub async fn debug_print_access_log(
-    debug_print_access_log_time: u64,
-    stream_info: Share<StreamInfo>,
-) -> Result<()> {
-    let timeout = if debug_print_access_log_time <= 0 {
-        10
-    } else {
-        debug_print_access_log_time
-    };
-
-    let mut scc: ShareRw<StreamConfigContext> = ShareRw::default();
-
+pub async fn debug_print_access_log(stream_info: Share<StreamInfo>) -> Result<()> {
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
-        if debug_print_access_log_time <= 0 || debug_print_access_log_time == u64::MAX {
-            continue;
-        }
-        if stream_info.get().is_discard_flow {
-            continue;
-        }
-        if stream_info.get().scc.is_some() {
-            if scc.is_none() {
-                scc = stream_info.get().scc.clone();
+        let (debug_print_access_log_time, is_discard_flow) = {
+            let stream_info = stream_info.get();
+            (
+                stream_info.debug_print_access_log_time,
+                stream_info.is_discard_flow,
+            )
+        };
+
+        let timeout = if debug_print_access_log_time <= 0 {
+            10
+        } else {
+            if is_discard_flow {
+                10
+            } else {
+                debug_print_access_log_time
             }
+        };
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
+        if debug_print_access_log_time <= 0
+            || debug_print_access_log_time == u64::MAX
+            || is_discard_flow
+        {
+            continue;
+        }
+
+        if stream_info.get().scc.is_some() {
             if let Err(e) = AccessLog::debug_access_log(stream_info.clone())
                 .await
                 .map_err(|e| anyhow!("err:StreamStream::debug_access_log => e:{}", e))
@@ -522,21 +530,31 @@ pub async fn debug_print_access_log(
     }
 }
 
-pub async fn debug_print_stream_flow(
-    debug_print_stream_flow_time: u64,
-    stream_info: Share<StreamInfo>,
-) -> Result<()> {
-    let timeout = if debug_print_stream_flow_time <= 0 {
-        10
-    } else {
-        debug_print_stream_flow_time
-    };
+pub async fn debug_print_stream_flow(stream_info: Share<StreamInfo>) -> Result<()> {
     loop {
+        let (debug_print_stream_flow_time, is_discard_flow) = {
+            let stream_info = stream_info.get();
+            (
+                stream_info.debug_print_stream_flow_time,
+                stream_info.is_discard_flow,
+            )
+        };
+
+        let timeout = if debug_print_stream_flow_time <= 0 {
+            10
+        } else {
+            if is_discard_flow {
+                10
+            } else {
+                debug_print_stream_flow_time
+            }
+        };
+
         tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
-        if debug_print_stream_flow_time <= 0 || debug_print_stream_flow_time == u64::MAX {
-            continue;
-        }
-        if stream_info.get().is_discard_flow {
+        if debug_print_stream_flow_time <= 0
+            || debug_print_stream_flow_time == u64::MAX
+            || is_discard_flow
+        {
             continue;
         }
 
