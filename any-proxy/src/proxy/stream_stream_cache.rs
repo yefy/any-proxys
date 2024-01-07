@@ -1,6 +1,6 @@
 use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
-use crate::proxy::{get_flag, StreamStatus};
+use crate::proxy::{get_flag, StreamCloseType, StreamStatus};
 use crate::proxy::{StreamStreamShare, LIMIT_SLEEP_TIME_MILLIS, NORMAL_SLEEP_TIME_MILLIS};
 use any_base::io::async_read_msg::AsyncReadMsgExt;
 use any_base::io::async_stream::AsyncStreamExt;
@@ -38,7 +38,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
         let mut stream_info = stream_info.get_mut();
 
         stream_info.buffer_cache = Some(cs.buffer_cache.clone());
-        stream_info.add_work_time(&format!("{} cache", get_flag(sss.is_client)));
+        stream_info.add_work_time(&format!("{} cache", get_flag(sss.ssc.is_client)));
 
         {
             let buffer_size = cs.min_cache_buffer_size as i64;
@@ -57,7 +57,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
         (
             sss.ssc.ssd.clone(),
             sss.stream_info.clone(),
-            sss.is_client,
+            sss.ssc.is_client,
             cs.read_buffer_size,
         )
     };
@@ -71,7 +71,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
             (ssd.stream_cache_size > 0 || ssd.tmp_file_size > 0) && sss.read_err.is_none()
         };
         if is_read {
-            let (ret, buffer) = read(sss.clone(), read_buffer_size, &stream_status)
+            let buffer = read(sss.clone(), read_buffer_size, &stream_status)
                 .await
                 .map_err(|e| anyhow!("err:read => e:{}", e))?;
             let mut sss = sss.get_mut();
@@ -82,17 +82,8 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
                     .add_work_time(&format!("first read {}", get_flag(is_client)));
             }
             sss.read_buffer = Some(buffer);
-            sss.read_buffer_ret = Some(ret);
         } else {
             StreamStreamShare::stream_status_sleep(&stream_status, is_client).await;
-            let mut sss = sss.get_mut();
-            if sss.read_err.is_some() && sss.read_buffer.is_some() {
-                if sss.read_buffer.as_ref().unwrap().read_size <= 0 {
-                    log::error!("err:buffer.read_size <= 0");
-                } else {
-                    sss.read_buffer_ret = Some(Ok(0));
-                }
-            }
         }
         let handle_next = &*CACHE_HANDLE_NEXT.get().await;
         stream_status = (handle_next)(sss.clone())
@@ -107,41 +98,49 @@ pub async fn check_stream_close(
     sss: ShareRw<StreamStreamShare>,
     stream_status: &StreamStatus,
 ) -> Result<()> {
-    let (cs, stream_info, r, is_client) = {
+    let (ssc, cs, stream_info, r) = {
         let sss = sss.get();
         (
+            sss.ssc.clone(),
             sss.ssc.cs.clone(),
             sss.stream_info.clone(),
             sss.r.clone(),
-            sss.is_client,
         )
     };
     stream_info.get_mut().buffer_cache = Some(cs.buffer_cache.clone());
 
     let is_single = r.get_mut().await.is_single().await;
     let is_sendfile_close = StreamStreamShare::is_sendfile_close(sss.clone(), stream_status).await;
-    {
-        let ret: Result<()> = async {
-            let mut sss = sss.get_mut();
-            if sss.is_fast_close {
-                if sss.write_err.is_some() {
-                    sss.write_err.take().unwrap()?;
-                }
 
-                if sss.read_err.is_some() && sss.is_read_empty() && sss.is_write_empty() {
-                    sss.read_err.take().unwrap()?;
-                }
+    let ret: Result<()> = async {
+        let mut sss = sss.get_mut();
+        if let &StreamCloseType::WaitEmpty = &sss.ssc.close_type {
+            Ok(())
+        } else {
+            if sss.write_err.is_some() {
+                sss.write_err.take().unwrap()?;
+            }
+
+            if sss.read_err.is_some() && sss.is_read_empty() && sss.is_write_empty() {
+                sss.read_err.take().unwrap()?;
             }
             Ok(())
         }
-        .await;
-        if ret.is_err() {
-            let w = sss.get().w.clone();
-            let mut w = w.get_mut().await;
-            let _ = w.flush().await;
-            //let _ = w.shutdown().await;
-            ret?;
+    }
+    .await;
+    if ret.is_err() {
+        let (w, ssc) = {
+            let sss = sss.get();
+            (sss.w.clone(), sss.ssc.clone())
+        };
+        let mut w = w.get_mut().await;
+        let _ = w.flush().await;
+        if let &StreamCloseType::Shutdown = &ssc.close_type {
+            let _ = w.shutdown().await;
+            ssc.worker_inner.done();
+            let _ = ssc.wait_group.wait().await;
         }
+        ret?;
     }
 
     let is_close = {
@@ -167,71 +166,30 @@ pub async fn check_stream_close(
         stream_info.get_mut().close_num += 1;
         loop {
             if stream_info.get().close_num >= 2 {
-                let ret: Result<()> = async {
-                    let mut sss = sss.get_mut();
-                    if sss.write_err.is_some() {
-                        sss.write_err.take().unwrap()?;
-                    }
-
-                    if sss.read_err.is_some() {
-                        sss.read_err.take().unwrap()?;
-                    }
-                    Ok(())
+                let mut sss = sss.get_mut();
+                if sss.write_err.is_some() {
+                    sss.write_err.take().unwrap()?;
                 }
-                .await;
-                if ret.is_err() {
-                    let w = sss.get().w.clone();
-                    let mut w = w.get_mut().await;
-                    let _ = w.flush().await;
-                    //let _ = w.shutdown().await;
-                    ret?;
+
+                if sss.read_err.is_some() {
+                    sss.read_err.take().unwrap()?;
                 }
             }
 
             loop {
-                let close_wait = {
-                    let stream_info = stream_info.get();
-                    let other_read = if !is_client {
-                        stream_info.upload_read.clone()
-                    } else {
-                        stream_info.download_read.clone()
-                    };
-                    other_read.waker();
-
-                    let close_wait = if !is_client {
-                        stream_info.upload_close.clone()
-                    } else {
-                        stream_info.download_close.clone()
-                    };
-                    close_wait.waker();
-
-                    if is_client {
-                        stream_info.upload_close.clone()
-                    } else {
-                        stream_info.download_close.clone()
+                ssc.other_read_wait.clone().waker();
+                ssc.other_close_wait.clone().waker();
+                tokio::select! {
+                    biased;
+                    _= tokio::time::sleep(std::time::Duration::from_millis(1000)) => {
+                        continue;
+                    },
+                    _= ssc.close_wait.clone() => {
+                        break;
+                    },
+                    else => {
+                       break;
                     }
-                };
-
-                let ret: std::io::Result<usize> = async {
-                    tokio::select! {
-                        biased;
-                        _= tokio::time::sleep(std::time::Duration::from_millis(1000)) => {
-                            return Ok(0);
-                        },
-                        _= close_wait => {
-                            return Ok(1);
-                        },
-                        else => {
-                            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                            "err:close_wait select close"
-                        )));
-                        }
-                    }
-                }
-                .await;
-
-                if ret.unwrap() == 1 {
-                    break;
                 }
             }
         }
@@ -243,7 +201,7 @@ pub async fn read(
     sss: ShareRw<StreamStreamShare>,
     read_buffer_size: usize,
     stream_status: &StreamStatus,
-) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
+) -> Result<DynamicPoolItem<StreamCacheBuffer>> {
     let mut buffer = {
         let mut sss = sss.get_mut();
         let ssd = sss.ssc.ssd.clone();
@@ -302,7 +260,6 @@ pub async fn read(
     let ret: std::io::Result<usize> = async {
         let (sleep_read_time_millis, r, read_wait, start_size, end_size) = {
             let sss = sss.get();
-            let stream_info = sss.stream_info.get();
             let sleep_read_time_millis = match &stream_status {
                 &StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
                 &StreamStatus::Full => {
@@ -317,12 +274,7 @@ pub async fn read(
             let start_size = buffer.read_size as usize;
             let end_size = buffer.size as usize;
 
-            let read_wait = if sss.is_client {
-                stream_info.upload_read.clone()
-            } else {
-                stream_info.download_read.clone()
-            };
-            (sleep_read_time_millis, sss.r.clone(), read_wait, start_size, end_size)
+            (sleep_read_time_millis, sss.r.clone(), sss.ssc.read_wait.clone(), start_size, end_size)
         };
 
         let mut r = r.get_mut().await;
@@ -382,5 +334,20 @@ pub async fn read(
     }
     .await;
 
-    Ok((ret, buffer))
+    let mut sss = sss.get_mut();
+    if let Err(ref e) = ret {
+        //log::trace!("{}, read_err = Some(ret)", get_flag(sss.ssc.is_client));
+        if e.kind() != std::io::ErrorKind::ConnectionReset {
+            return Err(anyhow!("err:{}", e))?;
+        }
+        sss.read_err = Some(Err(anyhow!(
+            "err:stream read => flag:{}, e:{}",
+            get_flag(sss.ssc.is_client),
+            e
+        )));
+    } else {
+        let size = ret.unwrap() as u64;
+        buffer.read_size += size;
+    }
+    Ok(buffer)
 }

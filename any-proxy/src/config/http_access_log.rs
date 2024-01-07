@@ -16,12 +16,6 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccessConfigs {
-    pub access: Vec<AccessConfig>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AccessConfigsDefault {
     #[serde(default = "default_access")]
     pub access: Vec<AccessConfig>,
 }
@@ -34,10 +28,17 @@ pub struct Conf {
 
 impl Conf {
     pub async fn new() -> Result<Self> {
+        let access_conf: AccessConfigs =
+            toml::from_str("").map_err(|e| anyhow!("err: => e:{}", e))?;
+        log::trace!("access access_conf:{:?}", access_conf);
+        let access = access_conf.access;
+
+        let access_context = AccessLog::parse_config_access_log(&access).await?;
+
         Ok(Conf {
             is_default: true,
-            access: Arc::new(Vec::new()),
-            access_context: Arc::new(Vec::new()),
+            access: Arc::new(access),
+            access_context: Arc::new(access_context),
         })
     }
 }

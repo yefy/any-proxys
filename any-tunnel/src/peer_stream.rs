@@ -14,7 +14,8 @@ use super::stream_flow::StreamFlowInfo;
 use crate::client::ClientContext;
 use crate::get_flag;
 use crate::peer_client::PeerStreamToPeerClientTx;
-use crate::protopack::{TunnelClose, TunnelHello};
+use crate::protopack::{TunnelClose, TunnelHello, TunnelHelloAck};
+use crate::round_async_channel::RoundAsyncChannel;
 use crate::server::{AcceptSenderType, ServerRecvHello};
 use any_base::executor_local_spawn::Runtime;
 use any_base::typ::ArcMutex;
@@ -37,7 +38,7 @@ pub struct PeerStreamKey {
 }
 
 pub struct PeerStreamRecvHello {
-    pub stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
+    pub stream_to_peer_stream_rx: Option<async_channel::Receiver<TunnelPack>>,
     pub peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
     pub tunnel_hello: Option<TunnelHello>,
     pub min_stream_cache_size: usize,
@@ -48,6 +49,8 @@ pub struct PeerStreamRecvHello {
     pub session_id: Option<ArcString>,
     pub is_error: Arc<AtomicBool>,
     pub peer_stream_id: Option<usize>,
+    pub round_async_channel: ArcMutex<RoundAsyncChannel<TunnelPack>>,
+    pub is_ack: bool,
 }
 
 pub enum PeerStreamRecv {
@@ -300,6 +303,43 @@ impl PeerStream {
             is_hello = true;
         }
     }
+    pub async fn write_tunnel_hello<
+        R: AsyncRead + std::marker::Unpin,
+        W: AsyncWrite + std::marker::Unpin,
+    >(
+        r: &mut R,
+        w: &mut W,
+        tunnel_hello: &Option<TunnelHello>,
+    ) -> Result<bool> {
+        if tunnel_hello.is_none() {
+            return Ok(true);
+        }
+
+        let tunnel_hello = tunnel_hello.as_ref().unwrap();
+        log::trace!("write_stream tunnel_hello:{:?}", tunnel_hello);
+
+        protopack::write_pack(w, TunnelHeaderType::TunnelHello, tunnel_hello, true)
+            .await
+            .map_err(|e| anyhow!("e:{}", e))?;
+        if tunnel_hello.is_ack {
+            protopack::read_tunnel_hello_ack(r).await?;
+        }
+        Ok(true)
+    }
+
+    pub async fn write_tunnel_hello_ack<W: AsyncWrite + std::marker::Unpin>(
+        w: &mut W,
+    ) -> Result<()> {
+        protopack::write_pack(
+            w,
+            TunnelHeaderType::TunnelHelloAck,
+            &TunnelHelloAck {},
+            true,
+        )
+        .await
+        .map_err(|e| anyhow!("e:{}", e))?;
+        Ok(())
+    }
 
     pub async fn do_stream<
         R: AsyncRead + std::marker::Unpin,
@@ -323,6 +363,8 @@ impl PeerStream {
             session_id,
             is_error,
             peer_stream_id,
+            round_async_channel,
+            is_ack,
         } = msg;
 
         let peer_stream_id = if peer_stream_id.is_some() {
@@ -358,11 +400,38 @@ impl PeerStream {
                 return Err(anyhow!("err:self.is_client && tunnel_hello.is_none()"));
             }
 
-            let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.clone_and_ref();
-            if peer_stream_to_peer_client_tx.is_none() {
-                return Err(anyhow!("peer_stream_to_peer_client_tx.is_none"));
+            let peer_stream_to_peer_client_tx = {
+                let is_close = peer_stream_to_peer_client_tx.is_close.get();
+                if *is_close {
+                    return Err(anyhow!("peer_stream_to_peer_client_tx.is_none"));
+                }
+
+               peer_stream_to_peer_client_tx.clone_and_ref()
+            };
+
+
+            let is_ok = Self::write_tunnel_hello(r, w, &tunnel_hello).await?;
+            if !is_ok {
+                return Ok(());
             }
-            let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.unwrap();
+
+            let stream_to_peer_stream_rx = if stream_to_peer_stream_rx.is_some() {
+                stream_to_peer_stream_rx.unwrap()
+            } else {
+                let stream_to_peer_stream_rx = {
+                    round_async_channel
+                        .get_mut()
+                        .channel(channel_size)
+                };
+                if stream_to_peer_stream_rx.is_err() {
+                    return Ok(());
+                }
+                stream_to_peer_stream_rx.unwrap()
+            };
+
+            if !self.context.is_client && is_ack {
+                Self::write_tunnel_hello_ack(w).await?;
+            }
 
             let mut peer_stream_read = PeerStreamRead::new(r,
                                                            peer_stream_to_peer_client_tx,
@@ -375,31 +444,31 @@ impl PeerStream {
             let mut peer_stream_write = PeerStreamWrite::new(
                 w,
                 stream_to_peer_stream_rx.clone(),
-                tunnel_hello,
+                &tunnel_hello,
                 min_stream_cache_size,
                 peer_stream_tx_pack_id,
                 self.context.clone(),
             );
 
-            tokio::select! {
+            let ret = tokio::select! {
                 biased;
                 ret = peer_stream_read.start() => {
-                    ret.map_err(|e| anyhow!("err:read_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))?;
-                    Ok(())
+                    ret.map_err(|e| anyhow!("err:read_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))
                 }
                 ret = peer_stream_write.start() => {
-                    ret.map_err(|e| anyhow!("err:write_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))?;
-                    Ok(())
+                    ret.map_err(|e| anyhow!("err:write_stream => flag:{}, e:{}", get_flag(self.context.is_client), e))
                 }
                 else => {
-                    return Err(anyhow!("err:select"));
+                     Err(anyhow!("err:select"))
                 }
-            }
+            };
+
+            self.close(stream_to_peer_stream_rx);
+            ret
         }
         .await;
 
         let mut _err_num = 0;
-        self.close(stream_to_peer_stream_rx);
         if let Err(e) = ret {
             let tx_pack_id = self.context.once.tx_pack_id.load(Ordering::SeqCst);
             let rx_pack_id = self.context.once.rx_pack_id.load(Ordering::SeqCst);
@@ -670,59 +739,32 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
 struct PeerStreamWrite<'a, W: AsyncWrite + std::marker::Unpin> {
     w: &'a mut W,
     stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-    tunnel_hello: Option<TunnelHello>,
     _min_stream_cache_size: usize,
     peer_stream_tx_pack_id: Arc<AtomicU32>,
     context: Arc<PeerStreamContext>,
 }
 
 impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
-    pub fn new(
-        w: &mut W,
+    pub fn new<'a>(
+        w: &'a mut W,
         stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
-        tunnel_hello: Option<TunnelHello>,
+        tunnel_hello: &'a Option<TunnelHello>,
         _min_stream_cache_size: usize,
         peer_stream_tx_pack_id: Arc<AtomicU32>,
         context: Arc<PeerStreamContext>,
-    ) -> PeerStreamWrite<W> {
+    ) -> PeerStreamWrite<'a, W> {
+        if tunnel_hello.is_some() {
+            *context.once.session_id.lock().unwrap() =
+                Some(tunnel_hello.as_ref().unwrap().session_id.clone());
+        }
+
         PeerStreamWrite {
             w,
             stream_to_peer_stream_rx,
-            tunnel_hello,
             _min_stream_cache_size,
             peer_stream_tx_pack_id,
             context,
         }
-    }
-    pub async fn write_tunnel_hello(&mut self) -> Result<()> {
-        if self.tunnel_hello.is_none() {
-            return Ok(());
-        }
-
-        #[cfg(feature = "anydebug")]
-        {
-            log::info!(
-                        "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream TunnelHello ",
-                {self.context.once.session_id.lock().unwrap()},
-                        get_flag(self.context.is_client),
-                        self.context.once.peer_stream_id.load(Ordering::Relaxed),
-                        self.context.once.peer_stream_index.load(Ordering::Relaxed),
-                    );
-        }
-        let tunnel_hello = self.tunnel_hello.take().unwrap();
-        log::trace!("write_stream tunnel_hello:{:?}", tunnel_hello);
-        {
-            *self.context.once.session_id.lock().unwrap() = Some(tunnel_hello.session_id.clone());
-        }
-        protopack::write_pack(
-            &mut self.w,
-            TunnelHeaderType::TunnelHello,
-            &tunnel_hello,
-            true,
-        )
-        .await
-        .map_err(|e| anyhow!("e:{}", e))?;
-        Ok(())
     }
 
     pub async fn write_pack(&mut self) -> Result<Option<()>> {
@@ -812,6 +854,10 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                     log::trace!("write_stream TunnelHello:{:?}", value);
                     return Err(anyhow!("err: write_stream TunnelHello:{:?}", value));
                 }
+                TunnelPack::TunnelHelloAck(value) => {
+                    log::trace!("write_stream TunnelHelloAck:{:?}", value);
+                    return Err(anyhow!("err: write_stream TunnelHelloAck:{:?}", value));
+                }
                 TunnelPack::TunnelClose(value) => {
                     log::trace!("write_stream TunnelClose:{:?}", value);
                     return Err(anyhow!("err: write_stream TunnelClose:{:?}", value));
@@ -873,8 +919,6 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        self.write_tunnel_hello().await?;
-
         #[cfg(feature = "anydebug")]
         {
             log::info!(

@@ -14,6 +14,14 @@ path = "src/bin/anyproxy.rs"
 name = "single_threaded"
 path = "examples/single_threaded.rs"
 
+[[example]]
+name = "any_tunnel_server"
+path = "../any-tunnel/examples/server.rs"
+
+[[example]]
+name = "any_tunnel_client"
+path = "../any-tunnel/examples/client.rs"
+
 #run --no-default-features --features "anyproxy-rustls anyproxy-ebpf"
 [features]
 default = ["anyproxy-openssl"]

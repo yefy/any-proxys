@@ -605,17 +605,17 @@ impl tokio::io::AsyncWrite for Stream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.is_write_close() {
-            return Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionReset,
-                "ConnectionReset",
-            )));
-        }
+        // if self.is_write_close() {
+        //     return Poll::Ready(Err(std::io::Error::new(
+        //         std::io::ErrorKind::ConnectionReset,
+        //         "ConnectionReset",
+        //     )));
+        // }
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.close();
+        self.write_close();
         Poll::Ready(Ok(()))
     }
 }

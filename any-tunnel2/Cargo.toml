@@ -46,7 +46,7 @@ anyruntime-tokio-spawn-local =[]
 anyruntime-tokio-spawn =[]
 
 [dependencies]
-any-base = {path = "../any-base"}
+any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
 anyhow = {path = "../anyhow"}
 tokio = { version = "1.35.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

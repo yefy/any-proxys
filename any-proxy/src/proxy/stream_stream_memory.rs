@@ -1,7 +1,7 @@
 use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
-use crate::proxy::StreamStreamShare;
 use crate::proxy::{get_flag, StreamStatus, LIMIT_SLEEP_TIME_MILLIS};
+use crate::proxy::{StreamCloseType, StreamStreamShare};
 use any_base::io::async_read_msg::AsyncReadMsgExt;
 use any_base::typ::{ArcRwLockTokio, ShareRw};
 use anyhow::anyhow;
@@ -32,7 +32,7 @@ pub async fn memory_handle_run(sss: ShareRw<StreamStreamShare>) -> Result<Stream
 pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus> {
     #[cfg(unix)]
     {
-        let sendfile = sss.get().sendfile.clone();
+        let sendfile = sss.get().ssc.sendfile.clone();
         sendfile.set_nil().await;
     }
     let (stream_info, read_buffer_size) = {
@@ -40,7 +40,7 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
         let stream_info = sss.stream_info.clone();
         let mut stream_info = stream_info.get_mut();
         stream_info.buffer_cache = Some(sss.ssc.cs.buffer_cache.clone());
-        stream_info.add_work_time(&format!("{} memory", get_flag(sss.is_client)));
+        stream_info.add_work_time(&format!("{} memory", get_flag(sss.ssc.is_client)));
 
         let buffer_pool = DynamicPool::new(1, 2, StreamCacheBuffer::default);
         sss.buffer_pool.set(buffer_pool);
@@ -52,26 +52,16 @@ pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus>
 
     let mut _is_first = true;
     loop {
-        if sss.get().read_err.is_none() {
-            let (ret, buffer) = read(sss.clone(), read_buffer_size).await?;
+        let buffer = read(sss.clone(), read_buffer_size).await?;
+        {
             let mut sss = sss.get_mut();
             if _is_first {
                 _is_first = false;
                 stream_info
                     .get_mut()
-                    .add_work_time(&format!("first read {}", get_flag(sss.is_client)));
+                    .add_work_time(&format!("first read {}", get_flag(sss.ssc.is_client)));
             }
             sss.read_buffer = Some(buffer);
-            sss.read_buffer_ret = Some(ret);
-        } else {
-            let mut sss = sss.get_mut();
-            if sss.read_buffer.is_some() {
-                if sss.read_buffer.as_ref().unwrap().read_size <= 0 {
-                    log::error!("err:buffer.read_size <= 0");
-                } else {
-                    sss.read_buffer_ret = Some(Ok(0));
-                }
-            }
         }
 
         loop {
@@ -105,10 +95,17 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
     }
     .await;
     if ret.is_err() {
-        let w = sss.get().w.clone();
+        let (w, ssc) = {
+            let sss = sss.get();
+            (sss.w.clone(), sss.ssc.clone())
+        };
         let mut w = w.get_mut().await;
         let _ = w.flush().await;
-        //let _ = w.shutdown().await;
+        if let &StreamCloseType::Shutdown = &ssc.close_type {
+            let _ = w.shutdown().await;
+            ssc.worker_inner.done();
+            let _ = ssc.wait_group.wait().await;
+        }
         ret?;
     }
     Ok(())
@@ -117,7 +114,7 @@ pub async fn check_stream_close(sss: ShareRw<StreamStreamShare>) -> Result<()> {
 pub async fn read(
     sss: ShareRw<StreamStreamShare>,
     read_buffer_size: usize,
-) -> Result<(std::io::Result<usize>, DynamicPoolItem<StreamCacheBuffer>)> {
+) -> Result<DynamicPoolItem<StreamCacheBuffer>> {
     let (mut buffer, r) = {
         let sss = sss.get_mut();
         (sss.buffer_pool.get().take(), sss.r.clone())
@@ -141,5 +138,20 @@ pub async fn read(
     }
     .await;
 
-    Ok((ret, buffer))
+    let mut sss = sss.get_mut();
+    if let Err(ref e) = ret {
+        //log::trace!("{}, read_err = Some(ret)", get_flag(sss.ssc.is_client));
+        if e.kind() != std::io::ErrorKind::ConnectionReset {
+            return Err(anyhow!("err:{}", e))?;
+        }
+        sss.read_err = Some(Err(anyhow!(
+            "err:stream read => flag:{}, e:{}",
+            get_flag(sss.ssc.is_client),
+            e
+        )));
+    } else {
+        let size = ret.unwrap() as u64;
+        buffer.read_size += size;
+    }
+    Ok(buffer)
 }

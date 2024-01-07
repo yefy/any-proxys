@@ -168,6 +168,7 @@ impl Client {
             channel_size,
             None,
             run_time,
+            false,
         )
         .await
         .map_err(|e| anyhow!("err:create_client => e:{}", e))?;

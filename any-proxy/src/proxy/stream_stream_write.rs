@@ -63,7 +63,7 @@ pub async fn handle_run(
 
             sss.write_err = Some(Err(anyhow!(
                 "err:stream_write => flag:{}, e:{}",
-                get_flag(sss.is_client),
+                get_flag(sss.ssc.is_client),
                 e
             )));
             StreamStatus::Full
@@ -117,13 +117,13 @@ pub async fn do_handle_run(
     if limit_rate_size < n {
         n = limit_rate_size;
     }
-    //log::trace!("{}, n:{}", get_flag(sss.get().is_client), n);
+    //log::trace!("{}, n:{}", get_flag(sss.get().ssc.is_client), n);
 
     let mut w = w.get_mut().await;
     let wn = loop {
         #[cfg(unix)]
         if buffer.file_fd > 0 {
-            let sendfile = sss.get().sendfile.clone();
+            let sendfile = sss.get().ssc.sendfile.clone();
             let sendfile = sendfile.get().await;
             if sendfile.is_some() {
                 _is_sendfile = true;
@@ -181,12 +181,11 @@ pub async fn do_handle_run(
     let mut ssd = ssd.get_mut();
     if sss.is_first_write {
         sss.is_first_write = false;
-        stream_info.add_work_time(&format!("first write {}", get_flag(sss.is_client)));
+        stream_info.add_work_time(&format!("first write {}", get_flag(sss.ssc.is_client)));
     }
 
     ssd.total_write_size += wn;
-    stream_info.total_write_size += wn;
-    //log::trace!("{}, wn:{}", get_flag(sss.is_client), wn);
+    //log::trace!("{}, wn:{}", get_flag(sss.ssc.is_client), wn);
     if cs.max_limit_rate <= 0 {
         //
     } else if ssd.limit_rate_after > 0 {

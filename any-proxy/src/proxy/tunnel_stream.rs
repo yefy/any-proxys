@@ -61,7 +61,7 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel_publish.push_peer_stream_tokio(
+                        ret = tunnel_publish.push_peer_stream_buf_stream(
                            client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
@@ -115,7 +115,7 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel2_publish.push_peer_stream_tokio(
+                        ret = tunnel2_publish.push_peer_stream_buf_stream(
                             client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,

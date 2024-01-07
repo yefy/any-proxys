@@ -1,5 +1,8 @@
 # anyproxy
-rust编写高性能、高度模块化和插件化的四层和七层代理服务，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、websockets、ebpf等
+rust编写高性能、高度模块化、插件化的负载平衡器、四层和七层反向代理服务，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、websockets、内核态ebpf等
+
+# doc
+[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)
 
 # any-tunnel
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
@@ -8,17 +11,17 @@ rust编写高性能、高度模块化和插件化的四层和七层代理服务�
 tokio异步io框架  
 linux reuseport多线程无锁并发  
 多线程有锁并发  
-类似nginx高度模块化和插件化框架，能快速添加server监听和client回源（包括tcp、quic、ssl、srt、http、websocket等）   
+类似nginx高度模块化和插件化框架，能快速添加新协议监听和回源（包括tcp、quic、ssl、srt、http、websocket等）   
 支持动态添加模块，配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承、配置内容合并和继承(代码参考any-proxys/any-proxy/src/config)        
 可以快速基于tcp、quic、ssl、http、websocket添加插件解析私有协议  
-高性能  
-内存安全  
-tcp、quic、ssl、any-tunnel四层代理协议互转  
+支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
+高性能，cpu占用低    
+内存安全，内存占用低    
+支持tcp、quic、ssl、any-tunnel四层代理协议相互转换    
 配置文件热加载  
 linux reuseport环境支持程序热升级    
-支持any-tunnel在高延迟网络加速  
+支持any-tunnel在高延迟网络加速，socket流缓存    
 支持access_log  
-支持ebpf内核态四层代理    
 纯端口代理模式  
 域名代理模式  
 各种信息统计  
@@ -29,17 +32,12 @@ linux reuseport环境支持程序热升级
 # 已经支持
 any-tunnel server over (tcp、ssl、 quic)  
 any-tunnel client over (tcp、ssl、 quic)
-
 anyproxy server over (tcp、ssl、 quic、any-tunnel)  
 anyproxy client over (tcp、ssl、 quic、any-tunnel)
-
 anyproxy http server over (tcp、ssl、 quic、any-tunnel)  
 anyproxy http client over (tcp、ssl、 quic、any-tunnel)
-
 anyproxy websocket server over (tcp、ssl、 quic、any-tunnel)  
 anyproxy websocket client over (tcp、ssl、 quic、any-tunnel)
-
-
 纯端口代理模式  
 域名代理模式  
 tcp代理  
@@ -51,10 +49,10 @@ http2.0代理
 https2.0代理  
 websocket代理  
 websockets代理  
-支持ebpf内核态四层代理    
+支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能     
 any-tunnel代理加速  
 proxy_protocol_hello协议头   
-tcp, ssl, quic, any-tunnel四层代理协议互转  
+支持tcp、quic、ssl、any-tunnel四层代理协议相互转换   
 access_log和变量，包括各种信息统计    
 reload配置文件热加载
 reinit重新创建线程、配置文件热加载、超时断流    
@@ -69,7 +67,6 @@ upstream 配置多主机回源并支持负载均衡
 负载均衡算法--加权轮询,轮询,随机,固定hash, 动态hash,fair加载时间长短智能的进行负载均衡   
 支持心跳检查  
 支持动态域名解析  
-支持ebpf代理和导流  
 linux零拷贝技术sendfile  
 cpu绑定  
 linux reuseport  
@@ -95,6 +92,3 @@ sni域名解析
 srt协议  
 支持多跳回源  
 http cache文件缓存
-
-# doc
-[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)  

@@ -1,0 +1,2 @@
+#最简单domain代理配置
+any-proxys/any-proxy/examples/anyproxy/examples/conf/more_conf/anyproxy_simple_domain.conf

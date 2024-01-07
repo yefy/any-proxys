@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 type VarFunc = fn(stream_info: &StreamInfo) -> Option<VarAnyData>;
 
 lazy_static! {
-    pub static ref TIMEOUT_EXIT: ArcString = "timeout exit".into();
+    pub static ref TIMEOUT_EXIT: ArcString = "timeout_exit".into();
     pub static ref PROXY_PROTOCOL_HELLO: ArcString = "proxy_protocol_hello".into();
     pub static ref EBPF: ArcString = "ebpf".into();
     pub static ref VAR_MAP: HashMap<&'static str, VarFunc> = {
@@ -56,15 +56,12 @@ lazy_static! {
         map.insert("upstream_max_stream_size", upstream_max_stream_size);
         map.insert("write_max_block_time_ms", write_max_block_time_ms);
         map.insert("is_timeout_exit", is_timeout_exit);
-
         map.insert(
             "upstream_min_stream_cache_size",
             upstream_min_stream_cache_size,
         );
-
-        map.insert("total_read_size", total_read_size);
-
-        map.insert("total_write_size", total_write_size);
+        map.insert("upstream_protocol_hello_size", upstream_protocol_hello_size);
+        map.insert("client_protocol_hello_size", client_protocol_hello_size);
         map
     };
 }
@@ -115,11 +112,20 @@ pub fn local_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
             stream_info.server_stream_info.protocol7.to_string(),
         ))
     } else {
-        Some(VarAnyData::Str(format!(
-            "{}_{}",
-            stream_info.client_protocol77.as_ref().unwrap().to_string(),
-            stream_info.server_stream_info.protocol7.to_string()
-        )))
+        if stream_info.client_protocol7.is_some() {
+            Some(VarAnyData::Str(format!(
+                "{}_{}_{}",
+                stream_info.client_protocol77.as_ref().unwrap().to_string(),
+                stream_info.client_protocol7.as_ref().unwrap().to_string(),
+                stream_info.server_stream_info.protocol7.to_string()
+            )))
+        } else {
+            Some(VarAnyData::Str(format!(
+                "{}_{}",
+                stream_info.client_protocol77.as_ref().unwrap().to_string(),
+                stream_info.server_stream_info.protocol7.to_string()
+            )))
+        }
     }
 }
 
@@ -457,10 +463,10 @@ pub fn is_timeout_exit(stream_info: &StreamInfo) -> Option<VarAnyData> {
     return Some(VarAnyData::ArcString(TIMEOUT_EXIT.clone()));
 }
 
-pub fn total_read_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    return Some(VarAnyData::U64(stream_info.total_read_size));
+pub fn upstream_protocol_hello_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    return Some(VarAnyData::Usize(stream_info.upstream_protocol_hello_size));
 }
 
-pub fn total_write_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    return Some(VarAnyData::U64(stream_info.total_write_size));
+pub fn client_protocol_hello_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    return Some(VarAnyData::Usize(stream_info.client_protocol_hello_size));
 }

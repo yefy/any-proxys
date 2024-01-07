@@ -124,6 +124,9 @@ impl AccessLog {
 
         for (index, access) in http_access_log_conf.access.iter().enumerate() {
             if access.access_log {
+                if access.is_err_access_log && !stream_info.is_err {
+                    continue;
+                }
                 let access_context = &http_access_log_conf.access_context[index];
                 let mut access_format_var = Var::copy(&access_context.access_format_vars)
                     .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;

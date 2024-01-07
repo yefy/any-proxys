@@ -29,6 +29,7 @@ logs
 *.log
 *.signal
 *.exe
+*.d
 *.o
 ab
 ab.exe

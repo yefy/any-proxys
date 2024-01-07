@@ -171,7 +171,7 @@ impl WebsocketServer {
         if hello.is_some() {
             let hello_str = toml::to_string(&*hello.unwrap())?;
             let hello_str = general_purpose::STANDARD.encode(hello_str);
-            self.arg.stream_info.get_mut().protocol_hello_size = hello_str.len();
+            self.arg.stream_info.get_mut().upstream_protocol_hello_size = hello_str.len();
             let key = HeaderName::from_bytes(WEBSOCKET_HELLO_KEY.as_bytes())?;
             let value = HeaderValue::from_bytes(hello_str.as_bytes())?;
             ups_request.headers_mut().insert(key, value);

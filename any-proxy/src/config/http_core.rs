@@ -1,7 +1,7 @@
 use crate::config as conf;
 use crate::config::http_core_plugin::PluginHandleStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
-use crate::proxy::StreamCacheBuffer;
+use crate::proxy::{StreamCacheBuffer, StreamCloseType};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny};
@@ -140,14 +140,25 @@ pub struct Conf {
     pub upload: Arc<ConfStream>,
     pub read_buffer_page_size: usize,
     pub is_port_direct_ebpf: bool,
+    pub client_timeout_mil_time_ebpf: u64,
+    pub upstream_timeout_mil_time_ebpf: u64,
+    pub close_type: StreamCloseType,
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
-const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_1";
-const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_1";
+const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_default";
+const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_default";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
 const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 2;
 const OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT: u64 = 100;
+const CLIENT_TIMEOUT_MIL_TIME_EBPF_DEFAULT: u64 = 120000;
+const UPSTREAM_TIMEOUT_MIL_TIME_EBPF_DEFAULT: u64 = 2000;
+const CLOSE_TYPE_DEFAULT: StreamCloseType = StreamCloseType::Shutdown;
+const CLOSE_TYPE_FAST: &str = "fast";
+const CLOSE_TYPE_SHUTDOWM: &str = "shutdown";
+const CLOSE_TYPE_WAIT_EMPTY: &str = "wait_empty";
+const CLOSE_TYPE_ALL: &str = "fast shutdown wait_empty";
+
 impl Conf {
     pub fn new() -> Self {
         Conf {
@@ -180,6 +191,9 @@ impl Conf {
             upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
             read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
             is_port_direct_ebpf: true,
+            client_timeout_mil_time_ebpf: CLIENT_TIMEOUT_MIL_TIME_EBPF_DEFAULT,
+            upstream_timeout_mil_time_ebpf: UPSTREAM_TIMEOUT_MIL_TIME_EBPF_DEFAULT,
+            close_type: CLOSE_TYPE_DEFAULT,
         }
     }
 }
@@ -416,6 +430,34 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
+        module::Cmd {
+            name: "client_timeout_mil_time_ebpf".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(client_timeout_mil_time_ebpf(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "upstream_timeout_mil_time_ebpf".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(upstream_timeout_mil_time_ebpf(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "close_type".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(close_type(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
     ]);
 }
 
@@ -589,6 +631,20 @@ async fn merge_conf(
 
         if child_conf.is_port_direct_ebpf == true {
             child_conf.is_port_direct_ebpf = parent_conf.is_port_direct_ebpf.clone();
+        }
+
+        if child_conf.client_timeout_mil_time_ebpf == CLIENT_TIMEOUT_MIL_TIME_EBPF_DEFAULT {
+            child_conf.client_timeout_mil_time_ebpf =
+                parent_conf.client_timeout_mil_time_ebpf.clone();
+        }
+
+        if child_conf.upstream_timeout_mil_time_ebpf == UPSTREAM_TIMEOUT_MIL_TIME_EBPF_DEFAULT {
+            child_conf.upstream_timeout_mil_time_ebpf =
+                parent_conf.upstream_timeout_mil_time_ebpf.clone();
+        }
+
+        if child_conf.close_type == CLOSE_TYPE_DEFAULT {
+            child_conf.close_type = parent_conf.close_type.clone();
         }
 
         child_conf.download = Arc::new(ConfStream::new(
@@ -1048,5 +1104,68 @@ async fn is_port_direct_ebpf(
     c.is_port_direct_ebpf = conf_arg.value.get::<bool>().clone();
 
     log::trace!("c.is_port_direct_ebpf:{:?}", c.is_port_direct_ebpf);
+    return Ok(());
+}
+
+async fn client_timeout_mil_time_ebpf(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.client_timeout_mil_time_ebpf = conf_arg.value.get::<u64>().clone();
+
+    log::trace!(
+        "c.client_timeout_mil_time_ebpf:{:?}",
+        c.client_timeout_mil_time_ebpf
+    );
+    return Ok(());
+}
+
+async fn upstream_timeout_mil_time_ebpf(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.upstream_timeout_mil_time_ebpf = conf_arg.value.get::<u64>().clone();
+
+    log::trace!(
+        "c.upstream_timeout_mil_time_ebpf:{:?}",
+        c.upstream_timeout_mil_time_ebpf
+    );
+    return Ok(());
+}
+
+async fn close_type(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let close_type = conf_arg.value.get::<String>().clone();
+    match close_type.as_str() {
+        CLOSE_TYPE_FAST => {
+            c.close_type = StreamCloseType::Fast;
+        }
+        CLOSE_TYPE_SHUTDOWM => {
+            c.close_type = StreamCloseType::Shutdown;
+        }
+        CLOSE_TYPE_WAIT_EMPTY => {
+            c.close_type = StreamCloseType::WaitEmpty;
+        }
+        _ => {
+            return Err(anyhow::anyhow!(
+                "err:close_type {} not find, please use:{}",
+                close_type,
+                CLOSE_TYPE_ALL
+            ));
+        }
+    }
+
+    log::trace!("c.close_type:{:?}", c.close_type);
     return Ok(());
 }

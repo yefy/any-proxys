@@ -49,10 +49,22 @@ impl Publish {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
+        let buf_stream = any_base::io::buf_stream::BufStream::new(rw);
+        self.push_peer_stream_buf_stream(buf_stream, local_addr, remote_addr)
+            .await
+    }
+
+    pub async fn push_peer_stream_buf_stream<RW: StreamReadWriteTokio + 'static>(
+        &self,
+        rw: RW,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> Result<()> {
         use any_base::stream::Stream;
         let rw = Stream::new(rw);
         self.push_peer_stream(rw, local_addr, remote_addr).await
     }
+
     pub async fn push_peer_stream<RW: StreamReadWriteFlow + 'static>(
         &self,
         rw: RW,

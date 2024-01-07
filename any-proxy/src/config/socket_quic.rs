@@ -1,6 +1,7 @@
 use crate::config as conf;
 use crate::config::config_toml;
 use crate::config::config_toml::default_quic_config;
+use crate::config::config_toml::default_quic_config_name;
 use crate::config::config_toml::QuicConfig;
 use crate::quic::endpoints;
 use any_base::module::module;
@@ -185,8 +186,10 @@ async fn quic(
     log::trace!("socket_quic quic_confs:{:?}", quic_confs);
 
     for quic_conf in &quic_confs.confs {
-        if conf.quic_confs.get(&quic_conf.quic_config_name).is_some() {
-            return Err(anyhow!("err:{:?}", quic_conf.quic_config_name));
+        if quic_conf.quic_config_name != default_quic_config_name() {
+            if conf.quic_confs.get(&quic_conf.quic_config_name).is_some() {
+                return Err(anyhow!("err:{:?}", quic_conf.quic_config_name));
+            }
         }
         conf.quic_confs.insert(
             quic_conf.quic_config_name.clone(),

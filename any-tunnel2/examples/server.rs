@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let publish = publish.clone();
         tokio::spawn(async move {
             if let Err(e) = publish
-                .push_peer_stream(stream, local_addr, remote_addr)
+                .push_peer_stream_tokio(stream, local_addr, remote_addr)
                 .await
             {
                 log::info!("err: server stream => e:{}", e);

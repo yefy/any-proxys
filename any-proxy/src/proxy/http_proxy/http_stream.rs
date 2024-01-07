@@ -1,9 +1,9 @@
-use crate::proxy::proxy;
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::stream_start;
 use crate::proxy::stream_stream::StreamStream;
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
+use crate::proxy::{proxy, StreamCloseType};
 use any_base::stream_flow::StreamFlow;
 #[cfg(unix)]
 use any_base::typ::ArcMutexTokio;
@@ -103,8 +103,8 @@ impl proxy::Stream for HttpStream {
                 client_sendfile,
                 #[cfg(unix)]
                 upstream_sendfile,
-                false,
-                true,
+                StreamCloseType::Shutdown,
+                StreamCloseType::Fast,
             )
             .await
             .map_err(|e| {

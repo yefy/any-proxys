@@ -5,11 +5,11 @@ use super::stream_info::StreamInfo;
 use super::stream_start;
 use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
-use crate::protopack;
 use crate::proxy::domain_context::DomainContext;
 use crate::proxy::util as proxy_util;
 use crate::proxy::ServerArg;
 use crate::stream::server::ServerStreamInfo;
+use crate::{protopack, Protocol7};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::module::module::Modules;
 use any_base::stream_flow::StreamFlow;
@@ -129,6 +129,7 @@ impl proxy::Stream for DomainStream {
         let client_buf_reader_domain = client_buf_reader.clone();
         let server_stream_info = self.server_stream_info.clone();
 
+        let stream_info_ = stream_info.clone();
         let scc = proxy_util::parse_proxy_domain(
             &arg,
             move || async move {
@@ -145,7 +146,10 @@ impl proxy::Stream for DomainStream {
                 .await
                 .map_err(|e| anyhow!("err:ssl_hello::read_domain => e:{}", e))?;
                 let domain = match domain {
-                    Some(domain) => ArcString::new(domain),
+                    Some(domain) => {
+                        stream_info_.get_mut().client_protocol7 = Some(Protocol7::Ssl);
+                        ArcString::new(domain)
+                    }
                     None => {
                         if server_stream_info.domain.is_none() {
                             return Err(anyhow!("err:domain null"));

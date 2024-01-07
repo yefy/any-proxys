@@ -9,3 +9,6 @@ pub request_id: String
 pub client_addr: SocketAddr  
 当前的域名，有这个值就不用在取解析sni了  
 pub domain: String, 
+
+#注意
+is_proxy_protocol_hello只能在内部使用，外部服务无法解析会导致数据异常

@@ -2,8 +2,8 @@ use any_base::util::ArcString;
 use serde::{Deserialize, Serialize};
 use std::str;
 
-fn default_quic_config_name() -> String {
-    "quic_config_1".to_string()
+pub fn default_quic_config_name() -> String {
+    "quic_config_default".to_string()
 }
 fn default_quic_default() -> bool {
     true
@@ -83,8 +83,8 @@ pub struct QuicConfig {
     pub quic_connect_timeout: usize,
 }
 
-fn default_tcp_config_name() -> String {
-    "tcp_config_1".to_string()
+pub fn default_tcp_config_name() -> String {
+    "tcp_config_default".to_string()
 }
 fn default_tcp_send_buffer() -> usize {
     0
@@ -430,11 +430,14 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${total_read_size} ${total_write_size} ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} [${stream_work_times}]".to_string()
+    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} ${client_protocol_hello_size} ${upstream_protocol_hello_size} [${stream_work_times}]".to_string()
 }
 
 fn default_access_log_stdout() -> bool {
     false
+}
+fn default_is_err_access_log() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -448,6 +451,8 @@ pub struct AccessConfig {
     pub access_format: String,
     #[serde(default = "default_access_log_stdout")]
     pub access_log_stdout: bool,
+    #[serde(default = "default_is_err_access_log")]
+    pub is_err_access_log: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,6 +775,7 @@ pub fn default_access() -> Vec<AccessConfig> {
         access_log_file: default_access_log_file(),
         access_format: default_access_format(),
         access_log_stdout: default_access_log_stdout(),
+        is_err_access_log: default_is_err_access_log(),
     }]
 }
 

@@ -84,6 +84,18 @@ impl Publish {
         remote_addr: SocketAddr,
         domain: Option<ArcString>,
     ) -> Result<()> {
+        let buf_stream = any_base::io::buf_stream::BufStream::new(rw);
+        self.push_peer_stream_buf_stream(buf_stream, local_addr, remote_addr, domain)
+            .await
+    }
+
+    pub async fn push_peer_stream_buf_stream<RW: StreamReadWriteTokio + 'static>(
+        &self,
+        rw: RW,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+        domain: Option<ArcString>,
+    ) -> Result<()> {
         use any_base::stream::Stream;
         let rw = Stream::new(rw);
         self.push_peer_stream(rw, local_addr, remote_addr, domain)
@@ -220,6 +232,7 @@ impl Server {
                             tunnel_hello.min_stream_cache_size,
                             Some(session_id),
                             Some(tunnel_hello.client_peer_stream_index),
+                            tunnel_hello.is_ack,
                         )
                         .await
                         .map_err(|e| anyhow!("er:hello_to_peer_stream => e:{}", e));
@@ -264,6 +277,7 @@ impl Server {
                         tunnel_hello.channel_size,
                         Some(tunnel_hello.client_peer_stream_index),
                         run_time.clone(),
+                        tunnel_hello.is_ack,
                     )
                     .await
                     .map_err(|e| anyhow!("er:create_stream_and_peer_client => e:{}", e));

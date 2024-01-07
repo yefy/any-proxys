@@ -1,6 +1,7 @@
 use crate::config as conf;
 use crate::config::config_toml;
 use crate::config::config_toml::default_tcp_config;
+use crate::config::config_toml::default_tcp_config_name;
 use crate::config::config_toml::TcpConfig;
 use any_base::module::module;
 use any_base::typ;
@@ -174,8 +175,10 @@ async fn tcp(
     log::trace!("socket_tcp tcp_confs:{:?}", tcp_confs);
 
     for tcp_conf in tcp_confs.confs {
-        if conf.tcp_confs.get(&tcp_conf.tcp_config_name).is_some() {
-            return Err(anyhow!("err:{:?}", tcp_conf.tcp_config_name));
+        if tcp_conf.tcp_config_name != default_tcp_config_name() {
+            if conf.tcp_confs.get(&tcp_conf.tcp_config_name).is_some() {
+                return Err(anyhow!("err:{:?}", tcp_conf.tcp_config_name));
+            }
         }
         conf.tcp_confs
             .insert(tcp_conf.tcp_config_name.clone(), Arc::new(tcp_conf));

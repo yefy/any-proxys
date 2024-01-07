@@ -167,7 +167,7 @@ impl StreamCacheBuffer {
         if self.msg.is_some() {
             return self.msg.take().unwrap().to_vec();
         }
-        if start == 0 && end == self.size as usize {
+        if start == 0 && end == self.read_size as usize {
             let mut data = Vec::with_capacity(end);
             swap(&mut self.data, &mut data);
             unsafe { data.set_len(end) };
@@ -232,7 +232,6 @@ pub struct StreamStreamData {
     pub total_write_size: u64,
 }
 
-#[derive(Clone)]
 pub struct StreamStreamContext {
     pub cs: Arc<ConfStream>,
     pub curr_limit_rate: Arc<AtomicI64>,
@@ -241,6 +240,17 @@ pub struct StreamStreamContext {
     pub delay_wait_stop: FutureWait,
     pub delay_ok: Arc<AtomicBool>,
     pub is_delay: Arc<AtomicBool>,
+    #[cfg(unix)]
+    pub sendfile: ArcMutexTokio<SendFile>,
+    pub is_client: bool,
+    pub close_type: StreamCloseType,
+    pub wait_group: awaitgroup::WaitGroup,
+    pub worker_inner: awaitgroup::WorkerInner,
+
+    pub read_wait: FutureWait,
+    pub other_read_wait: FutureWait,
+    pub close_wait: FutureWait,
+    pub other_close_wait: FutureWait,
 }
 
 const LIMIT_SLEEP_TIME_MILLIS: u64 = 500;
@@ -256,20 +266,22 @@ pub fn get_flag(is_client: bool) -> &'static str {
     }
 }
 
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum StreamCloseType {
+    Fast,
+    Shutdown,
+    WaitEmpty,
+}
+
 pub struct StreamStreamShare {
-    ssc: StreamStreamContext,
+    ssc: Arc<StreamStreamContext>,
     _scc: ShareRw<StreamConfigContext>,
     stream_info: Share<StreamInfo>,
     r: ArcMutexTokio<StreamFlowRead>,
     w: ArcMutexTokio<StreamFlowWrite>,
-    #[cfg(unix)]
-    sendfile: ArcMutexTokio<SendFile>,
-    is_client: bool,
-    is_fast_close: bool,
     write_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
     write_err: Option<Result<()>>,
     read_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
-    read_buffer_ret: Option<std::io::Result<usize>>,
     read_err: Option<Result<()>>,
     caches: LinkedList<StreamCache>,
     buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
@@ -296,9 +308,7 @@ impl StreamStreamShare {
 
     pub fn is_read_empty(&self) -> bool {
         if self.read_buffer.is_none()
-            || (self.read_buffer.is_some()
-                && self.read_buffer.as_ref().unwrap().read_size == 0
-                && self.read_buffer_ret.is_none())
+            || (self.read_buffer.is_some() && self.read_buffer.as_ref().unwrap().read_size == 0)
         {
             return true;
         }
@@ -322,7 +332,7 @@ impl StreamStreamShare {
     ) -> bool {
         #[cfg(unix)]
         {
-            let sendfile = _sss.get().sendfile.clone();
+            let sendfile = _sss.get().ssc.sendfile.clone();
             let is_sendfile_some = sendfile.get().await.is_some();
             let _sss = _sss.get();
             let is_stream_full = if let &StreamStatus::Full = _stream_status {

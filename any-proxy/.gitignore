@@ -34,6 +34,7 @@ logs
 *.log
 *.signal
 *.exe
+*.d
 *.o
 vmlinux.h
 any-proxy/examples/anyproxy/examples/anyproxy.exe

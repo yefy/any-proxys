@@ -2,7 +2,6 @@ use super::StreamCache;
 use super::StreamCacheBuffer;
 use super::StreamCacheFile;
 use crate::config::http_core_plugin::PluginHandleStream;
-use crate::proxy::get_flag;
 use crate::proxy::{StreamStatus, StreamStreamShare};
 use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny, ShareRw};
 use any_base::util::StreamMsg;
@@ -121,181 +120,148 @@ pub async fn handle_run(
         .map_err(|e| anyhow!("err:write => e:{}", e))
 }
 pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny) -> Result<()> {
-    let (cs, ssd, stream_info) = {
+    let (cs, ssd) = {
         let sss = sss.get();
-        if sss.read_buffer_ret.is_none() {
+        if sss.read_buffer.is_none() {
             return Ok(());
         }
-        (
-            sss.ssc.cs.clone(),
-            sss.ssc.ssd.clone(),
-            sss.stream_info.clone(),
-        )
+        (sss.ssc.cs.clone(), sss.ssc.ssd.clone())
     };
     let (mut buffer, size) = {
         let mut sss = sss.get_mut();
         let mut ssd = ssd.get_mut();
-        let mut stream_info = stream_info.get_mut();
         let plugin = plugin.get_mut::<StreamStreamTmpFile>();
-        let read_buffer_ret = sss.read_buffer_ret.take().unwrap();
+
+        if sss.read_buffer.as_ref().unwrap().read_size == 0 {
+            return Ok(());
+        }
         let mut buffer = sss.read_buffer.take().unwrap();
-        let is_left = if let Err(ref e) = read_buffer_ret {
-            //log::trace!("{}, read_err = Some(ret)", get_flag(sss.is_client));
-            if e.kind() != std::io::ErrorKind::ConnectionReset {
-                return Err(anyhow!("err:{}", e))?;
-            }
-            sss.read_err = Some(Err(anyhow!(
-                "err:stream read => flag:{}, e:{}",
-                get_flag(sss.is_client),
-                e
-            )));
-            false
-        } else {
-            let size = read_buffer_ret? as u64;
-            ssd.total_read_size += size;
-            stream_info.total_read_size += size;
-            buffer.read_size += size;
+        let mut size = buffer.read_size;
 
-            // log::trace!(
-            //     "{}, read size:{}, buffer.read_size:{}",
-            //     get_flag(sss.is_client),
-            //     size,
-            //     buffer.read_size
-            // );
+        ssd.total_read_size += size;
 
-            let is_left = if buffer.is_cache {
-                if cs.max_stream_cache_size > 0 {
-                    ssd.stream_cache_size -= size as i64;
-                    if ssd.stream_cache_size > 0 {
-                        true
-                    } else {
-                        false
-                    }
+        let is_left = if buffer.is_cache {
+            if cs.max_stream_cache_size > 0 {
+                ssd.stream_cache_size -= size as i64;
+                if ssd.stream_cache_size > 0 {
+                    true
                 } else {
                     false
                 }
             } else {
-                if cs.max_tmp_file_size > 0 {
-                    ssd.tmp_file_size -= size as i64;
-                    if ssd.tmp_file_size > 0 {
-                        true
-                    } else {
-                        false
-                    }
+                false
+            }
+        } else {
+            if cs.max_tmp_file_size > 0 {
+                ssd.tmp_file_size -= size as i64;
+                if ssd.tmp_file_size > 0 {
+                    true
                 } else {
                     false
                 }
-            };
+            } else {
+                false
+            }
+        };
 
-            if is_left
-                && cs.is_open_stream_cache_merge
-                && sss.read_err.is_none()
-                && sss.is_stream_cache
-                && buffer.read_size < buffer.size
-                && !plugin.is_first_buffer
-            {
-                if buffer.read_size < cs.min_read_buffer_size as u64 {
+        if is_left
+            && cs.is_open_stream_cache_merge
+            && sss.read_err.is_none()
+            && sss.is_stream_cache
+            && buffer.read_size < buffer.size
+            && !plugin.is_first_buffer
+        {
+            if buffer.read_size < cs.min_read_buffer_size as u64 {
+                if !sss.ssc.delay_ok.load(Ordering::SeqCst) {
+                    if sss.is_write_empty() {
+                        sss.delay_start();
+                    }
+
+                    ssd.total_read_size -= size;
+                    if buffer.is_cache {
+                        ssd.stream_cache_size += size as i64;
+                    } else {
+                        ssd.tmp_file_size += size as i64;
+                    }
+                    sss.read_buffer = Some(buffer);
+                    return Ok(());
+                }
+            }
+        }
+
+        if buffer.is_cache {
+            sss.delay_stop();
+            if plugin.is_first_buffer {
+                plugin.is_first_buffer = false;
+            }
+            if sss.caches.len() > 0 || sss.write_buffer.is_some() {
+                sss.caches.push_back(StreamCache::Buffer(buffer));
+            } else {
+                sss.write_buffer = Some(buffer);
+            }
+            return Ok(());
+        }
+
+        if is_left
+            && cs.is_tmp_file_io_page
+            && sss.read_err.is_none()
+            && sss.is_stream_cache
+            && buffer.read_size < buffer.size
+            && !plugin.is_first_buffer
+        {
+            let fw_seek_end = plugin.fw_seek + size;
+            let fw_seek_left = fw_seek_end % cs.page_size as u64;
+            if fw_seek_left > 0 {
+                let fw_seek_end_next_page =
+                    (fw_seek_end / cs.page_size as u64 + 1) * cs.page_size as u64;
+                if fw_seek_end < fw_seek_end_next_page {
                     if !sss.ssc.delay_ok.load(Ordering::SeqCst) {
                         if sss.is_write_empty() {
                             sss.delay_start();
                         }
 
-                        ssd.total_read_size -= size;
-                        stream_info.total_read_size -= size;
-                        if buffer.is_cache {
-                            ssd.stream_cache_size += size as i64;
-                        } else {
-                            ssd.tmp_file_size += size as i64;
-                        }
                         sss.read_buffer = Some(buffer);
+                        ssd.total_read_size -= size;
+                        ssd.tmp_file_size += size as i64;
                         return Ok(());
                     }
-                }
-            }
-            is_left
-        };
-
-        if buffer.read_size == 0 {
-            return Ok(());
-        }
-
-        let mut size = buffer.read_size;
-        {
-            if buffer.is_cache {
-                sss.delay_stop();
-                if plugin.is_first_buffer {
-                    plugin.is_first_buffer = false;
-                }
-                if sss.caches.len() > 0 || sss.write_buffer.is_some() {
-                    sss.caches.push_back(StreamCache::Buffer(buffer));
                 } else {
-                    sss.write_buffer = Some(buffer);
-                }
-                return Ok(());
-            }
+                    let left_size = fw_seek_left;
 
-            if is_left
-                && cs.is_tmp_file_io_page
-                && sss.read_err.is_none()
-                && sss.is_stream_cache
-                && buffer.read_size < buffer.size
-                && !plugin.is_first_buffer
-            {
-                let fw_seek_end = plugin.fw_seek + size;
-                let fw_seek_left = fw_seek_end % cs.page_size as u64;
-                if fw_seek_left > 0 {
-                    let fw_seek_end_next_page =
-                        (fw_seek_end / cs.page_size as u64 + 1) * cs.page_size as u64;
-                    if fw_seek_end < fw_seek_end_next_page {
-                        if !sss.ssc.delay_ok.load(Ordering::SeqCst) {
-                            if sss.is_write_empty() {
-                                sss.delay_start();
-                            }
+                    buffer.read_size = size - left_size;
+                    let copy_start = buffer.read_size as usize;
+                    let copy_end = size as usize;
+                    size = buffer.read_size;
 
-                            sss.read_buffer = Some(buffer);
-                            ssd.total_read_size -= size;
-                            stream_info.total_read_size -= size;
-                            ssd.tmp_file_size += size as i64;
-                            return Ok(());
-                        }
+                    let mut write_buffer = sss.buffer_pool.get().take();
+                    write_buffer.is_cache = false;
+                    write_buffer.resize_ext(left_size as usize);
+                    if buffer.msg.is_some() {
+                        let mut msg = StreamMsg::new();
+                        let datas = buffer.data_or_msg(copy_start, copy_end).to_vec();
+                        msg.push(datas);
+                        write_buffer.push_msg(msg);
                     } else {
-                        let left_size = fw_seek_left;
-
-                        buffer.read_size = size - left_size;
-                        let copy_start = buffer.read_size as usize;
-                        let copy_end = size as usize;
-                        size = buffer.read_size;
-
-                        let mut write_buffer = sss.buffer_pool.get().take();
-                        write_buffer.is_cache = false;
-                        write_buffer.resize_ext(left_size as usize);
-                        if buffer.msg.is_some() {
-                            let mut msg = StreamMsg::new();
-                            let datas = buffer.data_or_msg(copy_start, copy_end).to_vec();
-                            msg.push(datas);
-                            write_buffer.push_msg(msg);
-                        } else {
-                            write_buffer.set_len(0);
-                            write_buffer
-                                .data_raw()
-                                .extend_from_slice(buffer.data_or_msg(copy_start, copy_end));
-                            write_buffer.resize_curr_size();
-                        }
-                        write_buffer.read_size = left_size;
-                        sss.read_buffer = Some(write_buffer);
-
-                        ssd.total_read_size -= left_size;
-                        stream_info.total_read_size -= left_size;
-                        ssd.tmp_file_size += left_size as i64;
+                        write_buffer.set_len(0);
+                        write_buffer
+                            .data_raw()
+                            .extend_from_slice(buffer.data_or_msg(copy_start, copy_end));
+                        write_buffer.resize_curr_size();
                     }
-                }
-            }
+                    write_buffer.read_size = left_size;
+                    sss.read_buffer = Some(write_buffer);
 
-            sss.delay_stop();
-            if plugin.is_first_buffer {
-                plugin.is_first_buffer = false;
+                    ssd.total_read_size -= left_size;
+                    ssd.tmp_file_size += left_size as i64;
+                }
             }
         }
+
+        sss.delay_stop();
+        if plugin.is_first_buffer {
+            plugin.is_first_buffer = false;
+        }
+
         (buffer, size)
     };
 
@@ -324,7 +290,7 @@ pub async fn write_buffer(sss: ShareRw<StreamStreamShare>, plugin: ArcUnsafeAny)
     #[cfg(unix)]
     let mut is_sendfile = false;
     #[cfg(unix)]
-    let sendfile = sss.get().sendfile.clone();
+    let sendfile = sss.get().ssc.sendfile.clone();
     #[cfg(unix)]
     if sendfile.get().await.is_some() {
         is_sendfile = true;
@@ -420,7 +386,7 @@ pub async fn read_buffer(
         return Ok(StreamStatus::Full);
     }
 
-    //log::trace!("{}, caches", get_flag(sss.get().is_client));
+    //log::trace!("{}, caches", get_flag(sss.get().ssc.is_client));
     let cache = sss.get_mut().caches.pop_front();
     if cache.is_none() {
         return Ok(StreamStatus::DataEmpty);
@@ -442,7 +408,7 @@ pub async fn read_buffer(
 
             let ret = loop {
                 #[cfg(unix)]
-                let sendfile = sss.get().sendfile.clone();
+                let sendfile = sss.get().ssc.sendfile.clone();
                 #[cfg(unix)]
                 if sendfile.get().await.is_some() && buffer.file_fd > 0 {
                     break Ok(buffer);

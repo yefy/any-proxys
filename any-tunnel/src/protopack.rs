@@ -29,14 +29,16 @@ pub struct TunnelHeader {
 #[derive(Clone, Debug, PartialEq, num_derive::FromPrimitive)]
 pub enum TunnelHeaderType {
     TunnelHello = 0,
-    TunnelData = 1,
-    TunnelAddConnect = 2,
-    TunnelMaxConnect = 3,
-    TunnelClose = 4,
+    TunnelHelloAck = 1,
+    TunnelData = 2,
+    TunnelAddConnect = 3,
+    TunnelMaxConnect = 4,
+    TunnelClose = 5,
 }
 
 pub enum TunnelPack {
     TunnelHello(TunnelHello),
+    TunnelHelloAck(TunnelHelloAck),
     TunnelData(DynamicTunnelData),
     TunnelAddConnect(TunnelAddConnect),
     TunnelMaxConnect(TunnelMaxConnect),
@@ -50,7 +52,11 @@ pub struct TunnelHello {
     pub min_stream_cache_size: usize,
     pub channel_size: usize,
     pub client_peer_stream_index: usize,
+    pub is_ack: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelHelloAck {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TunnelDataHeader {
@@ -148,6 +154,30 @@ pub async fn read_tunnel_hello<R: AsyncRead + std::marker::Unpin>(
             return Ok(tunnel_hello);
         }
         _ => return Err(anyhow!("err:not tunnel_hello")),
+    }
+}
+
+pub async fn read_tunnel_hello_ack<R: AsyncRead + std::marker::Unpin>(
+    buf_reader: &mut R,
+) -> Result<TunnelHelloAck> {
+    let mut slice = [0u8; TUNNEL_MAX_HEADER_SIZE];
+    let pack = read_pack(
+        buf_reader,
+        &mut slice,
+        Some(TunnelHeaderType::TunnelHelloAck),
+        None,
+    )
+    .await
+    .map_err(|e| anyhow!("err:read_pack => e:{}", e))?;
+    if pack.is_none() {
+        return Err(anyhow!("err:not tunnel_hello_ack"));
+    }
+    let pack = pack.unwrap();
+    match pack {
+        TunnelPack::TunnelHelloAck(tunnel_hello_ack) => {
+            return Ok(tunnel_hello_ack);
+        }
+        _ => return Err(anyhow!("err:not tunnel_hello_ack")),
     }
 }
 
@@ -283,6 +313,11 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
             let value: TunnelHello =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:TunnelHello=> e:{}", e))?;
             Ok(Some(TunnelPack::TunnelHello(value)))
+        }
+        TunnelHeaderType::TunnelHelloAck => {
+            let value: TunnelHelloAck = toml::from_slice(body_slice)
+                .map_err(|e| anyhow!("err:TunnelHelloAck=> e:{}", e))?;
+            Ok(Some(TunnelPack::TunnelHelloAck(value)))
         }
         TunnelHeaderType::TunnelData => {
             let mut tunnel_data = buffer_pool.unwrap().tunnel_data.take();

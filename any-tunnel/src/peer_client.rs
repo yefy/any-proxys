@@ -49,20 +49,16 @@ impl PeerStreamToPeerClientTx {
         }
     }
 
-    pub fn clone_and_ref(&self) -> Option<PeerStreamToPeerClientTx> {
-        if *self.is_close.get() {
-            return None;
-        }
-
+    pub fn clone_and_ref(&self) -> PeerStreamToPeerClientTx {
         let worker_inner = self.wait_group.worker().add();
         self.ref_count.fetch_add(1, Ordering::Relaxed);
-        Some(PeerStreamToPeerClientTx {
+        PeerStreamToPeerClientTx {
             ref_count: self.ref_count.clone(),
             tx: self.tx.clone(),
             wait_group: self.wait_group.clone(),
             worker_inner: Some(worker_inner),
             is_close: self.is_close.clone(),
-        })
+        }
     }
 
     pub fn close(&self) {
@@ -119,13 +115,14 @@ impl PeerClientContext {
         self.peer_stream_size.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub fn clone_and_ref(&self) -> Option<PeerStreamToPeerClientTx> {
+    pub fn clone_and_ref(&self) -> PeerStreamToPeerClientTx {
         self.peer_stream_to_peer_client_tx.clone_and_ref()
     }
 
     pub async fn client_create_peer_stream(
         &self,
         client_info: Option<(i32, u32)>,
+        is_ack: bool,
     ) -> Result<Option<(SocketAddr, SocketAddr, Option<ArcString>)>> {
         let (peer_stream_key, min_stream_cache_size) = self
             .get_or_create_peer_stream()
@@ -137,6 +134,7 @@ impl PeerClientContext {
                 peer_stream_key.clone(),
                 min_stream_cache_size,
                 client_info,
+                is_ack,
             )
             .await
             .map_err(|e| anyhow!("err:get_peer_stream_hello_to_peer_stream =>  err:{}", e));
@@ -228,9 +226,15 @@ impl PeerClientContext {
         peer_stream_key: Arc<PeerStreamKey>,
         min_stream_cache_size: usize,
         client_info: Option<(i32, u32)>,
+        is_ack: bool,
     ) -> Result<Option<()>> {
         let (session_id, tunnel_hello) = self
-            .get_peer_stream_hello(peer_stream_key.clone(), client_info, min_stream_cache_size)
+            .get_peer_stream_hello(
+                peer_stream_key.clone(),
+                client_info,
+                min_stream_cache_size,
+                is_ack,
+            )
             .await
             .map_err(|e| anyhow!("err:get_peer_stream_hello =>  err:{}", e))?;
 
@@ -240,6 +244,7 @@ impl PeerClientContext {
             min_stream_cache_size,
             Some(session_id),
             None,
+            is_ack,
         )
         .await
         .map_err(|e| anyhow!("er:hello_to_peer_stream => e:{}", e))
@@ -254,6 +259,7 @@ impl PeerClientContext {
         peer_stream_key: Arc<PeerStreamKey>,
         client_info: Option<(i32, u32)>,
         min_stream_cache_size: usize,
+        is_ack: bool,
     ) -> Result<(ArcString, TunnelHello)> {
         let session_id = {
             if self.session_id.is_some() {
@@ -287,6 +293,7 @@ impl PeerClientContext {
             min_stream_cache_size,
             channel_size: self.channel_size,
             client_peer_stream_index: 0,
+            is_ack,
         };
         Ok((session_id, tunnel_hello))
     }
@@ -298,22 +305,33 @@ impl PeerClientContext {
         min_stream_cache_size: usize,
         session_id: Option<ArcString>,
         peer_stream_id: Option<usize>,
+        is_ack: bool,
     ) -> Result<Option<()>> {
-        let stream_to_peer_stream_rx = {
-            self.round_async_channel
-                .get_mut()
-                .channel(self.channel_size)
-        };
-        if stream_to_peer_stream_rx.is_err() {
-            return Ok(None);
-        }
-        let stream_to_peer_stream_rx = stream_to_peer_stream_rx.unwrap();
+        let (stream_to_peer_stream_rx, peer_stream_to_peer_client_tx) = {
+            let is_close = self.peer_stream_to_peer_client_tx.is_close.get();
+            if *is_close {
+                return Ok(None);
+            }
 
-        let peer_stream_to_peer_client_tx = self.clone_and_ref();
-        if peer_stream_to_peer_client_tx.is_none() {
-            return Ok(None);
-        }
-        let peer_stream_to_peer_client_tx = peer_stream_to_peer_client_tx.unwrap();
+            let stream_to_peer_stream_rx =
+                if tunnel_hello.is_none() || !tunnel_hello.as_ref().unwrap().is_ack {
+                    let stream_to_peer_stream_rx = {
+                        self.round_async_channel
+                            .get_mut()
+                            .channel(self.channel_size)
+                    };
+                    if stream_to_peer_stream_rx.is_err() {
+                        return Ok(None);
+                    }
+                    let stream_to_peer_stream_rx = stream_to_peer_stream_rx.unwrap();
+                    Some(stream_to_peer_stream_rx)
+                } else {
+                    None
+                };
+
+            let peer_stream_to_peer_client_tx = self.clone_and_ref();
+            (stream_to_peer_stream_rx, peer_stream_to_peer_client_tx)
+        };
 
         //let peer_stream_index = self.add_peer_stream_index();
         self.add_peer_stream_index();
@@ -334,6 +352,8 @@ impl PeerClientContext {
             session_id,
             is_error: self.is_error.clone(),
             peer_stream_id,
+            round_async_channel: self.round_async_channel.clone(),
+            is_ack,
         };
 
         peer_stream_key
@@ -628,7 +648,7 @@ impl PeerClient {
             let context = self.context.clone();
             let async_ = Box::pin(async move {
                 let ret = context
-                    .client_create_peer_stream(None)
+                    .client_create_peer_stream(None, true)
                     .await
                     .map_err(|e| anyhow!("err:client_create_peer_stream => e:{}", e));
                 if let Err(e) = ret {
@@ -671,6 +691,7 @@ impl PeerClient {
         channel_size: usize,
         peer_stream_id: Option<usize>,
         run_time: Arc<Box<dyn Runtime>>,
+        is_ack: bool,
     ) -> Result<(
         Arc<PeerClient>,
         Stream,
@@ -696,7 +717,7 @@ impl PeerClient {
         let (local_addr, remote_addr, domain) = if is_client {
             let ret = peer_client
                 .context
-                .client_create_peer_stream(client_info)
+                .client_create_peer_stream(client_info, is_ack)
                 .await
                 .map_err(|e| {
                     anyhow!(
@@ -722,6 +743,7 @@ impl PeerClient {
                     min_stream_cache_size,
                     session_id,
                     peer_stream_id,
+                    is_ack,
                 )
                 .await
                 .map_err(|e| anyhow!("er:hello_to_peer_stream => e:{}", e))?;
@@ -843,6 +865,12 @@ impl PeerClientToStream {
                             TunnelPack::TunnelHello(value) => {
                                 return Err(anyhow!(
                                     "err:peer_client recv TunnelHello => value:{:?}",
+                                    value
+                                ));
+                            }
+                            TunnelPack::TunnelHelloAck(value) => {
+                                return Err(anyhow!(
+                                    "err:peer_client recv TunnelHelloAck => value:{:?}",
                                     value
                                 ));
                             }

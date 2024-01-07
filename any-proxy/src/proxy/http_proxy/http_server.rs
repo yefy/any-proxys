@@ -210,7 +210,10 @@ impl HttpServer {
         if hello.is_some() {
             let hello_str = toml::to_string(&*hello.unwrap())?;
             let hello_str = general_purpose::STANDARD.encode(hello_str);
-            self.http_arg.stream_info.get_mut().protocol_hello_size = hello_str.len();
+            self.http_arg
+                .stream_info
+                .get_mut()
+                .upstream_protocol_hello_size = hello_str.len();
             req.headers_mut().insert(
                 HeaderName::from_bytes(HTTP_HELLO_KEY.as_bytes())?,
                 HeaderValue::from_bytes(hello_str.as_bytes())?,

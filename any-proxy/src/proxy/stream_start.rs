@@ -151,6 +151,7 @@ pub async fn stream_info_parse(
     stream_info: Share<StreamInfo>,
 ) -> Result<(bool, bool)> {
     let stream_info = &mut stream_info.get_mut();
+    let mut is_error = false;
     let mut is_close = false;
     let mut is_ups_close = false;
     let client_stream_flow_info = stream_info.client_stream_flow_info.clone();
@@ -158,76 +159,47 @@ pub async fn stream_info_parse(
     let mut client_stream_flow_info = client_stream_flow_info.get_mut();
     let mut upstream_stream_flow_info = upstream_stream_flow_info.get_mut();
 
-    #[cfg(feature = "anyerror")]
-    let mut is_error = false;
-    #[cfg(feature = "anyerror")]
-    {
-        if client_stream_flow_info.read == 0
-            || client_stream_flow_info.write == 0
-            || upstream_stream_flow_info.read == 0
-            || upstream_stream_flow_info.write == 0
+    if stream_info.ssc_upload.is_some() {
+        let ssc_download = stream_info.ssc_download.get();
+        let ssd = ssc_download.ssd.get();
+        if ssd.total_read_size == 0
+            || ssd.total_write_size == 0
+            || ssd.total_read_size != ssd.total_write_size
         {
             is_error = true;
-        } else {
-            let tunnel_hello_size = stream_info.protocol_hello_size as i64;
-            let ups_write = if tunnel_hello_size > 0 {
-                if upstream_stream_flow_info.write >= tunnel_hello_size
-                    && upstream_stream_flow_info.write > client_stream_flow_info.read
-                {
-                    upstream_stream_flow_info.write - tunnel_hello_size
-                } else {
-                    upstream_stream_flow_info.write
-                }
-            } else {
-                upstream_stream_flow_info.write
-            };
-
-            let tunnel_hello_size = stream_info.client_protocol_hello_size as i64;
-            let client_read = if tunnel_hello_size > 0 {
-                if client_stream_flow_info.read >= tunnel_hello_size
-                    && client_stream_flow_info.read > upstream_stream_flow_info.write
-                {
-                    client_stream_flow_info.read - tunnel_hello_size
-                } else {
-                    client_stream_flow_info.read
-                }
-            } else {
-                client_stream_flow_info.read
-            };
-
-            if client_read != ups_write {
-                is_error = true;
-            }
-
-            if client_stream_flow_info.write != upstream_stream_flow_info.read {
-                is_error = true;
-            }
         }
-
-        if stream_info.is_discard_timeout || stream_info.is_discard_flow {
-            is_error = false;
+        let ssc_upload = stream_info.ssc_upload.get();
+        let ssd = ssc_upload.ssd.get();
+        if ssd.total_read_size != ssd.total_write_size {
+            is_error = true;
         }
+    }
 
-        if is_error {
-            log::error!(
-                "session_id:{}, client_stream_flow_info.read:{} , upstream_stream_flow_info.write:{}, \
+    #[cfg(feature = "anyerror")]
+    if is_error {
+        log::error!(
+            "session_id:{}, client_stream_flow_info.read:{} , upstream_stream_flow_info.write:{}, \
                 client_stream_flow_info.write:{} , upstream_stream_flow_info.read:{}, \
                    protocol_hello_size:{}, client_protocol_hello_size:{}",
-                stream_info.request_id,
-                client_stream_flow_info.read,
-                upstream_stream_flow_info.write,
-                client_stream_flow_info.write,
-                upstream_stream_flow_info.read,
-                stream_info.protocol_hello_size,
-                stream_info.client_protocol_hello_size,
-            )
-        }
+            stream_info.request_id,
+            client_stream_flow_info.read,
+            upstream_stream_flow_info.write,
+            client_stream_flow_info.write,
+            upstream_stream_flow_info.read,
+            stream_info.upstream_protocol_hello_size,
+            stream_info.client_protocol_hello_size,
+        )
+    }
+
+    if stream_info.err_status != ErrStatus::Ok {
+        is_error = true;
     }
 
     if stream_info.err_status == ErrStatus::Ok
         || stream_info.err_status == ErrStatus::ClientProtoErr
     {
         if stream_timeout.timeout_num.load(Ordering::Relaxed) >= 4 {
+            is_error = true;
             stream_info.is_timeout_exit = true;
             let client_read_timeout_millis = stream_timeout
                 .client_read_timeout_millis
@@ -345,12 +317,16 @@ pub async fn stream_info_parse(
                     is_ups_close = true;
                 }
             } else if err == stream_flow::StreamFlowErr::WriteTimeout {
+                is_error = true;
                 stream_info.err_status_str = Some(err_status_200.write_timeout());
             } else if err == stream_flow::StreamFlowErr::ReadTimeout {
+                is_error = true;
                 stream_info.err_status_str = Some(err_status_200.read_timeout());
             } else if err == stream_flow::StreamFlowErr::WriteErr {
+                is_error = true;
                 stream_info.err_status_str = Some(err_status_200.write_err());
             } else if err == stream_flow::StreamFlowErr::ReadErr {
+                is_error = true;
                 stream_info.err_status_str = Some(err_status_200.read_err());
             }
         }
@@ -366,11 +342,11 @@ pub async fn stream_info_parse(
         }
     }
 
-    #[cfg(feature = "anyerror")]
-    if is_error {
-        is_close = false;
+    if stream_info.is_discard_flow {
+        is_error = false;
     }
 
+    stream_info.is_err = is_error;
     Ok((is_close, is_ups_close))
 }
 

@@ -3,9 +3,8 @@ use crate::protopack::anyproxy::AnyproxyHello;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
-use crate::Protocol77;
+use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::future_wait::FutureWait;
 use any_base::typ::{ArcMutex, Share, ShareRw, ValueOption};
 use any_base::util::ArcString;
 use std::sync::Arc;
@@ -21,6 +20,7 @@ pub enum ErrStatus {
     GatewayTimeout = 504,     //upstream 链接超时
 }
 
+use crate::proxy::StreamStreamContext;
 /// 200 对应的详细错误
 //200
 use lazy_static::lazy_static;
@@ -129,6 +129,7 @@ impl ErrStatus200 for ErrStatusUpstream {
 pub struct StreamInfo {
     pub executors: Option<ExecutorsLocal>,
     pub server_stream_info: Arc<ServerStreamInfo>,
+    pub client_protocol7: Option<Protocol7>,
     pub ssl_domain: Option<ArcString>,
     pub local_domain: Option<ArcString>,
     pub remote_domain: Option<ArcString>,
@@ -136,7 +137,8 @@ pub struct StreamInfo {
     pub debug_is_open_print: bool,
     pub request_id: ArcString,
     pub protocol_hello: ValueOption<Arc<AnyproxyHello>>,
-    pub protocol_hello_size: usize,
+    pub upstream_protocol_hello_size: usize,
+    pub is_err: bool,
     pub err_status: ErrStatus,
     pub err_status_str: Option<ArcString>,
     pub client_stream_flow_info: ArcMutex<StreamFlowInfo>,
@@ -158,17 +160,13 @@ pub struct StreamInfo {
     pub write_max_block_time_ms: u128,
     pub client_protocol_hello_size: usize,
     pub is_timeout_exit: bool,
-    pub total_read_size: u64,
-    pub total_write_size: u64,
     pub client_protocol77: Option<Protocol77>,
     pub upstream_protocol77: Option<Protocol77>,
-    pub upload_read: FutureWait,
-    pub download_read: FutureWait,
-    pub upload_close: FutureWait,
-    pub download_close: FutureWait,
     pub debug_print_access_log_time: u64,
     pub debug_print_stream_flow_time: u64,
     pub stream_so_singer_time: usize,
+    pub ssc_download: ValueOption<Arc<StreamStreamContext>>,
+    pub ssc_upload: ValueOption<Arc<StreamStreamContext>>,
 }
 
 impl StreamInfo {
@@ -184,6 +182,7 @@ impl StreamInfo {
         StreamInfo {
             executors,
             server_stream_info,
+            client_protocol7: None,
             ssl_domain: None,
             local_domain: None,
             remote_domain: None,
@@ -191,7 +190,8 @@ impl StreamInfo {
             debug_is_open_print,
             request_id: ArcString::default(),
             protocol_hello: ValueOption::default(),
-            protocol_hello_size: 0,
+            upstream_protocol_hello_size: 0,
+            is_err: false,
             err_status: ErrStatus::ClientProtoErr,
             err_status_str: None,
             client_stream_flow_info: ArcMutex::new(StreamFlowInfo::new()),
@@ -213,17 +213,13 @@ impl StreamInfo {
             write_max_block_time_ms: 0,
             client_protocol_hello_size: 0,
             is_timeout_exit: false,
-            total_read_size: 0,
-            total_write_size: 0,
             client_protocol77: None,
             upstream_protocol77: None,
-            upload_read: FutureWait::new(),
-            download_read: FutureWait::new(),
-            upload_close: FutureWait::new(),
-            download_close: FutureWait::new(),
             debug_print_access_log_time,
             debug_print_stream_flow_time,
             stream_so_singer_time,
+            ssc_download: ValueOption::default(),
+            ssc_upload: ValueOption::default(),
         }
     }
 

@@ -271,7 +271,7 @@ impl any_base::io::async_stream::AsyncStream for Stream {
                     return Poll::Ready(Ok(()));
                 }
                 Err(async_channel::TryRecvError::Closed) => {
-                    self.close();
+                    self.read_close();
                     continue;
                 }
             }
@@ -318,7 +318,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     return Poll::Ready(Ok(stream_msg));
                 }
                 Err(async_channel::TryRecvError::Closed) => {
-                    self.close();
+                    self.read_close();
                     continue;
                 }
             }
@@ -358,7 +358,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     }
                     Err(async_channel::TryRecvError::Empty) => {}
                     Err(async_channel::TryRecvError::Closed) => {
-                        self.close();
+                        self.read_close();
                         continue;
                     }
                 }
@@ -374,7 +374,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
             let ret = stream_rx_future.as_mut().poll(_cx);
             match ret {
                 Poll::Ready(Err(_)) => {
-                    self.close();
+                    self.read_close();
                     continue;
                 }
                 Poll::Ready(Ok(tunnel_data)) => {
@@ -444,7 +444,7 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
         let ret = stream_tx_future.as_mut().poll(_cx);
         match ret {
             Poll::Ready(Err(_)) => {
-                self.close();
+                self.write_close();
                 return Poll::Ready(Ok(0));
             }
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(self.stream_tx_data_size)),
@@ -468,7 +468,6 @@ impl tokio::io::AsyncRead for Stream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         log::trace!("skip waning is_client:{}", self.is_client);
-
         let mut is_read = false;
         loop {
             if self.is_read_close() {
@@ -495,7 +494,7 @@ impl tokio::io::AsyncRead for Stream {
                     }
                     Err(async_channel::TryRecvError::Empty) => {}
                     Err(async_channel::TryRecvError::Closed) => {
-                        self.close();
+                        self.read_close();
                         continue;
                     }
                 }
@@ -511,7 +510,7 @@ impl tokio::io::AsyncRead for Stream {
             let ret = stream_rx_future.as_mut().poll(_cx);
             match ret {
                 Poll::Ready(Err(_)) => {
-                    self.close();
+                    self.read_close();
                     continue;
                 }
                 Poll::Ready(Ok(tunnel_data)) => {
@@ -577,7 +576,7 @@ impl tokio::io::AsyncWrite for Stream {
         let ret = stream_tx_future.as_mut().poll(_cx);
         match ret {
             Poll::Ready(Err(_)) => {
-                self.close();
+                self.write_close();
                 return Poll::Ready(Ok(0));
             }
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(self.stream_tx_data_size)),
@@ -590,17 +589,17 @@ impl tokio::io::AsyncWrite for Stream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.is_write_close() {
-            return Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionReset,
-                "ConnectionReset",
-            )));
-        }
+        // if self.is_write_close() {
+        //     return Poll::Ready(Err(std::io::Error::new(
+        //         std::io::ErrorKind::ConnectionReset,
+        //         "ConnectionReset",
+        //     )));
+        // }
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.close();
+        self.write_close();
         Poll::Ready(Ok(()))
     }
 }
