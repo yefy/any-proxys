@@ -31,15 +31,15 @@ linux reuseport环境支持程序热升级
 
 # 已经支持
 any-tunnel server over (tcp、ssl、 quic)  
-any-tunnel client over (tcp、ssl、 quic)
-anyproxy server over (tcp、ssl、 quic、any-tunnel)  
-anyproxy client over (tcp、ssl、 quic、any-tunnel)
-anyproxy http server over (tcp、ssl、 quic、any-tunnel)  
-anyproxy http client over (tcp、ssl、 quic、any-tunnel)
-anyproxy websocket server over (tcp、ssl、 quic、any-tunnel)  
-anyproxy websocket client over (tcp、ssl、 quic、any-tunnel)
-纯端口代理模式  
-域名代理模式  
+any-tunnel client over (tcp、ssl、 quic)  
+anyproxy server over (tcp、ssl、 quic、any-tunnel)   
+anyproxy client over (tcp、ssl、 quic、any-tunnel)   
+anyproxy http server over (tcp、ssl、 quic、any-tunnel)    
+anyproxy http client over (tcp、ssl、 quic、any-tunnel)  
+anyproxy websocket server over (tcp、ssl、 quic、any-tunnel)   
+anyproxy websocket client over (tcp、ssl、 quic、any-tunnel)  
+纯端口代理模式   
+域名代理模式   
 tcp代理  
 ssl代理  
 quic代理  
