@@ -1,20 +1,19 @@
-use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
-#[cfg(unix)]
-use crate::proxy::SENDFILE_WRITEABLE_MILLIS;
-use crate::proxy::{get_flag, StreamStatus, StreamStreamShare};
-#[cfg(unix)]
-use any_base::io::async_stream::AsyncStreamExt;
-use any_base::io::async_write_msg::AsyncWriteMsgExt;
-use any_base::typ::{ArcRwLockTokio, ShareRw};
+use crate::proxy::stream_stream_buf::StreamStreamCacheWriteDeque;
+use crate::proxy::{StreamStatus, StreamStreamShare};
+use any_base::io::async_write_msg::{AsyncWriteMsg, AsyncWriteMsgExt};
+use any_base::typ::ArcRwLockTokio;
 use anyhow::anyhow;
 use anyhow::Result;
-use dynamic_pool::DynamicPoolItem;
 use lazy_static::lazy_static;
+use std::io::IoSlice;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
+
+const MAX_WRITEV_BUFS: usize = 64;
 
 lazy_static! {
     pub static ref CACHE_HANDLE_NEXT: ArcRwLockTokio<PluginHandleStream> =
@@ -37,40 +36,122 @@ pub async fn set_memory_handle(plugin: PluginHandleStream) -> Result<()> {
     Ok(())
 }
 
-pub async fn cache_handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus> {
+pub async fn cache_handle_run(sss: Arc<StreamStreamShare>) -> Result<StreamStatus> {
     handle_run(sss, CACHE_HANDLE_NEXT.clone()).await
 }
 
-pub async fn memory_handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus> {
+pub async fn memory_handle_run(sss: Arc<StreamStreamShare>) -> Result<StreamStatus> {
     handle_run(sss, MEMORY_HANDLE_NEXT.clone()).await
 }
 
 pub async fn handle_run(
-    sss: ShareRw<StreamStreamShare>,
+    sss: Arc<StreamStreamShare>,
     handle: ArcRwLockTokio<PluginHandleStream>,
 ) -> Result<StreamStatus> {
-    let mut buffer = sss.get_mut().write_buffer.take().unwrap();
-    let ret = do_handle_run(sss.clone(), &mut buffer).await;
-    let status = {
-        let mut sss = sss.get_mut();
-        if buffer.start < buffer.read_size {
-            sss.write_buffer = Some(buffer);
+    let ssc = sss.ssc.clone();
+
+    let mut write_buffer_deque = {
+        let (buffer, is_deque_none) = {
+            let mut sss_ctx = sss.sss_ctx.get_mut();
+            (
+                sss_ctx.write_buffer.take(),
+                sss_ctx.write_buffer_deque.as_ref().unwrap().is_none(),
+            )
+        };
+        if buffer.is_none() && is_deque_none {
+            let mut w = sss.w.get_mut().await;
+            w.flush().await?;
+            return Ok(StreamStatus::WriteEmpty);
         }
-        if let Err(ref e) = ret {
+        let mut sss_ctx = sss.sss_ctx.get_mut();
+
+        let write_size = if sss.is_write_msg {
+            ssc.cs.read_buffer_size
+        } else {
+            let write_buffer_deque = sss_ctx.write_buffer_deque.as_ref().unwrap();
+            let is_file = write_buffer_deque.is_file();
+            if is_file {
+                usize::max_value()
+            } else {
+                if sss.is_write_vectored {
+                    ssc.cs.write_buffer_size
+                } else {
+                    ssc.cs.write_buffer_size
+                }
+            }
+        };
+
+        let mut write_buffer_deque = sss_ctx.write_buffer_deque.take().unwrap();
+        if buffer.is_some() {
+            let buffer = buffer.unwrap();
+
+            #[cfg(unix)]
+            use any_base::io::async_write_msg::BufFile;
+            #[cfg(unix)]
+            if buffer.is_file() && sss.ssc.cs.stream_nopush {
+                if !sss_ctx.is_set_tcp_nopush {
+                    sss_ctx.is_set_tcp_nopush = true;
+                    use any_base::util::set_tcp_nopush_;
+                    if sss._w_raw_fd > 0 {
+                        set_tcp_nopush_(sss._w_raw_fd, true);
+                    }
+                }
+            }
+            let buffer = write_buffer_deque.push_back(write_size, buffer);
+            if buffer.is_some() {
+                sss_ctx.write_buffer = buffer;
+            } else {
+                if !write_buffer_deque.is_full() && write_buffer_deque.remaining_() < write_size {
+                    sss_ctx.write_buffer_deque = Some(write_buffer_deque);
+                    return Ok(StreamStatus::Ok);
+                }
+            }
+        }
+        write_buffer_deque
+    };
+
+    let total_write_size = ssc.ssd.get().total_write_size as i64;
+    let status = loop {
+        if write_buffer_deque.is_none() {
+            break StreamStatus::Ok;
+        }
+
+        let ret = do_handle_run(&sss, &mut write_buffer_deque).await;
+        let status = if let Err(ref e) = ret {
+            let mut sss_ctx = sss.sss_ctx.get_mut();
             if e.kind() != std::io::ErrorKind::ConnectionReset {
+                sss_ctx.write_buffer_deque = Some(write_buffer_deque);
                 return Err(anyhow!("err:do_handle_run => e:{}", e))?;
             }
-
-            sss.write_err = Some(Err(anyhow!(
-                "err:stream_write => flag:{}, e:{}",
-                get_flag(sss.ssc.is_client),
-                e
-            )));
-            StreamStatus::Full
+            sss_ctx.write_err = Some(Err(anyhow!("err:stream_write => e:{}", e)));
+            StreamStatus::Full(false)
         } else {
-            ret?
+            ret.unwrap()
+        };
+
+        match &status {
+            &StreamStatus::Ok => {
+                //
+            }
+            _ => break status,
         }
     };
+
+    sss.sss_ctx.get_mut().write_buffer_deque = Some(write_buffer_deque);
+
+    loop {
+        let mut w = sss.w.get_mut().await;
+        if w.write_cache_size() > 0 {
+            w.flush().await?;
+            break;
+        }
+
+        if total_write_size < ssc.cs.stream_nodelay_size {
+            w.flush().await?;
+            break;
+        }
+        break;
+    }
 
     if handle.is_some().await {
         let handle_next = &*handle.get().await;
@@ -83,130 +164,111 @@ pub async fn handle_run(
 
 //limit ok full
 pub async fn do_handle_run(
-    sss: ShareRw<StreamStreamShare>,
-    buffer: &mut DynamicPoolItem<StreamCacheBuffer>,
+    sss: &StreamStreamShare,
+    write_buffer_deque: &mut StreamStreamCacheWriteDeque,
 ) -> std::io::Result<StreamStatus> {
-    let (w, cs, ssd, stream_info, curr_limit_rate) = {
-        let sss = sss.get();
-        (
-            sss.w.clone(),
-            sss.ssc.cs.clone(),
-            sss.ssc.ssd.clone(),
-            sss.stream_info.clone(),
-            sss.ssc.curr_limit_rate.clone(),
-        )
-    };
+    let ssc = sss.ssc.clone();
+    let ssd = ssc.ssd.clone();
+    let stream_info = sss.stream_info.clone();
 
-    let mut _is_sendfile = false;
-
-    let mut n = buffer.read_size - buffer.start;
-    let curr_limit_rate_num = curr_limit_rate.load(Ordering::Relaxed);
-    let limit_rate_size = {
+    let mut remaining = write_buffer_deque.remaining_();
+    let curr_limit_rate_num = ssc.curr_limit_rate.load(Ordering::Relaxed);
+    let mut limit_rate_size = {
         let ssd = ssd.get();
-        if cs.max_limit_rate <= 0 {
-            n
+        if ssc.cs.max_limit_rate <= 0 {
+            remaining as i64
         } else if ssd.limit_rate_after > 0 {
-            ssd.limit_rate_after as u64
+            ssd.limit_rate_after
         } else if curr_limit_rate_num > 0 {
-            curr_limit_rate_num as u64
+            curr_limit_rate_num
         } else {
             return Ok(StreamStatus::Limit);
         }
     };
 
-    if limit_rate_size < n {
-        n = limit_rate_size;
+    if limit_rate_size < 0 {
+        limit_rate_size = 0;
     }
-    //log::trace!("{}, n:{}", get_flag(sss.get().ssc.is_client), n);
+    let limit_rate_size = limit_rate_size as usize;
 
-    let mut w = w.get_mut().await;
-    let wn = loop {
-        #[cfg(unix)]
-        if buffer.file_fd > 0 {
-            let sendfile = sss.get().ssc.sendfile.clone();
-            let sendfile = sendfile.get().await;
-            if sendfile.is_some() {
-                _is_sendfile = true;
-                let timeout = tokio::time::Duration::from_millis(SENDFILE_WRITEABLE_MILLIS);
-                match tokio::time::timeout(timeout, w.writable()).await {
-                    Ok(ret) => {
-                        if ret.is_err() {
-                            log::warn!("err:sendfile writable {:?}", ret);
-                        }
-                        ret?;
-                    }
-                    Err(_) => {
-                        break 0;
-                    }
-                }
-                let wn = sendfile.write(buffer.file_fd, buffer.seek, n).await;
-                if let Err(e) = wn {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
-                        return Ok(StreamStatus::Full);
-                    }
-                    return Err(e);
-                }
-                break wn.unwrap();
-            }
+    if limit_rate_size < remaining {
+        remaining = limit_rate_size;
+    }
+
+    if remaining <= 0 {
+        return Ok(StreamStatus::Limit);
+    }
+
+    let remaining = write_buffer_deque.remaining_();
+
+    let mut w = sss.w.get_mut().await;
+
+    #[cfg(feature = "anyproxy-write-block-time-ms")]
+    let write_start_time = Instant::now();
+
+    let mut is_sendfile = false;
+    let wn: std::io::Result<usize> = async {
+        if sss.is_write_msg {
+            return w.write_msg(write_buffer_deque.msg_write_buf()).await;
         }
-
-        _is_sendfile = false;
-        let start = buffer.start as usize;
-        let end = (buffer.start + n) as usize;
-
-        //log::trace!("write:{:?}", buffer.data_or_msg(start, end));
-        #[cfg(feature = "anyproxy-write-block-time-ms")]
-        let write_start_time = Instant::now();
-
-        let write_size = if w.is_write_msg().await {
-            let msg = buffer.to_msg(start, end);
-            w.write_msg(msg).await? as u64
-        } else {
-            w.write(buffer.data_or_msg(start, end)).await? as u64
-        };
-
-        #[cfg(feature = "anyproxy-write-block-time-ms")]
-        {
-            let mut stream_info = stream_info.get_mut();
-            let write_max_block_time_ms = write_start_time.elapsed().as_millis();
-            if write_max_block_time_ms > stream_info.write_max_block_time_ms {
-                stream_info.write_max_block_time_ms = write_max_block_time_ms;
+        if write_buffer_deque.is_file() {
+            if w.write_cache_size() > 0 {
+                w.flush().await?;
             }
+            is_sendfile = true;
+            let file_data = write_buffer_deque.file().unwrap();
+            return w
+                .sendfile(file_data.file_fd, file_data.seek, file_data.size)
+                .await;
         }
-        break write_size;
-    };
+        if sss.is_write_vectored {
+            let mut iovs = [IoSlice::new(&[]); MAX_WRITEV_BUFS];
+            let len = write_buffer_deque.chunks_vectored(&mut iovs);
+            return w.write_vectored(&iovs[..len]).await;
+        }
+        w.write(write_buffer_deque.chunk_all()).await
+    }
+    .await;
+    let wn = wn?;
 
-    let mut sss = sss.get_mut();
+    let ret = write_buffer_deque.advance_(wn);
+
+    #[cfg(feature = "anyproxy-write-block-time-ms")]
+    {
+        let mut stream_info = stream_info.get_mut();
+        let write_max_block_time_ms = write_start_time.elapsed().as_millis();
+        if write_max_block_time_ms > stream_info.write_max_block_time_ms {
+            stream_info.write_max_block_time_ms = write_max_block_time_ms;
+        }
+    }
+
+    let mut sss_ctx = sss.sss_ctx.get_mut();
     let mut stream_info = stream_info.get_mut();
     let mut ssd = ssd.get_mut();
-    if sss.is_first_write {
-        sss.is_first_write = false;
-        stream_info.add_work_time(&format!("first write {}", get_flag(sss.ssc.is_client)));
+    if sss_ctx.is_first_write {
+        sss_ctx.is_first_write = false;
+        stream_info.add_work_time2(sss.ssc.is_client, "first write");
     }
 
-    ssd.total_write_size += wn;
-    //log::trace!("{}, wn:{}", get_flag(sss.ssc.is_client), wn);
-    if cs.max_limit_rate <= 0 {
+    if ssc.cs.max_limit_rate <= 0 {
         //
     } else if ssd.limit_rate_after > 0 {
         ssd.limit_rate_after -= wn as i64;
     } else {
-        curr_limit_rate.fetch_sub(wn as i64, Ordering::Relaxed);
+        ssc.curr_limit_rate.fetch_sub(wn as i64, Ordering::Relaxed);
     }
-    buffer.start += wn;
-    buffer.seek += wn;
-    if buffer.is_cache {
-        if cs.max_stream_cache_size > 0 {
-            ssd.stream_cache_size += wn as i64;
-        }
-    } else {
-        if cs.max_tmp_file_size > 0 {
-            ssd.tmp_file_size += wn as i64;
+
+    ssd.total_write_size += wn as u64;
+    for (is_cache, write_size) in ret {
+        if is_cache {
+            ssd.stream_cache_size += write_size as i64;
+        } else {
+            ssd.tmp_file_size += write_size as i64;
         }
     }
 
-    if wn < n {
-        return Ok(StreamStatus::Full);
+    if wn < remaining {
+        return Ok(StreamStatus::Full(is_sendfile));
     }
-    return Ok(StreamStatus::Ok(wn));
+    return Ok(StreamStatus::Ok);
 }

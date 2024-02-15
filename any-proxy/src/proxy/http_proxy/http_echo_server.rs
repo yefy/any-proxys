@@ -1,4 +1,4 @@
-use super::http_server;
+use crate::proxy::http_proxy::http_connection;
 use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::io::buf_reader::BufReader;
@@ -16,7 +16,7 @@ pub async fn http_server_handle(
     let client_buf_stream = any_base::io::buf_stream::BufStream::from(
         any_base::io::buf_writer::BufWriter::new(client_buf_reader),
     );
-    http_server::http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
+    http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
         Box::pin(http_server_run_handle(arg, http_arg, scc, req))
     })
     .await

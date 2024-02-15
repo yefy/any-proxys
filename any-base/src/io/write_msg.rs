@@ -1,4 +1,4 @@
-use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg, MsgWriteBuf};
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
@@ -12,7 +12,7 @@ use std::task::{Context, Poll};
 ///
 /// The returned future will resolve to both the I/O stream and the buffer
 /// as well as the number of bytes read once the read operation is completed.
-pub(crate) fn write_msg<'a, R>(reader: &'a mut R, buf: Vec<u8>) -> WriteMsg<'a, R>
+pub(crate) fn write_msg<'a, R>(reader: &'a mut R, buf: MsgWriteBuf) -> WriteMsg<'a, R>
 where
     R: AsyncWriteMsg + Unpin + ?Sized,
 {

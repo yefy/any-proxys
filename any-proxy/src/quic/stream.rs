@@ -1,5 +1,5 @@
 use any_base::io::async_write_msg::AsyncWriteBuf;
-use any_base::util::StreamMsg;
+use any_base::util::StreamReadMsg;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::future::Future;
@@ -36,31 +36,20 @@ impl Drop for Stream {
     fn drop(&mut self) {}
 }
 
+impl any_base::io::async_stream::Stream for Stream {
+    fn raw_fd(&self) -> i32 {
+        0
+    }
+    fn is_sendfile(&self) -> bool {
+        false
+    }
+}
 impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
-    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        return Poll::Ready(io::Result::Ok(()));
-    }
-    fn poll_try_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        use tokio::io::AsyncRead;
-        let ret = Pin::new(&mut self.stream_rx).poll_read(cx, buf);
-        match ret {
-            Poll::Pending => {
-                return Poll::Ready(Ok(()));
-            }
-            Poll::Ready(ret) => {
-                if ret.is_err() {
-                    ret?;
-                }
-                return Poll::Ready(Ok(()));
-            }
-        }
+    fn poll_raw_fd(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<i32> {
+        return Poll::Ready(0);
     }
 }
 
@@ -69,12 +58,12 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
         let mut is_err = false;
-        let mut stream_msg = StreamMsg::new();
+        let mut stream_msg = StreamReadMsg::new();
         loop {
             if is_err {
-                if stream_msg.len() <= 0 {
+                if stream_msg.data_len() <= 0 {
                     let kind = io::ErrorKind::ConnectionReset;
                     let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
                     return Poll::Ready(ret);
@@ -94,8 +83,8 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     continue;
                 }
                 Poll::Ready(Ok(Some(data))) => {
-                    stream_msg.push(data.bytes.into());
-                    if stream_msg.len() >= msg_size {
+                    stream_msg.push_back_data(data.bytes);
+                    if stream_msg.data_len() >= msg_size {
                         return Poll::Ready(Ok(stream_msg));
                     }
                 }
@@ -110,7 +99,41 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        let mut is_err = false;
+        let mut stream_msg = StreamReadMsg::new();
+        loop {
+            if is_err {
+                return Poll::Ready(Ok(stream_msg));
+            }
+
+            let mut read_chunk = Box::pin(self.stream_rx.read_chunk(msg_size, true));
+            let ret = Pin::new(&mut read_chunk).poll(cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(None)) => {
+                    is_err = true;
+                    continue;
+                }
+                Poll::Ready(Ok(Some(data))) => {
+                    stream_msg.push_back_data(data.bytes);
+                    if stream_msg.data_len() >= msg_size {
+                        return Poll::Ready(Ok(stream_msg));
+                    }
+                }
+                Poll::Pending => {
+                    if stream_msg.data_len() > 0 {
+                        return Poll::Ready(Ok(stream_msg));
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+            }
+        }
+
         /*
         let mut is_err = false;
         let mut value: Option<Vec<u8>> = None;
@@ -176,44 +199,36 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         }
 
          */
-
-        let mut is_err = false;
-        let mut stream_msg = StreamMsg::new();
-        loop {
-            if is_err {
-                return Poll::Ready(Ok(stream_msg));
-            }
-
-            let mut read_chunk = Box::pin(self.stream_rx.read_chunk(msg_size, true));
-            let ret = Pin::new(&mut read_chunk).poll(cx);
-            match ret {
-                Poll::Ready(Err(_)) => {
-                    is_err = true;
-                    continue;
-                }
-                Poll::Ready(Ok(None)) => {
-                    is_err = true;
-                    continue;
-                }
-                Poll::Ready(Ok(Some(data))) => {
-                    stream_msg.push(data.bytes.into());
-                    if stream_msg.len() >= msg_size {
-                        return Poll::Ready(Ok(stream_msg));
-                    }
-                }
-                Poll::Pending => {
-                    if stream_msg.len() > 0 {
-                        return Poll::Ready(Ok(stream_msg));
-                    } else {
-                        return Poll::Pending;
-                    }
-                }
-            }
-        }
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(true);
+    }
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        use tokio::io::AsyncRead;
+        let ret = Pin::new(&mut self.stream_rx).poll_read(cx, buf);
+        match ret {
+            Poll::Pending => {
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Ready(ret) => {
+                if ret.is_err() {
+                    ret?;
+                }
+                return Poll::Ready(Ok(()));
+            }
+        }
+    }
+
+    fn is_read_msg(&self) -> bool {
+        true
+    }
+    fn read_cache_size(&self) -> usize {
+        0
     }
 }
 
@@ -228,7 +243,13 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
         } else {
             self.stream_tx_data_size = buf.len();
 
-            let data = bytes::Bytes::from(buf.data());
+            let data = buf.data().to_bytes();
+            if data.is_none() {
+                log::error!("err:data.is_none()");
+                return Poll::Ready(Ok(0));
+            }
+            let data = data.unwrap();
+
             let stream_tx = self.stream_tx.take();
             if stream_tx.is_none() {
                 log::error!("err:quic stream_tx.is_none");
@@ -263,6 +284,25 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
 
     fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(true);
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _file_fd: i32,
+        _seek: u64,
+        _size: usize,
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(0))
+    }
+
+    fn is_write_msg(&self) -> bool {
+        true
+    }
+    fn write_cache_size(&self) -> usize {
+        0
     }
 }
 

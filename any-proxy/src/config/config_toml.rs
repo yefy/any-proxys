@@ -93,7 +93,10 @@ fn default_tcp_recv_buffer() -> usize {
     0
 }
 fn default_tcp_nodelay() -> bool {
-    true
+    false
+}
+fn default_tcp_nopush() -> bool {
+    false
 }
 fn default_tcp_send_timeout() -> usize {
     60
@@ -103,6 +106,18 @@ fn default_tcp_recv_timeout() -> usize {
 }
 fn default_tcp_connect_timeout() -> usize {
     60
+}
+fn default_sendfile_max_write_size() -> usize {
+    1048576
+}
+fn default_sendfile_eagain_sleep_mil_time() -> u64 {
+    15
+}
+fn default_sendfile_would_block_max_sleep_count() -> usize {
+    30
+}
+fn default_sendfile_would_block_sleep_mil() -> u64 {
+    200
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,12 +130,22 @@ pub struct TcpConfig {
     pub tcp_recv_buffer: usize,
     #[serde(default = "default_tcp_nodelay")]
     pub tcp_nodelay: bool,
+    #[serde(default = "default_tcp_nopush")]
+    pub tcp_nopush: bool,
     #[serde(default = "default_tcp_send_timeout")]
     pub tcp_send_timeout: usize,
     #[serde(default = "default_tcp_recv_timeout")]
     pub tcp_recv_timeout: usize,
     #[serde(default = "default_tcp_connect_timeout")]
     pub tcp_connect_timeout: usize,
+    #[serde(default = "default_sendfile_max_write_size")]
+    pub sendfile_max_write_size: usize,
+    #[serde(default = "default_sendfile_eagain_sleep_mil_time")]
+    pub sendfile_eagain_sleep_mil_time: u64,
+    #[serde(default = "default_sendfile_would_block_max_sleep_count")]
+    pub sendfile_would_block_max_sleep_count: usize,
+    #[serde(default = "default_sendfile_would_block_sleep_mil")]
+    pub sendfile_would_block_sleep_mil: u64,
 }
 
 fn default_memlock_rlimit_curr() -> u64 {
@@ -219,9 +244,14 @@ pub fn default_tcp_config() -> Vec<TcpConfig> {
         tcp_send_buffer: default_tcp_send_buffer(),
         tcp_recv_buffer: default_tcp_recv_buffer(),
         tcp_nodelay: default_tcp_nodelay(),
+        tcp_nopush: default_tcp_nopush(),
         tcp_send_timeout: default_tcp_send_timeout(),
         tcp_recv_timeout: default_tcp_recv_timeout(),
         tcp_connect_timeout: default_tcp_connect_timeout(),
+        sendfile_max_write_size: default_sendfile_max_write_size(),
+        sendfile_eagain_sleep_mil_time: default_sendfile_eagain_sleep_mil_time(),
+        sendfile_would_block_max_sleep_count: default_sendfile_would_block_max_sleep_count(),
+        sendfile_would_block_sleep_mil: default_sendfile_would_block_sleep_mil(),
     }]
 }
 
@@ -430,7 +460,7 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} ${client_protocol_hello_size} ${upstream_protocol_hello_size} [${stream_work_times}]".to_string()
+    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} ${client_protocol_hello_size} ${upstream_protocol_hello_size} [${stream_work_times}] ${stream_stream_info}".to_string()
 }
 
 fn default_access_log_stdout() -> bool {

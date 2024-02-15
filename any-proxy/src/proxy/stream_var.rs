@@ -62,6 +62,7 @@ lazy_static! {
         );
         map.insert("upstream_protocol_hello_size", upstream_protocol_hello_size);
         map.insert("client_protocol_hello_size", client_protocol_hello_size);
+        map.insert("stream_stream_info", stream_stream_info);
         map
     };
 }
@@ -321,6 +322,19 @@ pub fn stream_work_times(stream_info: &StreamInfo) -> Option<VarAnyData> {
         let v = format!("{}:{:.3},", name, stream_work_time);
         datas.push_str(&v);
     }
+    let mut c_datas = String::with_capacity(100);
+    let mut s_datas = String::with_capacity(100);
+    for (is_client, name, stream_work_time) in stream_info.stream_work_times2.iter() {
+        let flag = if *is_client { "c" } else { "s" };
+        let v = format!("{}_{}:{:.3},", flag, name, stream_work_time);
+        if *is_client {
+            c_datas.push_str(&v);
+        } else {
+            s_datas.push_str(&v);
+        }
+    }
+    datas.push_str(&c_datas);
+    datas.push_str(&s_datas);
     Some(VarAnyData::Str(datas))
 }
 
@@ -469,4 +483,33 @@ pub fn upstream_protocol_hello_size(stream_info: &StreamInfo) -> Option<VarAnyDa
 
 pub fn client_protocol_hello_size(stream_info: &StreamInfo) -> Option<VarAnyData> {
     return Some(VarAnyData::Usize(stream_info.client_protocol_hello_size));
+}
+
+pub fn stream_stream_info(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    let ssc_upload = if stream_info.ssc_upload.is_some() {
+        let ssc_upload = stream_info.ssc_upload.get();
+        format!(
+            "ssc_upload:{:?}, max_stream_cache_size:{}, max_tmp_file_size:{}",
+            &*ssc_upload.ssd.get(),
+            ssc_upload.cs.max_stream_cache_size,
+            ssc_upload.cs.max_tmp_file_size
+        )
+    } else {
+        String::new()
+    };
+
+    let ssc_download = if stream_info.ssc_download.is_some() {
+        let ssc_download = stream_info.ssc_download.get();
+        format!(
+            "ssc_download:{:?}, max_stream_cache_size:{}, max_tmp_file_size:{}",
+            &*ssc_download.ssd.get(),
+            ssc_download.cs.max_stream_cache_size,
+            ssc_download.cs.max_tmp_file_size
+        )
+    } else {
+        String::new()
+    };
+
+    let data = format!("{:?}, {:?}", ssc_upload, ssc_download);
+    return Some(VarAnyData::Str(data));
 }

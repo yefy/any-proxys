@@ -1,4 +1,6 @@
 use crate::config::config_toml::TcpConfig as Config;
+#[cfg(unix)]
+use any_base::util::set_tcp_nopush2;
 use anyhow::anyhow;
 use anyhow::Result;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -57,13 +59,20 @@ pub fn set_stream(tcp_stream: &TcpStream, config: &Config) {
         }
     }
 
-    //if let Err(_e) = socket.set_nodelay(config.tcp_nodelay) {
-    if let Err(_e) = tcp_stream.set_nodelay(config.tcp_nodelay) {
-        #[cfg(unix)]
-        log::error!(
-            "err:set_nodelay => tcp_nodelay:{}, e:{}",
-            config.tcp_nodelay,
-            _e
-        );
+    if config.tcp_nodelay {
+        //if let Err(_e) = socket.set_nodelay(config.tcp_nodelay) {
+        if let Err(_e) = tcp_stream.set_nodelay(config.tcp_nodelay) {
+            #[cfg(unix)]
+            log::error!(
+                "err:set_nodelay => tcp_nodelay:{}, e:{}",
+                config.tcp_nodelay,
+                _e
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    if config.tcp_nopush {
+        set_tcp_nopush2(tcp_stream, config.tcp_nopush);
     }
 }

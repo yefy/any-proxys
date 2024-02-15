@@ -37,10 +37,10 @@ logs
 *.d
 *.o
 vmlinux.h
-any-proxy/examples/anyproxy/examples/anyproxy.exe
-any-proxy/examples/anyproxy/examples/anyproxy
-any-proxy/examples/anyproxy/examples/tokio_proxy.exe
-any-proxy/examples/anyproxy/examples/tokio_proxy
+any-proxy/examples/anyproxy/anyproxy.exe
+any-proxy/examples/anyproxy/anyproxy
+any-proxy/examples/anyproxy/tokio_proxy.exe
+any-proxy/examples/anyproxy/tokio_proxy
 .output
 *.tmp
 *.err

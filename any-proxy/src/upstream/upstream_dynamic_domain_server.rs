@@ -16,7 +16,7 @@ impl UpstreamDynamicDomainServer {
     pub fn spawn_local(executors: ExecutorsLocal, ups_data: ArcMutex<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
-            format!("{}:{}", file!(), line!()),
+            None,
             move |executors| async move {
                 let dynamic_domain_server =
                     UpstreamDynamicDomainServer::new(executors, ups_data, index)

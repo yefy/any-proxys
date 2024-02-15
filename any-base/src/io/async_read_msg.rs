@@ -2,13 +2,15 @@ use crate::io::is_read_msg::is_read_msg;
 use crate::io::is_read_msg::IsReadMsg;
 use crate::io::read_msg::read_msg;
 use crate::io::read_msg::ReadMsg;
+use crate::io::try_read::{try_read, TryRead};
 use crate::io::try_read_msg::try_read_msg;
 use crate::io::try_read_msg::TryReadMsg;
-use crate::util::StreamMsg;
+use crate::util::StreamReadMsg;
 use std::io;
 use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::io::ReadBuf;
 
 /// Reads bytes from a source.
 ///
@@ -60,13 +62,21 @@ pub trait AsyncReadMsg {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>>;
+    ) -> Poll<io::Result<StreamReadMsg>>;
     fn poll_read_msg(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>>;
+    ) -> Poll<io::Result<StreamReadMsg>>;
+    fn is_read_msg(&self) -> bool;
+    fn read_cache_size(&self) -> usize;
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool>;
+
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>>;
 }
 
 macro_rules! deref_async_read_msg {
@@ -75,18 +85,32 @@ macro_rules! deref_async_read_msg {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             msg_size: usize,
-        ) -> Poll<io::Result<StreamMsg>> {
+        ) -> Poll<io::Result<StreamReadMsg>> {
             Pin::new(&mut **self).poll_try_read_msg(cx, msg_size)
         }
         fn poll_read_msg(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             msg_size: usize,
-        ) -> Poll<io::Result<StreamMsg>> {
+        ) -> Poll<io::Result<StreamReadMsg>> {
             Pin::new(&mut **self).poll_read_msg(cx, msg_size)
         }
         fn poll_is_read_msg(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
             Pin::new(&mut **self).poll_is_read_msg(cx)
+        }
+        fn poll_try_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut **self).poll_try_read(cx, buf)
+        }
+
+        fn is_read_msg(&self) -> bool {
+            (**self).is_read_msg()
+        }
+        fn read_cache_size(&self) -> usize {
+            (**self).read_cache_size()
         }
     };
 }
@@ -108,7 +132,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
         self.get_mut().as_mut().poll_try_read_msg(cx, msg_size)
     }
 
@@ -116,17 +140,31 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
         self.get_mut().as_mut().poll_read_msg(cx, msg_size)
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         self.get_mut().as_mut().poll_is_read_msg(cx)
     }
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.get_mut().as_mut().poll_try_read(cx, buf)
+    }
+
+    fn is_read_msg(&self) -> bool {
+        (**self).is_read_msg()
+    }
+    fn read_cache_size(&self) -> usize {
+        (**self).read_cache_size()
+    }
 }
 
 pub trait AsyncReadMsgExt: AsyncReadMsg {
-    fn is_read_msg<'a>(&'a mut self) -> IsReadMsg<'a, Self>
+    fn async_is_read_msg<'a>(&'a mut self) -> IsReadMsg<'a, Self>
     where
         Self: Unpin,
     {
@@ -144,6 +182,12 @@ pub trait AsyncReadMsgExt: AsyncReadMsg {
         Self: Unpin,
     {
         try_read_msg(self, msg_size)
+    }
+    fn try_read<'a>(&'a mut self, buf: &'a mut [u8]) -> TryRead<'a, Self>
+    where
+        Self: Unpin,
+    {
+        try_read(self, buf)
     }
 }
 

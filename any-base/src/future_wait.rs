@@ -25,12 +25,23 @@ impl FutureWait {
         }
     }
 
+    pub fn is_wait(&self) -> bool {
+        let waker = self.waker.get_mut();
+        waker.is_some()
+    }
+
     pub fn waker(&self) {
         let waker = self.waker.get_option_mut();
+        self.flag.set(true);
         if waker.is_some() {
-            self.flag.set(true);
             waker.clone().unwrap().wake();
         }
+    }
+
+    pub fn waker_del(&self) -> bool {
+        self.flag.set(false);
+        let waker = self.waker.get_mut();
+        waker.is_some()
     }
 }
 

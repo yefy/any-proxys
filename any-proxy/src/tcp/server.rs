@@ -5,13 +5,12 @@ use crate::stream::server::ServerStreamInfo;
 use crate::tcp::stream::Stream;
 use crate::util;
 use crate::Protocol7;
+use any_base::io::async_stream::Stream as IoStream;
 use any_base::stream_flow::StreamFlow;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -134,24 +133,22 @@ impl server::Connection for Connection {
         let tcp_stream = self.stream.take().unwrap();
         let remote_addr = self.remote_addr.take().unwrap();
         let local_addr = tcp_stream.local_addr().unwrap();
-        #[cfg(unix)]
-        let fd = tcp_stream.as_raw_fd();
-        #[cfg(not(unix))]
-        let fd = 0;
 
-        let stream = Stream::new(tcp_stream);
-        let mut stream = StreamFlow::new(fd, stream);
+        let stream = Stream::new(tcp_stream, self.config.clone());
+        let mut stream = StreamFlow::new(stream, None);
         let read_timeout = tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);
+        let raw_fd = stream.raw_fd();
         Ok(Some((
             stream,
             ServerStreamInfo {
                 protocol7: Protocol7::Tcp,
-                remote_addr: remote_addr,
+                remote_addr,
                 local_addr: Some(local_addr),
                 domain: None,
                 is_tls: false,
+                raw_fd,
             },
         )))
     }

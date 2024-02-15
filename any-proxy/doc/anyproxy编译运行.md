@@ -7,8 +7,8 @@ cargo build --release --bin anyproxy
 如何本地没安装openssl建议使用rustls库: 
 cargo build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
 ```
-cp target/release/anyproxy ./any-proxy/examples/anyproxy/examples  
-cd ./any-proxy/examples/anyproxy/examples  
+cp target/release/anyproxy ./any-proxy/examples/anyproxy  
+cd ./any-proxy/examples/anyproxy  
 
 ```
 ./anyproxy
@@ -18,7 +18,7 @@ cd ./any-proxy/examples/anyproxy/examples
 
 ```
 如果是使用CLion打开项目，  
-Working directory设置 ./any-proxy/examples/anyproxy/examples  
+Working directory设置 ./any-proxy/examples/anyproxy  
 Command设置 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
 ```
 

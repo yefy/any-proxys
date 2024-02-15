@@ -1,20 +1,18 @@
-use crate::io::is_single::{is_single, IsSingle};
-use crate::io::try_read::{try_read, TryRead};
-use crate::io::writable::{writable, Writable};
-use std::io;
+use crate::io::is_single::is_single;
+use crate::io::is_single::IsSingle;
+use crate::io::raw_fd::{async_raw_fd, AsyncRawFd};
 use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::ReadBuf;
+
+pub trait Stream {
+    fn raw_fd(&self) -> i32;
+    fn is_sendfile(&self) -> bool;
+}
 
 pub trait AsyncStream {
     fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool>;
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>>;
-    fn poll_try_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>>;
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32>;
 }
 
 macro_rules! deref_async_stream {
@@ -22,18 +20,8 @@ macro_rules! deref_async_stream {
         fn poll_is_single(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
             Pin::new(&mut **self).poll_is_single(cx)
         }
-        fn poll_write_ready(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-        ) -> Poll<std::io::Result<()>> {
-            Pin::new(&mut **self).poll_write_ready(cx)
-        }
-        fn poll_try_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            Pin::new(&mut **self).poll_try_read(cx, buf)
+        fn poll_raw_fd(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+            Pin::new(&mut **self).poll_raw_fd(cx)
         }
     };
 }
@@ -54,15 +42,8 @@ where
     fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         self.get_mut().as_mut().poll_is_single(cx)
     }
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.get_mut().as_mut().poll_write_ready(cx)
-    }
-    fn poll_try_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        self.get_mut().as_mut().poll_try_read(cx, buf)
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+        self.get_mut().as_mut().poll_raw_fd(cx)
     }
 }
 
@@ -73,18 +54,11 @@ pub trait AsyncStreamExt: AsyncStream {
     {
         is_single(self)
     }
-
-    fn writable<'a>(&'a mut self) -> Writable<'a, Self>
+    fn async_raw_fd<'a>(&'a mut self) -> AsyncRawFd<'a, Self>
     where
         Self: Unpin,
     {
-        writable(self)
-    }
-    fn try_read<'a>(&'a mut self, buf: &'a mut [u8]) -> TryRead<'a, Self>
-    where
-        Self: Unpin,
-    {
-        try_read(self, buf)
+        async_raw_fd(self)
     }
 }
 

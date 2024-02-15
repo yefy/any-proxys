@@ -7,6 +7,7 @@ use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::util;
 use crate::Protocol7;
+use any_base::io::async_stream::Stream as IoStream;
 use any_base::stream_flow::StreamFlow;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -240,12 +241,13 @@ impl server::Connection for Connection {
             }
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
-                let mut stream = StreamFlow::new(0, stream);
+                let mut stream = StreamFlow::new(stream, None);
                 let quic_recv_timeout = self.config.quic_recv_timeout as u64;
                 let read_timeout = tokio::time::Duration::from_secs(quic_recv_timeout);
                 let quic_send_timeout = self.config.quic_send_timeout as u64;
                 let write_timeout = tokio::time::Duration::from_secs(quic_send_timeout);
                 stream.set_config(read_timeout, write_timeout, None);
+                let raw_fd = stream.raw_fd();
                 return Ok(Some((
                     stream,
                     ServerStreamInfo {
@@ -254,6 +256,7 @@ impl server::Connection for Connection {
                         local_addr: None,
                         domain: Some(self.domain.clone()),
                         is_tls: true,
+                        raw_fd,
                     },
                 )));
             }

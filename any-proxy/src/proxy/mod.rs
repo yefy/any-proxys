@@ -15,10 +15,12 @@ pub mod sendfile;
 pub mod stream_info;
 pub mod stream_start;
 pub mod stream_stream;
+pub mod stream_stream_buf;
 pub mod stream_stream_cache;
 pub mod stream_stream_memory;
 pub mod stream_stream_tmp_file;
 pub mod stream_stream_write;
+pub mod stream_test;
 pub mod stream_var;
 pub mod tunnel_stream;
 pub mod util;
@@ -28,23 +30,21 @@ use crate::config::common_core;
 use crate::config::http_core;
 use crate::config::http_core::ConfStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
-#[cfg(unix)]
-use crate::proxy::sendfile::SendFile;
 use crate::proxy::stream_info::StreamInfo;
+use crate::proxy::stream_stream_buf::{
+    StreamStreamCacheRead, StreamStreamCacheWrite, StreamStreamCacheWriteDeque,
+};
 use crate::stream::server::ServerStreamInfo;
-use crate::util::default_config;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::future_wait::FutureWait;
+use any_base::io::async_write_msg::BufFile;
 use any_base::module::module;
 use any_base::module::module::Modules;
 use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
 use any_base::typ;
-use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
-use any_base::util::StreamMsg;
+use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw};
 use anyhow::Result;
-use dynamic_pool::{DynamicPool, DynamicPoolItem, DynamicReset};
 use std::collections::LinkedList;
-use std::mem::swap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -89,159 +89,25 @@ impl StreamConfigContext {
     }
 }
 
-pub enum StreamCache {
-    Buffer(DynamicPoolItem<StreamCacheBuffer>),
-    File(StreamCacheFile),
-}
-
-pub struct StreamCacheFile {
-    pub file_fd: i32,
-    pub seek: u64,
-    pub size: u64,
-}
-
-pub struct StreamCacheBuffer {
-    pub data: Vec<u8>,
-    pub start: u64,
-    pub size: u64,
-    pub is_cache: bool,
-    pub seek: u64,
-    pub file_fd: i32,
-    pub read_size: u64,
-    pub min_size: usize,
-    msg: Option<StreamMsg>,
-}
-
-impl Default for StreamCacheBuffer {
-    fn default() -> Self {
-        StreamCacheBuffer::new()
-    }
-}
-
-impl DynamicReset for StreamCacheBuffer {
-    fn reset(&mut self) {
-        self.reset()
-    }
-}
-
-impl StreamCacheBuffer {
-    fn new() -> Self {
-        let buffer_size = StreamCacheBuffer::buffer_size();
-        StreamCacheBuffer {
-            data: Vec::with_capacity(buffer_size),
-            start: 0,
-            size: 0,
-            is_cache: false,
-            seek: 0,
-            file_fd: 0,
-            read_size: 0,
-            min_size: buffer_size,
-            msg: None,
-        }
-    }
-
-    pub fn push_msg(&mut self, msg: StreamMsg) {
-        if self.msg.is_none() {
-            self.msg = Some(msg);
-        } else {
-            self.msg.as_mut().unwrap().push_msg(msg);
-        }
-    }
-    pub fn data_raw(&mut self) -> &mut Vec<u8> {
-        return &mut self.data;
-    }
-
-    pub fn data_mut(&mut self, start: usize, end: usize) -> &mut [u8] {
-        return &mut self.data.as_mut_slice()[start..end];
-    }
-
-    pub fn data_or_msg(&mut self, start: usize, end: usize) -> &[u8] {
-        if self.msg.is_some() {
-            self.msg.as_mut().unwrap().init_and_data(start, end)
-        } else {
-            &self.data.as_mut_slice()[start..end]
-        }
-    }
-
-    pub fn to_msg(&mut self, start: usize, end: usize) -> Vec<u8> {
-        if self.msg.is_some() {
-            return self.msg.take().unwrap().to_vec();
-        }
-        if start == 0 && end == self.read_size as usize {
-            let mut data = Vec::with_capacity(end);
-            swap(&mut self.data, &mut data);
-            unsafe { data.set_len(end) };
-            return data;
-        }
-        return self.data.as_slice()[start..end].to_vec();
-    }
-
-    pub fn buffer_size() -> usize {
-        default_config::PAGE_SIZE.load(Ordering::Relaxed)
-            * default_config::MIN_CACHE_BUFFER_NUM.load(Ordering::Relaxed)
-    }
-
-    pub fn reset(&mut self) {
-        unsafe { self.data.set_len(0) };
-        self.start = 0;
-        self.size = 0;
-        self.is_cache = false;
-        self.seek = 0;
-        self.file_fd = 0;
-        self.read_size = 0;
-        //self.min_size
-        self.msg = None;
-    }
-
-    fn resize(&mut self, data_size: Option<usize>) {
-        let data_size = if data_size.is_none() {
-            self.min_size
-        } else {
-            data_size.unwrap()
-        };
-
-        if self.data.capacity() < data_size {
-            self.data.resize(data_size, 0);
-        }
-
-        unsafe { self.data.set_len(data_size) };
-        self.size = data_size as u64;
-    }
-
-    fn resize_ext(&mut self, data_size: usize) {
-        let size = self.min_size + data_size;
-        self.resize(Some(size))
-    }
-
-    fn resize_curr_size(&mut self) {
-        let size = self.size as usize;
-        self.resize(Some(size))
-    }
-
-    fn set_len(&mut self, size: usize) {
-        unsafe { self.data.set_len(size) };
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StreamStreamData {
     pub stream_cache_size: i64,
     pub tmp_file_size: i64,
     pub limit_rate_after: i64,
     pub total_read_size: u64,
     pub total_write_size: u64,
+    pub stream_nodelay_size: i64,
 }
 
 pub struct StreamStreamContext {
     pub cs: Arc<ConfStream>,
     pub curr_limit_rate: Arc<AtomicI64>,
     pub ssd: ArcRwLock<StreamStreamData>,
+    pub delay_state: ArcRwLock<DelayState>,
     pub delay_wait: FutureWait,
-    pub delay_wait_stop: FutureWait,
     pub delay_ok: Arc<AtomicBool>,
-    pub is_delay: Arc<AtomicBool>,
-    #[cfg(unix)]
-    pub sendfile: ArcMutexTokio<SendFile>,
+    pub delay_version: AtomicUsize,
+    pub is_sendfile: bool,
     pub is_client: bool,
     pub close_type: StreamCloseType,
     pub wait_group: awaitgroup::WaitGroup,
@@ -254,9 +120,8 @@ pub struct StreamStreamContext {
 }
 
 const LIMIT_SLEEP_TIME_MILLIS: u64 = 500;
-const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 5;
-#[cfg(unix)]
-const SENDFILE_WRITEABLE_MILLIS: u64 = 100;
+const NORMAL_SLEEP_TIME_MILLIS: u64 = 1000 * 3;
+const SENDFILE_EAGAIN_TIME_MILLIS: u64 = 0;
 
 pub fn get_flag(is_client: bool) -> &'static str {
     if is_client {
@@ -273,76 +138,102 @@ pub enum StreamCloseType {
     WaitEmpty,
 }
 
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum DelayState {
+    Init,
+    Wait,
+    Start,
+}
+
+pub struct StreamStreamShareContext {
+    write_buffer_deque: Option<StreamStreamCacheWriteDeque>,
+    write_buffer: Option<StreamStreamCacheWrite>,
+    write_err: Option<Result<()>>,
+    read_buffer: Option<StreamStreamCacheRead>,
+    read_err: Option<Result<()>>,
+    caches: LinkedList<StreamStreamCacheWrite>,
+    plugins: Vec<Option<ArcUnsafeAny>>,
+    is_first_write: bool,
+    is_stream_cache: bool,
+    #[cfg(unix)]
+    is_set_tcp_nopush: bool,
+}
+
 pub struct StreamStreamShare {
+    sss_ctx: ShareRw<StreamStreamShareContext>,
     ssc: Arc<StreamStreamContext>,
     _scc: ShareRw<StreamConfigContext>,
     stream_info: Share<StreamInfo>,
     r: ArcMutexTokio<StreamFlowRead>,
     w: ArcMutexTokio<StreamFlowWrite>,
-    write_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
-    write_err: Option<Result<()>>,
-    read_buffer: Option<DynamicPoolItem<StreamCacheBuffer>>,
-    read_err: Option<Result<()>>,
-    caches: LinkedList<StreamCache>,
-    buffer_pool: ValueOption<DynamicPool<StreamCacheBuffer>>,
-    plugins: Vec<Option<ArcUnsafeAny>>,
-    is_first_write: bool,
-    is_stream_cache: bool,
+    _w_raw_fd: i32,
+    is_write_msg: bool,
+    is_write_vectored: bool,
 }
 
 impl StreamStreamShare {
     pub fn delay_start(&self) {
-        if self.ssc.is_delay.load(Ordering::SeqCst) {
-            return;
+        if self.ssc.cs.stream_delay_mil_time > 0 {
+            let mut delay_state = self.ssc.delay_state.get_mut();
+            if *delay_state != DelayState::Start {
+                *delay_state = DelayState::Start;
+                if self.ssc.delay_wait.is_wait() {
+                    self.ssc.delay_wait.waker();
+                }
+            }
         }
-        self.ssc.delay_wait.waker();
+    }
+
+    pub fn delay_is_ok(&self) -> bool {
+        self.ssc.delay_ok.load(Ordering::SeqCst)
     }
 
     pub fn delay_stop(&self) {
-        if !self.ssc.is_delay.load(Ordering::SeqCst) {
-            return;
+        if self.ssc.cs.stream_delay_mil_time > 0 {
+            let mut delay_state = self.ssc.delay_state.get_mut();
+            if *delay_state != DelayState::Wait {
+                self.ssc.delay_version.fetch_add(1, Ordering::SeqCst);
+                *delay_state = DelayState::Wait;
+            }
         }
-        self.ssc.delay_wait_stop.waker();
-        self.ssc.delay_ok.store(false, Ordering::SeqCst);
     }
 
-    pub fn is_read_empty(&self) -> bool {
-        if self.read_buffer.is_none()
-            || (self.read_buffer.is_some() && self.read_buffer.as_ref().unwrap().read_size == 0)
+    pub fn is_read_empty(&self, sss_ctx: &StreamStreamShareContext) -> bool {
+        if sss_ctx.read_buffer.is_none()
+            || (sss_ctx.read_buffer.is_some()
+                && sss_ctx.read_buffer.as_ref().unwrap().remaining_() == 0)
         {
             return true;
         }
         return false;
     }
 
-    pub fn is_write_empty(&self) -> bool {
-        if self.caches.len() <= 0 && self.write_buffer.is_none() {
+    pub fn is_write_empty(&self, sss_ctx: &StreamStreamShareContext) -> bool {
+        if sss_ctx.caches.len() <= 0
+            && sss_ctx.write_buffer.is_none()
+            && sss_ctx.write_buffer_deque.as_ref().unwrap().remaining_() <= 0
+        {
             return true;
         }
         return false;
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.is_read_empty() && self.is_write_empty()
+    pub fn is_empty(&self, sss_ctx: &StreamStreamShareContext) -> bool {
+        self.is_read_empty(sss_ctx) && self.is_write_empty(sss_ctx)
     }
 
     pub async fn is_sendfile_close(
-        _sss: ShareRw<StreamStreamShare>,
+        _sss: &StreamStreamShare,
         _stream_status: &StreamStatus,
     ) -> bool {
-        #[cfg(unix)]
-        {
-            let sendfile = _sss.get().ssc.sendfile.clone();
-            let is_sendfile_some = sendfile.get().await.is_some();
-            let _sss = _sss.get();
-            let is_stream_full = if let &StreamStatus::Full = _stream_status {
-                true
-            } else {
-                false
-            };
-            if is_stream_full && _sss.stream_info.get().close_num >= 1 && is_sendfile_some {
-                return true;
-            }
+        let is_sendfile = _sss.ssc.is_sendfile;
+        let is_stream_full = if let &StreamStatus::Full(is_sendfile) = _stream_status {
+            is_sendfile
+        } else {
+            false
+        };
+        if is_stream_full && _sss.stream_info.get().close_num >= 1 && is_sendfile {
+            return true;
         }
         return false;
     }
@@ -352,12 +243,12 @@ impl StreamStreamShare {
             &StreamStatus::Limit => {
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            &StreamStatus::Full => {}
-            &StreamStatus::Ok(_) => {
+            &StreamStatus::Full(_) => {}
+            &StreamStatus::Ok => {
                 log::error!("err:{} -> StreamStatus::Ok", get_flag(is_client));
                 tokio::time::sleep(std::time::Duration::from_millis(LIMIT_SLEEP_TIME_MILLIS)).await;
             }
-            &StreamStatus::DataEmpty => {
+            &StreamStatus::WriteEmpty => {
                 log::error!(
                     "err:{} -> StreamStatus::DataEmpty from sleep",
                     get_flag(is_client)
@@ -371,9 +262,9 @@ impl StreamStreamShare {
 #[derive(Debug, Clone)]
 pub enum StreamStatus {
     Limit,
-    Full,
-    Ok(u64),
-    DataEmpty,
+    Full(bool),
+    Ok,
+    WriteEmpty,
 }
 
 #[derive(Clone)]

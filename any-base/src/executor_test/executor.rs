@@ -56,7 +56,7 @@ impl ExecutorsLocal {
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
-            name,
+            Some(name),
             true,
             self.clone(),
             service,
@@ -69,7 +69,7 @@ impl ExecutorsLocal {
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
-            name,
+            None,
             false,
             self.clone(),
             service,
@@ -172,7 +172,7 @@ impl ExecutorLocalSpawn {
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
-            name,
+            Some(name),
             true,
             self.executors.clone(),
             service,
@@ -186,7 +186,7 @@ impl ExecutorLocalSpawn {
     {
         _start(
             #[cfg(feature = "anyspawn-count")]
-            name,
+            None,
             false,
             self.executors.clone(),
             service,
@@ -278,7 +278,7 @@ impl ExecutorLocalSpawn {
 }
 
 pub fn _start<S, F>(
-    #[cfg(feature = "anyspawn-count")] name: String,
+    #[cfg(feature = "anyspawn-count")] name: Option<String>,
     is_wait: bool,
     executors: ExecutorsLocal,
     service: S,
@@ -300,6 +300,8 @@ pub fn _start<S, F>(
     };
 
     executors.run_time.clone().spawn(Box::pin(async move {
+        #[cfg(feature = "anyspawn-count")]
+        let name_defer = name.clone();
         scopeguard::defer! {
             log::debug!("stop executor version:{}", version);
             if wait_group_worker_inner.is_some() {
@@ -308,14 +310,17 @@ pub fn _start<S, F>(
 
             #[cfg(feature = "anyspawn-count")]
             {
-                let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
-                let count = count_map.get_mut(&name);
-                if count.is_none() {
-                    log::error!("_start name {} nil", name);
-                } else {
-                    let count = count.unwrap();
-                    *count -= 1;
-                    log::info!("_start name {} count:{}", name, count);
+                if name_defer.is_some() {
+                    let name_defer = name_defer.unwrap();
+                    let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                    let count = count_map.get_mut(&name_defer);
+                    if count.is_none() {
+                        log::error!("_start name {} nil", name_defer);
+                    } else {
+                        let count = count.unwrap();
+                        *count -= 1;
+                        log::info!("_start name {} count:{}", name_defer, count);
+                    }
                 }
             }
         }
@@ -323,15 +328,18 @@ pub fn _start<S, F>(
 
         #[cfg(feature = "anyspawn-count")]
         {
-            let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
-            let count = count_map.get_mut(&name);
-            if count.is_none() {
-                count_map.insert(name.to_string(), 1);
-                log::info!("-start name {} count:{}", name, 1);
-            } else {
-                let count = count.unwrap();
-                *count += 1;
-                log::info!("-start name {} count:{}", name, count);
+            if name.is_some() {
+                let name = name.unwrap();
+                let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
+                let count = count_map.get_mut(&name);
+                if count.is_none() {
+                    count_map.insert(name.to_string(), 1);
+                    log::info!("-start name {} count:{}", name, 1);
+                } else {
+                    let count = count.unwrap();
+                    *count += 1;
+                    log::info!("-start name {} count:{}", name, count);
+                }
             }
         }
 

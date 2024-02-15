@@ -423,7 +423,7 @@ impl connect::Connect for Connect {
 
         let (stream, local_addr, remote_addr) = connect?;
         let elapsed = start_time.elapsed().as_secs_f32();
-        let mut stream = stream_flow::StreamFlow::new(0, stream);
+        let mut stream = stream_flow::StreamFlow::new(stream, None);
         let read_timeout =
             tokio::time::Duration::from_secs(self.connect.stream_recv_timeout().await as u64);
         let write_timeout =

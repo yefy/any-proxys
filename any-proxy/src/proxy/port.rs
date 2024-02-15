@@ -115,7 +115,7 @@ impl module::Server for Port {
 
             self.executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                format!("{}:{}", file!(), line!()),
+                None,
                 move |executors| async move {
                     let port_server = port_server::PortServer::new(
                         ms,

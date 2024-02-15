@@ -12,12 +12,12 @@ pub struct HeartbeatStream {}
 
 impl HeartbeatStream {
     pub async fn heartbeat_stream(
-        mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        mut client_buf_reader: any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>,
         stream_info: Share<StreamInfo>,
         executors: ExecutorsLocal,
     ) -> Result<
         Option<(
-            any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+            any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>,
             Share<StreamInfo>,
         )>,
     > {
@@ -33,7 +33,7 @@ impl HeartbeatStream {
             async {
                 tokio::select! {
                     biased;
-                    ret = HeartbeatStream::do_heartbeat_stream(client_buf_reader, stream_info, heartbeat) => {
+                    ret = HeartbeatStream::do_heartbeat_stream(client_buf_reader.to_io_buf_reader(), stream_info, heartbeat) => {
                         ret.map_err(|e| anyhow!("err:do_heartbeat_stream => e:{}", e))?;
                         return Ok(());
                     }

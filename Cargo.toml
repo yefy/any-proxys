@@ -1,7 +1,8 @@
 [workspace]
 resolver = "1"
-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","anyhow", "awaitgroup"]
-default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","anyhow", "awaitgroup"]
+members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
+default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
+
 [profile.dev]
 debug = true
 panic = "unwind"

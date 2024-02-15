@@ -123,7 +123,7 @@ impl PortServer {
         let ms = self.ms.clone();
         executor._start(
             #[cfg(feature = "anyspawn-count")]
-            format!("{}:{}", file!(), line!()),
+            None,
             move |executors| async move {
                 server::listen(
                     #[cfg(feature = "anyspawn-count")]

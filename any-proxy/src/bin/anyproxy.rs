@@ -83,6 +83,8 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("anyproxy-openssl");
 
     anymodule::add_modules()?;
+    use any_base::module::module;
+    module::parse_modules()?;
 
     let arg_config = ArgsConfig::load_from_args();
     log::info!("arg_config:{:?}", arg_config);

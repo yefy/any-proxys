@@ -94,10 +94,7 @@ impl<RW> From<BufWriter<BufReader<RW>>> for BufStream<RW> {
                     buf: rbuf,
                     pos,
                     cap,
-                    max_cap,
-                    reinit_cap,
                     seek_state: rseek_state,
-                    rollback,
                 },
             buf: wbuf,
             written,
@@ -115,12 +112,66 @@ impl<RW> From<BufWriter<BufReader<RW>>> for BufStream<RW> {
                 buf: rbuf,
                 pos,
                 cap,
-                max_cap,
-                reinit_cap,
                 seek_state: rseek_state,
-                rollback,
             },
         }
+    }
+}
+
+use crate::io::async_stream::Stream;
+impl<RW: AsyncRead + AsyncWrite + Stream> Stream for BufStream<RW> {
+    fn raw_fd(&self) -> i32 {
+        self.inner.raw_fd()
+    }
+    fn is_sendfile(&self) -> bool {
+        self.inner.is_sendfile()
+    }
+}
+
+use crate::io::async_stream::AsyncStream;
+impl<RW: AsyncRead + AsyncWrite + AsyncStream> AsyncStream for BufStream<RW> {
+    fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.project().inner.poll_is_single(cx)
+    }
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+        self.project().inner.poll_raw_fd(cx)
+    }
+}
+
+use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+use crate::util::StreamReadMsg;
+
+impl<RW: AsyncRead + AsyncWrite + AsyncWriteMsg> AsyncWriteMsg for BufStream<RW> {
+    fn poll_write_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        self.project().inner.poll_write_msg(cx, buf)
+    }
+
+    fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.project().inner.poll_is_write_msg(cx)
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.project().inner.poll_write_ready(cx)
+    }
+
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        file_fd: i32,
+        seek: u64,
+        size: usize,
+    ) -> Poll<io::Result<usize>> {
+        self.project().inner.poll_sendfile(cx, file_fd, seek, size)
+    }
+
+    fn is_write_msg(&self) -> bool {
+        self.inner.is_write_msg()
+    }
+    fn write_cache_size(&self) -> usize {
+        self.inner.write_cache_size()
     }
 }
 
@@ -151,6 +202,43 @@ impl<RW: AsyncRead + AsyncWrite> AsyncWrite for BufStream<RW> {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
+    }
+}
+
+use crate::io::async_read_msg::AsyncReadMsg;
+
+impl<RW: AsyncRead + AsyncWrite + AsyncReadMsg> AsyncReadMsg for BufStream<RW> {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        self.project().inner.poll_try_read_msg(cx, msg_size)
+    }
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        self.project().inner.poll_read_msg(cx, msg_size)
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.project().inner.poll_is_read_msg(cx)
+    }
+
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.project().inner.poll_try_read(cx, buf)
+    }
+    fn is_read_msg(&self) -> bool {
+        self.inner.is_read_msg()
+    }
+    fn read_cache_size(&self) -> usize {
+        self.inner.read_cache_size()
     }
 }
 
@@ -198,6 +286,16 @@ impl<RW: AsyncRead + AsyncWrite> AsyncBufRead for BufStream<RW> {
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
-        self.project().inner.consume(amt)
+        self.project().inner.consume(amt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assert_unpin() {
+        crate::is_unpin::<BufStream<()>>();
     }
 }

@@ -1,16 +1,10 @@
 use super::protopack;
-#[cfg(not(feature = "anypool-dynamic-pool"))]
-use super::protopack::DynamicPoolTunnelData;
-#[cfg(feature = "anypool-dynamic-pool")]
-use super::protopack::TunnelData;
-use super::protopack::TunnelDynamicPool;
 use super::protopack::TunnelHeaderType;
 use super::protopack::TunnelPack;
 use super::server::ServerRecv;
 use super::stream_flow::StreamFlow;
 use super::stream_flow::StreamFlowErr;
 use super::stream_flow::StreamFlowInfo;
-#[cfg(feature = "anypool-dynamic-pool")]
 use crate::client::ClientContext;
 use crate::get_flag;
 use crate::peer_client::PeerStreamToPeerClientTx;
@@ -22,8 +16,6 @@ use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
-#[cfg(feature = "anypool-dynamic-pool")]
-use dynamic_pool::DynamicPool;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -230,7 +222,7 @@ impl PeerStream {
     pub async fn do_start(&mut self, mut stream: StreamFlow) -> Result<()> {
         let stream_info = ArcMutex::new(StreamFlowInfo::new());
         stream.set_stream_info(Some(stream_info.clone()));
-        let (mut r, mut w) = tokio::io::split(stream);
+        let (mut r, mut w) = any_base::io::split::split(stream);
         loop {
             #[cfg(feature = "anydebug")]
             log::info!(
@@ -437,7 +429,6 @@ impl PeerStream {
                                                            peer_stream_to_peer_client_tx,
                                         stream_to_peer_stream_rx.clone(),
                                         min_stream_cache_size,
-                                        channel_size,
                                         peer_stream_rx_pack_id,
                                                        self.context.clone(),
             );
@@ -544,7 +535,6 @@ struct PeerStreamRead<'a, R: AsyncRead + std::marker::Unpin> {
     peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
     _stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
     _min_stream_cache_size: usize,
-    channel_size: usize,
     peer_stream_rx_pack_id: Arc<AtomicU32>,
     context: Arc<PeerStreamContext>,
 }
@@ -555,7 +545,6 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
         peer_stream_to_peer_client_tx: PeerStreamToPeerClientTx,
         _stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>,
         _min_stream_cache_size: usize,
-        channel_size: usize,
         peer_stream_rx_pack_id: Arc<AtomicU32>,
         context: Arc<PeerStreamContext>,
     ) -> PeerStreamRead<R> {
@@ -564,7 +553,6 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
             peer_stream_to_peer_client_tx,
             _stream_to_peer_stream_rx,
             _min_stream_cache_size,
-            channel_size,
             peer_stream_rx_pack_id,
             context,
         }
@@ -581,16 +569,9 @@ impl<R: AsyncRead + std::marker::Unpin> PeerStreamRead<'_, R> {
         );
 
         let mut slice = [0u8; protopack::TUNNEL_MAX_HEADER_SIZE];
-        let buffer_pool = TunnelDynamicPool {
-            #[cfg(feature = "anypool-dynamic-pool")]
-            tunnel_data: DynamicPool::new(1, self.channel_size * 2, TunnelData::default),
-            #[cfg(not(feature = "anypool-dynamic-pool"))]
-            tunnel_data: DynamicPoolTunnelData::new(),
-        };
-
         //err 直接退出   ok 等待退出
         loop {
-            let pack = protopack::read_pack_all(&mut self.r, &mut slice, &buffer_pool).await;
+            let pack = protopack::read_pack_all(&mut self.r, &mut slice).await;
             if let Err(e) = pack {
                 return Err(anyhow!(
                     "err:read_pack => flag:{}, e:{}",

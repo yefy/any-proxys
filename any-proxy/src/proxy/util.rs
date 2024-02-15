@@ -23,7 +23,7 @@ where
     D: FnOnce() -> DF,
     DF: Future<Output = Result<ArcString>>,
 {
-    arg.stream_info.get_mut().add_work_time("hello");
+    arg.stream_info.get_mut().add_work_time1("hello");
     let hello = {
         arg.stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
         let hello = hello_service().await?;
@@ -195,7 +195,7 @@ pub async fn upsteam_connect(
     stream_info: Share<StreamInfo>,
     scc: ShareRw<StreamConfigContext>,
 ) -> Result<(Option<bool>, StreamFlow)> {
-    stream_info.get_mut().add_work_time("upsteam_connect");
+    stream_info.get_mut().add_work_time1("upsteam_connect");
 
     let (is_proxy_protocol_hello, connect_func) =
         upsteam_connect_info(stream_info.clone(), scc).await?;

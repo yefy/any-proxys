@@ -176,7 +176,7 @@ async fn http_server_static(
     use crate::config::http_server_core_plugin;
     let http_server_core_plugin_conf = http_server_core_plugin::curr_conf_mut(conf_arg.curr_conf());
 
-    use crate::proxy::http_proxy::http_static_server;
+    use crate::proxy::http_proxy::http_static_server::http_static_server;
     http_server_core_plugin_conf.plugin_handle_protocol = ArcRwLockTokio::new(|arg, flow| {
         Box::pin(http_static_server::http_server_handle(arg, flow))
     });

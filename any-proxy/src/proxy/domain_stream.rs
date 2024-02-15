@@ -79,8 +79,8 @@ impl DomainStream {
 #[async_trait]
 impl proxy::Stream for DomainStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()> {
-        let client_buf_reader = any_base::io::buf_reader::BufReader::new(stream);
-        stream_info.get_mut().add_work_time("tunnel_stream");
+        let client_buf_reader = any_base::io_rb::buf_reader::BufReader::new(stream);
+        stream_info.get_mut().add_work_time1("tunnel_stream");
         let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
@@ -96,8 +96,7 @@ impl proxy::Stream for DomainStream {
         }
         let client_buf_reader = client_buf_reader.unwrap();
 
-        stream_info.get_mut().add_work_time("heartbeat");
-
+        stream_info.get_mut().add_work_time1("heartbeat");
         let ret = HeartbeatStream::heartbeat_stream(
             client_buf_reader,
             stream_info,
@@ -120,7 +119,9 @@ impl proxy::Stream for DomainStream {
 
         let plugin_handle_protocol = self.domain_config_listen.plugin_handle_protocol.clone();
         if plugin_handle_protocol.is_some().await {
-            return (plugin_handle_protocol.get().await)(arg, client_buf_reader).await;
+            stream_info.get_mut().add_work_time1("plugin");
+            return (plugin_handle_protocol.get().await)(arg, client_buf_reader.to_io_buf_reader())
+                .await;
         }
 
         let client_buf_reader = ArcMutexTokio::new(client_buf_reader);
@@ -129,6 +130,7 @@ impl proxy::Stream for DomainStream {
         let client_buf_reader_domain = client_buf_reader.clone();
         let server_stream_info = self.server_stream_info.clone();
 
+        stream_info.get_mut().add_work_time1("parse_proxy_domain");
         let stream_info_ = stream_info.clone();
         let scc = proxy_util::parse_proxy_domain(
             &arg,
@@ -162,8 +164,8 @@ impl proxy::Stream for DomainStream {
         )
         .await?;
 
+        stream_info.get_mut().add_work_time1("connect_and_stream");
         let client_buf_reader = unsafe { client_buf_reader.take().await };
-
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
         StreamStream::connect_and_stream(scc, stream_info, client_buffer, client_stream).await

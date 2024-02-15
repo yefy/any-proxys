@@ -1,19 +1,16 @@
 use super::protopack::DynamicTunnelData;
-#[cfg(feature = "anypool-dynamic-pool")]
-use super::protopack::TunnelData;
 use super::protopack::TunnelPack;
 use super::round_async_channel::RoundAsyncChannel;
 #[cfg(feature = "anydebug")]
 use crate::get_flag;
-use crate::protopack::DynamicPoolTunnelData;
+use crate::protopack::TunnelDataVec;
 use crate::PeerClientToStreamReceiver;
 use any_base::io::async_write_msg::AsyncWriteBuf;
+use any_base::stream_buf::StreamBuf;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
-use any_base::util::StreamMsg;
+use any_base::util::StreamReadMsg;
 use awaitgroup::WorkerInner;
-#[cfg(feature = "anypool-dynamic-pool")]
-use dynamic_pool::DynamicPool;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -21,56 +18,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-struct StreamBuf {
-    tunnel_data: DynamicTunnelData,
-    pos: usize,
-}
-
-impl StreamBuf {
-    fn new(tunnel_data: DynamicTunnelData) -> StreamBuf {
-        StreamBuf {
-            tunnel_data,
-            pos: 0,
-        }
-    }
-
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.tunnel_data.datas.len() - self.pos
-    }
-
-    #[inline]
-    fn split_to(&mut self, at: usize) -> &[u8] {
-        let mut end = self.pos + at;
-        if end > self.tunnel_data.datas.len() {
-            end = self.tunnel_data.datas.len();
-        }
-        let pos = self.pos;
-        self.pos = end;
-        &self.tunnel_data.datas.as_slice()[pos..end]
-    }
-
-    #[inline]
-    fn take(self) -> Option<Vec<u8>> {
-        let StreamBuf { tunnel_data, pos } = self;
-        let tunnel_data = tunnel_data.detach();
-        let TunnelData { header: _, datas } = tunnel_data;
-        if pos <= 0 {
-            return Some(datas);
-        }
-
-        if pos >= datas.len() {
-            return None;
-        }
-
-        Some(datas[pos..].to_vec())
-    }
-}
-
 pub struct Stream {
     is_client: bool,
     stream_rx: Option<PeerClientToStreamReceiver>,
-    stream_rx_buf: Option<StreamBuf>,
+    stream_rx_buf: StreamBuf,
     stream_rx_future: Option<
         Pin<
             Box<
@@ -83,7 +34,6 @@ pub struct Stream {
     >,
     stream_tx: Option<ArcMutex<RoundAsyncChannel<TunnelPack>>>,
     stream_tx_data_size: usize,
-    stream_tx_buffer_pool: DynamicPoolTunnelData,
     stream_tx_future: Option<
         Pin<
             Box<
@@ -111,20 +61,14 @@ impl Stream {
         stream_rx_pack_id: Arc<AtomicU32>,
         worker_inner: WorkerInner,
     ) -> Stream {
-        #[cfg(feature = "anypool-dynamic-pool")]
-        let stream_tx_buffer_pool =
-            DynamicPool::new(1, _max_stream_size * _channel_size * 2, TunnelData::default);
-        #[cfg(not(feature = "anypool-dynamic-pool"))]
-        let stream_tx_buffer_pool = DynamicPoolTunnelData::new();
         Stream {
             is_client,
             stream_rx: Some(stream_rx),
-            stream_rx_buf: None,
+            stream_rx_buf: StreamBuf::default(),
             stream_rx_future: None,
             stream_tx_future: None,
             stream_tx_data_size: 0,
             stream_tx: Some(stream_tx),
-            stream_tx_buffer_pool,
             _session_id,
             stream_tx_pack_id,
             stream_rx_pack_id,
@@ -189,33 +133,15 @@ impl Stream {
     }
 
     fn read_buf(&mut self, buf: &mut tokio::io::ReadBuf<'_>) -> bool {
-        if self.stream_rx_buf.is_some() {
-            let cache_buf = self.stream_rx_buf.as_mut().unwrap();
-            let remain = cache_buf.remaining();
-            if remain > 0 {
-                let expected = buf.initialize_unfilled().len();
-                let split_at = std::cmp::min(expected, remain);
-                let data = cache_buf.split_to(split_at);
-                buf.put_slice(data);
-                if split_at == remain {
-                    self.stream_rx_buf = None;
-                }
-                true
-            } else {
-                self.stream_rx_buf = None;
-                false
-            }
+        if !self.stream_rx_buf.is_empty() {
+            let remain = self.stream_rx_buf.remaining();
+            let expected = buf.initialize_unfilled().len();
+            let split_at = std::cmp::min(expected, remain);
+            let data = self.stream_rx_buf.split_to(split_at);
+            buf.put_slice(data.as_ref());
+            true
         } else {
             false
-        }
-    }
-
-    fn read_buf_take(&mut self) -> Option<Vec<u8>> {
-        if self.stream_rx_buf.is_some() {
-            let cache_buf = self.stream_rx_buf.take().unwrap();
-            cache_buf.take()
-        } else {
-            None
         }
     }
 }
@@ -226,12 +152,146 @@ impl Drop for Stream {
     }
 }
 
+impl any_base::io::async_stream::Stream for Stream {
+    fn raw_fd(&self) -> i32 {
+        0
+    }
+    fn is_sendfile(&self) -> bool {
+        false
+    }
+}
+
 impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
-    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        return Poll::Ready(io::Result::Ok(()));
+    fn poll_raw_fd(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<i32> {
+        return Poll::Ready(0);
+    }
+}
+
+impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        log::trace!("skip waning is_client:{}", self.is_client);
+        let mut stream_msg = StreamReadMsg::new();
+
+        loop {
+            if self.is_read_close() {
+                if stream_msg.is_empty() {
+                    let kind = io::ErrorKind::ConnectionReset;
+                    let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
+                    return Poll::Ready(ret);
+                }
+                return Poll::Ready(Ok(stream_msg));
+            }
+
+            if !self.stream_rx_buf.is_empty() {
+                stream_msg.push_back_data(self.stream_rx_buf.take());
+                if stream_msg.data_len() >= msg_size {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+            }
+
+            match self.stream_rx.as_ref().unwrap().try_recv() {
+                Ok(tunnel_data) => {
+                    self.stream_rx_pack_id
+                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+
+                    let DynamicTunnelData { header: _, datas } = tunnel_data;
+                    self.stream_rx_buf.set_bytes(datas);
+                    continue;
+                }
+                Err(async_channel::TryRecvError::Empty) => {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+                Err(async_channel::TryRecvError::Closed) => {
+                    self.read_close();
+                    continue;
+                }
+            }
+        }
+    }
+    fn poll_read_msg(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        log::trace!("skip waning is_client:{}", self.is_client);
+        let mut stream_msg = StreamReadMsg::new();
+
+        loop {
+            if self.is_read_close() {
+                return Poll::Ready(Ok(stream_msg));
+            }
+
+            if !self.stream_rx_buf.is_empty() {
+                stream_msg.push_back_data(self.stream_rx_buf.take());
+                if stream_msg.data_len() >= msg_size {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+            }
+
+            let mut stream_rx_future = if self.stream_rx_future.is_some() {
+                self.stream_rx_future.take().unwrap()
+            } else {
+                match self.stream_rx.as_ref().unwrap().try_recv() {
+                    Ok(tunnel_data) => {
+                        self.stream_rx_pack_id
+                            .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                        log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                        let DynamicTunnelData { header: _, datas } = tunnel_data;
+                        self.stream_rx_buf.set_bytes(datas);
+                        continue;
+                    }
+                    Err(async_channel::TryRecvError::Empty) => {}
+                    Err(async_channel::TryRecvError::Closed) => {
+                        self.read_close();
+                        continue;
+                    }
+                }
+
+                if stream_msg.data_len() > 0 {
+                    return Poll::Ready(Ok(stream_msg));
+                }
+
+                let stream_rx = self.stream_rx.clone().unwrap();
+                Box::pin(async move { stream_rx.recv().await })
+            };
+
+            let ret = stream_rx_future.as_mut().poll(_cx);
+            match ret {
+                Poll::Ready(Err(_)) => {
+                    self.read_close();
+                    continue;
+                }
+                Poll::Ready(Ok(tunnel_data)) => {
+                    self.stream_rx_pack_id
+                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    let DynamicTunnelData { header: _, datas } = tunnel_data;
+                    self.stream_rx_buf.set_bytes(datas);
+                    continue;
+                }
+                Poll::Pending => {
+                    //Pending的时候保存起来
+                    self.stream_rx_future = Some(stream_rx_future);
+                    if stream_msg.data_len() > 0 {
+                        return Poll::Ready(Ok(stream_msg));
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(true);
     }
 
     fn poll_try_read(
@@ -264,7 +324,9 @@ impl any_base::io::async_stream::AsyncStream for Stream {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
                     log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
+
+                    let DynamicTunnelData { header: _, datas } = tunnel_data;
+                    self.stream_rx_buf.set_bytes(datas);
                     continue;
                 }
                 Err(async_channel::TryRecvError::Empty) => {
@@ -277,128 +339,12 @@ impl any_base::io::async_stream::AsyncStream for Stream {
             }
         }
     }
-}
 
-impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
-    fn poll_try_read_msg(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
-        let mut stream_msg = StreamMsg::new();
-
-        loop {
-            if self.is_read_close() {
-                if stream_msg.len() <= 0 {
-                    let kind = io::ErrorKind::ConnectionReset;
-                    let ret = io::Result::Err(std::io::Error::new(kind, "err:read msg close"));
-                    return Poll::Ready(ret);
-                }
-                return Poll::Ready(Ok(stream_msg));
-            }
-
-            let datas = self.read_buf_take();
-            if datas.is_some() {
-                stream_msg.push(datas.unwrap());
-                if stream_msg.len() >= msg_size {
-                    return Poll::Ready(Ok(stream_msg));
-                }
-            }
-
-            match self.stream_rx.as_ref().unwrap().try_recv() {
-                Ok(tunnel_data) => {
-                    self.stream_rx_pack_id
-                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
-                    continue;
-                }
-                Err(async_channel::TryRecvError::Empty) => {
-                    return Poll::Ready(Ok(stream_msg));
-                }
-                Err(async_channel::TryRecvError::Closed) => {
-                    self.read_close();
-                    continue;
-                }
-            }
-        }
+    fn is_read_msg(&self) -> bool {
+        true
     }
-    fn poll_read_msg(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
-        let mut stream_msg = StreamMsg::new();
-
-        loop {
-            if self.is_read_close() {
-                return Poll::Ready(Ok(stream_msg));
-            }
-
-            let datas = self.read_buf_take();
-            if datas.is_some() {
-                stream_msg.push(datas.unwrap());
-                if stream_msg.len() >= msg_size {
-                    return Poll::Ready(Ok(stream_msg));
-                }
-            }
-
-            let mut stream_rx_future = if self.stream_rx_future.is_some() {
-                self.stream_rx_future.take().unwrap()
-            } else {
-                match self.stream_rx.as_ref().unwrap().try_recv() {
-                    Ok(tunnel_data) => {
-                        self.stream_rx_pack_id
-                            .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                        log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                        self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
-                        continue;
-                    }
-                    Err(async_channel::TryRecvError::Empty) => {}
-                    Err(async_channel::TryRecvError::Closed) => {
-                        self.read_close();
-                        continue;
-                    }
-                }
-
-                if stream_msg.len() > 0 {
-                    return Poll::Ready(Ok(stream_msg));
-                }
-
-                let stream_rx = self.stream_rx.clone().unwrap();
-                Box::pin(async move { stream_rx.recv().await })
-            };
-
-            let ret = stream_rx_future.as_mut().poll(_cx);
-            match ret {
-                Poll::Ready(Err(_)) => {
-                    self.read_close();
-                    continue;
-                }
-                Poll::Ready(Ok(tunnel_data)) => {
-                    self.stream_rx_pack_id
-                        .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
-                    continue;
-                }
-                Poll::Pending => {
-                    //Pending的时候保存起来
-                    self.stream_rx_future = Some(stream_rx_future);
-                    if stream_msg.len() > 0 {
-                        return Poll::Ready(Ok(stream_msg));
-                    } else {
-                        return Poll::Pending;
-                    }
-                }
-            }
-        }
-    }
-
-    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
-        return Poll::Ready(true);
+    fn read_cache_size(&self) -> usize {
+        self.stream_rx_buf.len()
     }
 }
 
@@ -409,7 +355,6 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
         buf: &mut AsyncWriteBuf,
     ) -> Poll<io::Result<usize>> {
         if self.is_write_close() {
-            //log::error!("err:is_write_close");
             return Poll::Ready(Ok(0));
         }
 
@@ -419,10 +364,13 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
             self.stream_tx_data_size = buf.len();
 
             let stream_tx_pack_id = self.add_write_pack_id();
-
-            let mut tunnel_data = self.stream_tx_buffer_pool.take();
-
-            let _ = core::mem::replace(&mut tunnel_data.datas, buf.data());
+            let data = buf.data().to_bytes();
+            if data.is_none() {
+                log::error!("err:data.is_none()");
+                return Poll::Ready(Ok(0));
+            }
+            let data = data.unwrap();
+            let mut tunnel_data = DynamicTunnelData::from(data);
             tunnel_data.header.pack_id = stream_tx_pack_id;
             tunnel_data.header.pack_size = tunnel_data.datas.len() as u32;
             log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
@@ -459,6 +407,25 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
     fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(true);
     }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _file_fd: i32,
+        _seek: u64,
+        _size: usize,
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(0))
+    }
+
+    fn is_write_msg(&self) -> bool {
+        true
+    }
+    fn write_cache_size(&self) -> usize {
+        0
+    }
 }
 
 impl tokio::io::AsyncRead for Stream {
@@ -489,7 +456,8 @@ impl tokio::io::AsyncRead for Stream {
                         self.stream_rx_pack_id
                             .store(tunnel_data.header.pack_id, Ordering::SeqCst);
                         log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                        self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
+                        let DynamicTunnelData { header: _, datas } = tunnel_data;
+                        self.stream_rx_buf.set_bytes(datas);
                         continue;
                     }
                     Err(async_channel::TryRecvError::Empty) => {}
@@ -517,8 +485,8 @@ impl tokio::io::AsyncRead for Stream {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
                     log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
-                    self.stream_rx_buf = Some(StreamBuf::new(tunnel_data));
-
+                    let DynamicTunnelData { header: _, datas } = tunnel_data;
+                    self.stream_rx_buf.set_bytes(datas);
                     continue;
                 }
                 Poll::Pending => {
@@ -553,7 +521,7 @@ impl tokio::io::AsyncWrite for Stream {
 
             let stream_tx_pack_id = self.add_write_pack_id();
 
-            let mut tunnel_data = self.stream_tx_buffer_pool.take();
+            let mut tunnel_data = TunnelDataVec::default();
             tunnel_data.datas.extend_from_slice(buf);
             tunnel_data.header.pack_id = stream_tx_pack_id;
             tunnel_data.header.pack_size = tunnel_data.datas.len() as u32;
@@ -567,7 +535,9 @@ impl tokio::io::AsyncWrite for Stream {
 
             Box::pin(async move {
                 let mut lock = lock.get_mut().await;
-                let ret = sender.send(TunnelPack::TunnelData(tunnel_data)).await;
+                let ret = sender
+                    .send(TunnelPack::TunnelData(DynamicTunnelData::new(tunnel_data)))
+                    .await;
                 *lock = true;
                 ret
             })

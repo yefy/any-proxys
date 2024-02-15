@@ -1,3 +1,4 @@
+use crate::io_rb::buf_reader::BufReader as RbBufReader;
 use pin_project_lite::pin_project;
 use std::io::{self, IoSlice, SeekFrom};
 use std::pin::Pin;
@@ -5,16 +6,8 @@ use std::task::{Context, Poll};
 use std::{cmp, fmt, mem};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
-pub const DEFAULT_BUF_SIZE: usize = 4 * 1024;
-
-macro_rules! ready {
-    ($e:expr $(,)?) => {
-        match $e {
-            std::task::Poll::Ready(t) => t,
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-    };
-}
+use crate::ready;
+use crate::DEFAULT_BUF_SIZE;
 
 pin_project! {
     /// The `BufReader` struct adds buffering to any reader.
@@ -39,10 +32,7 @@ pin_project! {
         pub(super) buf: Box<[u8]>,
         pub(super) pos: usize,
         pub(super) cap: usize,
-        pub(super) max_cap: usize,
-        pub(super) reinit_cap: usize,
         pub(super) seek_state: SeekState,
-        pub(super) rollback: i64,
     }
 }
 
@@ -56,75 +46,13 @@ impl<R: AsyncRead> BufReader<R> {
     /// Creates a new `BufReader` with the specified buffer capacity.
     pub fn with_capacity(capacity: usize, inner: R) -> Self {
         let buffer = vec![0; capacity];
-        let max_cap = buffer.len();
         Self {
             inner,
             buf: buffer.into_boxed_slice(),
             pos: 0,
             cap: 0,
-            max_cap,
-            reinit_cap: 0,
             seek_state: SeekState::Init,
-            rollback: -1,
         }
-    }
-
-    pub fn new_from_buffer(inner: R, buffer: (Box<[u8]>, usize, usize)) -> Self {
-        let (buf, pos, cap) = buffer;
-        let max_cap = buf.len();
-        Self {
-            inner,
-            buf,
-            pos,
-            cap,
-            max_cap,
-            reinit_cap: 0,
-            seek_state: SeekState::Init,
-            rollback: -1,
-        }
-    }
-
-    pub fn new_from_buffer_ext(buffer: (R, Box<[u8]>, usize, usize)) -> Self {
-        let (inner, buf, pos, cap) = buffer;
-        let max_cap = buf.len();
-        Self {
-            inner,
-            buf,
-            pos,
-            cap,
-            max_cap,
-            reinit_cap: 0,
-            seek_state: SeekState::Init,
-            rollback: -1,
-        }
-    }
-
-    pub fn table_buffer(self) -> (Box<[u8]>, usize, usize) {
-        let BufReader {
-            inner: _,
-            buf,
-            pos,
-            cap,
-            max_cap: _,
-            reinit_cap: _,
-            seek_state: _,
-            rollback: _,
-        } = self;
-        (buf, pos, cap)
-    }
-
-    pub fn table_buffer_ext(self) -> (R, Box<[u8]>, usize, usize) {
-        let BufReader {
-            inner,
-            buf,
-            pos,
-            cap,
-            max_cap: _,
-            reinit_cap: _,
-            seek_state: _,
-            rollback: _,
-        } = self;
-        (inner, buf, pos, cap)
     }
 
     /// Gets a reference to the underlying reader.
@@ -162,48 +90,136 @@ impl<R: AsyncRead> BufReader<R> {
         &self.buf[self.pos..self.cap]
     }
 
-    pub fn set_reinit_cap(&mut self, reinit_cap: usize) {
-        self.reinit_cap = reinit_cap;
-    }
-
-    pub fn set_reinit_cap_max(&mut self) {
-        self.reinit_cap = self.buf.len();
-    }
-
     /// Invalidates all data in the internal buffer.
     #[inline]
     fn discard_buffer(self: Pin<&mut Self>) {
         let me = self.project();
         *me.pos = 0;
         *me.cap = 0;
-        *me.rollback = -1;
-        if *me.reinit_cap > 0 && *me.reinit_cap <= me.buf.len() {
-            *me.max_cap = *me.reinit_cap;
-            *me.reinit_cap = 0;
+    }
+
+    pub fn from_rb_buf_reader(buf_reader: RbBufReader<R>) -> Self {
+        let (inner, buf, pos, cap) = buf_reader.table_buffer_ext();
+        Self {
+            inner,
+            buf,
+            pos,
+            cap,
+            seek_state: SeekState::Init,
         }
     }
 
-    pub fn start(&mut self) {
-        self.rollback = self.pos as i64;
+    pub fn table_buffer_ext(self) -> (R, Box<[u8]>, usize, usize) {
+        let BufReader {
+            inner,
+            buf,
+            pos,
+            cap,
+            seek_state: _,
+        } = self;
+        (inner, buf, pos, cap)
+    }
+}
+
+use crate::io::async_stream::Stream;
+impl<R: AsyncRead + Stream> Stream for BufReader<R> {
+    fn raw_fd(&self) -> i32 {
+        self.inner.raw_fd()
+    }
+    fn is_sendfile(&self) -> bool {
+        self.inner.is_sendfile()
+    }
+}
+
+use crate::io::async_stream::AsyncStream;
+impl<R: AsyncRead + AsyncStream> AsyncStream for BufReader<R> {
+    fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_single(cx)
+    }
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+        self.get_pin_mut().poll_raw_fd(cx)
+    }
+}
+
+use crate::io::async_read_msg::AsyncReadMsg;
+impl<R: AsyncRead + AsyncReadMsg> AsyncReadMsg for BufReader<R> {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        let len = self.buffer().len();
+        if len > 0 {
+            let mut stream_msg = StreamReadMsg::new();
+            stream_msg.push_back_data(Bytes::from(self.buffer().to_vec()));
+            self.consume(len);
+            return Poll::Ready(Ok(stream_msg));
+        }
+        self.get_pin_mut().poll_try_read_msg(cx, msg_size)
+    }
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        let len = self.buffer().len();
+        if len > 0 {
+            let mut stream_msg = StreamReadMsg::new();
+            stream_msg.push_back_data(Bytes::from(self.buffer().to_vec()));
+            self.consume(len);
+            return Poll::Ready(Ok(stream_msg));
+        }
+        self.get_pin_mut().poll_read_msg(cx, msg_size)
     }
 
-    pub fn rollback(&mut self) -> bool {
-        if self.rollback >= 0 {
-            self.pos = self.rollback as usize;
-            self.commit();
-            true
-        } else {
-            false
-        }
+    fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_read_msg(cx)
     }
 
-    pub fn commit(&mut self) -> bool {
-        if self.rollback >= 0 {
-            self.rollback = -1;
-            true
-        } else {
-            false
+    fn poll_try_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        // If we don't have any buffered data and we're doing a massive read
+        // (larger than our internal buffer), bypass our internal buffer
+        // entirely.
+        if self.pos == self.cap && buf.remaining() >= self.buf.len() {
+            let res = ready!(self.as_mut().get_pin_mut().poll_try_read(cx, buf));
+            self.discard_buffer();
+            return Poll::Ready(res);
         }
+
+        let rem = {
+            let me = self.as_mut().project();
+
+            // If we've reached the end of our internal buffer then we need to fetch
+            // some more data from the underlying reader.
+            // Branch using `>=` instead of the more correct `==`
+            // to tell the compiler that the pos..cap slice is always valid.
+            if *me.pos >= *me.cap {
+                debug_assert!(*me.pos == *me.cap);
+                let mut buf = ReadBuf::new(me.buf);
+                ready!(me.inner.poll_try_read(cx, &mut buf))?;
+                *me.cap = buf.filled().len();
+                *me.pos = 0;
+            }
+            &me.buf[*me.pos..*me.cap]
+        };
+
+        let amt = std::cmp::min(rem.len(), buf.remaining());
+        if amt > 0 {
+            buf.put_slice(&rem[..amt]);
+            self.consume(amt);
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn is_read_msg(&self) -> bool {
+        self.inner.is_read_msg()
+    }
+    fn read_cache_size(&self) -> usize {
+        self.buffer().len() + self.inner.read_cache_size()
     }
 }
 
@@ -216,13 +232,7 @@ impl<R: AsyncRead> AsyncRead for BufReader<R> {
         // If we don't have any buffered data and we're doing a massive read
         // (larger than our internal buffer), bypass our internal buffer
         // entirely.
-        if self.pos == self.cap && buf.remaining() >= self.max_cap {
-            if self.rollback >= 0 {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "*me.cap >= me.max_cap",
-                )));
-            }
+        if self.pos == self.cap && buf.remaining() >= self.buf.len() {
             let res = ready!(self.as_mut().get_pin_mut().poll_read(cx, buf));
             self.discard_buffer();
             return Poll::Ready(res);
@@ -243,33 +253,13 @@ impl<R: AsyncRead> AsyncBufRead for BufReader<R> {
         // some more data from the underlying reader.
         // Branch using `>=` instead of the more correct `==`
         // to tell the compiler that the pos..cap slice is always valid.
-
         if *me.pos >= *me.cap {
-            if *me.rollback >= 0 {
-                if *me.cap >= *me.max_cap {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "*me.cap >= me.max_cap",
-                    )));
-                }
-
-                let mut buf = ReadBuf::new(&mut me.buf[*me.cap..*me.max_cap]);
-                ready!(me.inner.poll_read(cx, &mut buf))?;
-                *me.cap = *me.cap + buf.filled().len();
-            } else {
-                debug_assert!(*me.pos == *me.cap);
-                if *me.reinit_cap > 0 && *me.reinit_cap <= me.buf.len() {
-                    *me.max_cap = *me.reinit_cap;
-                    *me.reinit_cap = 0;
-                }
-                let mut buf = ReadBuf::new(&mut me.buf[0..*me.max_cap]);
-                ready!(me.inner.poll_read(cx, &mut buf))?;
-                *me.cap = buf.filled().len();
-                *me.pos = 0;
-                *me.rollback = -1;
-            }
+            debug_assert!(*me.pos == *me.cap);
+            let mut buf = ReadBuf::new(me.buf);
+            ready!(me.inner.poll_read(cx, &mut buf))?;
+            *me.cap = buf.filled().len();
+            *me.pos = 0;
         }
-
         Poll::Ready(Ok(&me.buf[*me.pos..*me.cap]))
     }
 
@@ -340,7 +330,6 @@ impl<R: AsyncRead + AsyncSeek> AsyncSeek for BufReader<R> {
                     self.as_mut()
                         .get_pin_mut()
                         .start_seek(SeekFrom::Current(offset))?;
-                    self.as_mut().get_pin_mut().poll_complete(cx)?
                 } else {
                     // seek backwards by our remainder, and then by the offset
                     self.as_mut()
@@ -357,8 +346,8 @@ impl<R: AsyncRead + AsyncSeek> AsyncSeek for BufReader<R> {
                     self.as_mut()
                         .get_pin_mut()
                         .start_seek(SeekFrom::Current(n))?;
-                    self.as_mut().get_pin_mut().poll_complete(cx)?
                 }
+                self.as_mut().get_pin_mut().poll_complete(cx)?
             }
             SeekState::PendingOverflowed(n) => {
                 if self.as_mut().get_pin_mut().poll_complete(cx)?.is_pending() {
@@ -395,6 +384,45 @@ impl<R: AsyncRead + AsyncSeek> AsyncSeek for BufReader<R> {
     }
 }
 
+use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+use crate::util::StreamReadMsg;
+use bytes::Bytes;
+
+impl<R: AsyncRead + AsyncWriteMsg> AsyncWriteMsg for BufReader<R> {
+    fn poll_write_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        self.get_pin_mut().poll_write_msg(cx, buf)
+    }
+
+    fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_write_msg(cx)
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_pin_mut().poll_write_ready(cx)
+    }
+
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        file_fd: i32,
+        seek: u64,
+        size: usize,
+    ) -> Poll<io::Result<usize>> {
+        self.get_pin_mut().poll_sendfile(cx, file_fd, seek, size)
+    }
+
+    fn is_write_msg(&self) -> bool {
+        self.inner.is_write_msg()
+    }
+
+    fn write_cache_size(&self) -> usize {
+        self.inner.write_cache_size()
+    }
+}
+
 impl<R: AsyncRead + AsyncWrite> AsyncWrite for BufReader<R> {
     fn poll_write(
         self: Pin<&mut Self>,
@@ -413,7 +441,7 @@ impl<R: AsyncRead + AsyncWrite> AsyncWrite for BufReader<R> {
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.get_ref().is_write_vectored()
+        self.inner.is_write_vectored()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -431,8 +459,18 @@ impl<R: fmt::Debug> fmt::Debug for BufReader<R> {
             .field("reader", &self.inner)
             .field(
                 "buffer",
-                &format_args!("{}/{}", self.cap - self.pos, self.max_cap),
+                &format_args!("{}/{}", self.cap - self.pos, self.buf.len()),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assert_unpin() {
+        crate::is_unpin::<BufReader<()>>();
     }
 }

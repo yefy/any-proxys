@@ -5,16 +5,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWrite, ReadBuf};
 
-pub const DEFAULT_BUF_SIZE: usize = 4 * 1024;
-
-macro_rules! ready {
-    ($e:expr $(,)?) => {
-        match $e {
-            std::task::Poll::Ready(t) => t,
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-    };
-}
+use crate::ready;
+use crate::DEFAULT_BUF_SIZE;
 
 pin_project! {
     /// Wraps a writer and buffers its output.
@@ -121,6 +113,61 @@ impl<W: AsyncWrite> BufWriter<W> {
     /// Returns a reference to the internally buffered data.
     pub fn buffer(&self) -> &[u8] {
         &self.buf
+    }
+}
+use crate::io::async_stream::Stream;
+impl<W: AsyncWrite + Stream> Stream for BufWriter<W> {
+    fn raw_fd(&self) -> i32 {
+        self.inner.raw_fd()
+    }
+    fn is_sendfile(&self) -> bool {
+        self.inner.is_sendfile()
+    }
+}
+use crate::io::async_stream::AsyncStream;
+impl<W: AsyncWrite + AsyncStream> AsyncStream for BufWriter<W> {
+    fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_single(cx)
+    }
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
+        self.get_pin_mut().poll_raw_fd(cx)
+    }
+}
+
+use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
+impl<W: AsyncWrite + AsyncWriteMsg> AsyncWriteMsg for BufWriter<W> {
+    fn poll_write_msg(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut AsyncWriteBuf,
+    ) -> Poll<io::Result<usize>> {
+        ready!(self.as_mut().flush_buf(cx))?;
+        self.get_pin_mut().poll_write_msg(cx, buf)
+    }
+
+    fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_write_msg(cx)
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.get_pin_mut().poll_write_ready(cx)
+    }
+
+    fn poll_sendfile(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        file_fd: i32,
+        seek: u64,
+        size: usize,
+    ) -> Poll<io::Result<usize>> {
+        ready!(self.as_mut().flush_buf(cx))?;
+        self.get_pin_mut().poll_sendfile(cx, file_fd, seek, size)
+    }
+
+    fn is_write_msg(&self) -> bool {
+        self.inner.is_write_msg()
+    }
+    fn write_cache_size(&self) -> usize {
+        self.buf.len() + self.inner.write_cache_size()
     }
 }
 
@@ -275,6 +322,44 @@ impl<W: AsyncWrite + AsyncSeek> AsyncSeek for BufWriter<W> {
     }
 }
 
+use crate::io::async_read_msg::AsyncReadMsg;
+use crate::util::StreamReadMsg;
+
+impl<W: AsyncWrite + AsyncReadMsg> AsyncReadMsg for BufWriter<W> {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        self.get_pin_mut().poll_try_read_msg(cx, msg_size)
+    }
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        self.get_pin_mut().poll_read_msg(cx, msg_size)
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        self.get_pin_mut().poll_is_read_msg(cx)
+    }
+
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.get_pin_mut().poll_try_read(cx, buf)
+    }
+    fn is_read_msg(&self) -> bool {
+        self.inner.is_read_msg()
+    }
+    fn read_cache_size(&self) -> usize {
+        self.inner.read_cache_size()
+    }
+}
+
 impl<W: AsyncWrite + AsyncRead> AsyncRead for BufWriter<W> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -291,7 +376,7 @@ impl<W: AsyncWrite + AsyncBufRead> AsyncBufRead for BufWriter<W> {
     }
 
     fn consume(self: Pin<&mut Self>, amt: usize) {
-        self.get_pin_mut().consume(amt)
+        self.get_pin_mut().consume(amt);
     }
 }
 
@@ -305,5 +390,15 @@ impl<W: fmt::Debug> fmt::Debug for BufWriter<W> {
             )
             .field("written", &self.written)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assert_unpin() {
+        crate::is_unpin::<BufWriter<()>>();
     }
 }

@@ -26,6 +26,7 @@ impl AccessLog {
                 local_addr: Some(SocketAddr::from(([127, 0, 0, 1], 18080))),
                 domain: None,
                 is_tls: false,
+                raw_fd: 0,
             }),
             false,
             None,

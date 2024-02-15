@@ -5,6 +5,7 @@ use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::util;
 use crate::Protocol7;
+use any_base::io::async_stream::Stream as IoStream;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::ArcMutex;
 use anyhow::anyhow;
@@ -152,13 +153,6 @@ impl server::Connection for Connection {
         let remote_addr = self.remote_addr.take().unwrap();
         let local_addr = tcp_stream.local_addr().unwrap();
 
-        //#[cfg(unix)]
-        //use std::os::unix::io::AsRawFd;
-        //#[cfg(unix)]
-        //let fd = tcp_stream.as_raw_fd();
-        //#[cfg(not(unix))]
-        let fd = 0;
-
         #[cfg(feature = "anyproxy-openssl")]
         {
             use openssl::ssl::Ssl;
@@ -207,12 +201,13 @@ impl server::Connection for Connection {
             let domain = domain.unwrap().to_string();
 
             let stream = Stream::new(StreamData::Openssl(ssl_stream));
-            let mut stream = StreamFlow::new(fd, stream);
+            let mut stream = StreamFlow::new(stream, Some(vec!["shut down".to_string()]));
             let read_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
             stream.set_config(read_timeout, write_timeout, None);
+            let raw_fd = stream.raw_fd();
             Ok(Some((
                 stream,
                 ServerStreamInfo {
@@ -221,6 +216,7 @@ impl server::Connection for Connection {
                     local_addr: Some(local_addr),
                     domain: Some(domain.into()),
                     is_tls: true,
+                    raw_fd,
                 },
             )))
         }
@@ -248,7 +244,7 @@ impl server::Connection for Connection {
             };
 
             let stream = Stream::new(StreamData::S(ssl_stream));
-            let mut stream = StreamFlow::new(fd, stream);
+            let mut stream = StreamFlow::new(stream, Some(vec!["shut down".to_string()]));
             let read_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =

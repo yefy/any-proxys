@@ -2,6 +2,7 @@ use crate::stream::server;
 use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
+use any_base::io::async_stream::Stream as IoStream;
 use any_base::util::ArcString;
 use any_tunnel::server as tunnel_server;
 use any_tunnel::stream as tunnel_stream;
@@ -115,10 +116,12 @@ impl server::Connection for Connection {
         let remote_addr = self.remote_addr.take().unwrap();
         let local_addr = self.local_addr.clone();
         let domain = self.domain.clone();
-        let mut stream = stream_flow::StreamFlow::new(0, stream);
+        let mut stream = stream_flow::StreamFlow::new(stream, None);
         let read_timeout = tokio::time::Duration::from_secs(self.stream_recv_timeout as u64);
         let write_timeout = tokio::time::Duration::from_secs(self.stream_send_timeout as u64);
         stream.set_config(read_timeout, write_timeout, None);
+        let raw_fd = stream.raw_fd();
+
         Ok(Some((
             stream,
             ServerStreamInfo {
@@ -127,6 +130,7 @@ impl server::Connection for Connection {
                 local_addr,
                 domain,
                 is_tls: self.is_tls,
+                raw_fd,
             },
         )))
     }

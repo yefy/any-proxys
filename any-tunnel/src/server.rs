@@ -4,8 +4,8 @@ use super::stream_flow::StreamFlow;
 use crate::peer_stream::PeerStreamKey;
 use crate::protopack::TunnelHello;
 use any_base::executor_local_spawn::Runtime;
-use any_base::stream::StreamReadWriteTokio;
 use any_base::stream_flow::StreamReadWriteFlow;
+use any_base::stream_flow::StreamReadWriteTokio;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -84,21 +84,9 @@ impl Publish {
         remote_addr: SocketAddr,
         domain: Option<ArcString>,
     ) -> Result<()> {
+        let rw = any_base::stream::Stream::new(rw);
         let buf_stream = any_base::io::buf_stream::BufStream::new(rw);
-        self.push_peer_stream_buf_stream(buf_stream, local_addr, remote_addr, domain)
-            .await
-    }
-
-    pub async fn push_peer_stream_buf_stream<RW: StreamReadWriteTokio + 'static>(
-        &self,
-        rw: RW,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-        domain: Option<ArcString>,
-    ) -> Result<()> {
-        use any_base::stream::Stream;
-        let rw = Stream::new(rw);
-        self.push_peer_stream(rw, local_addr, remote_addr, domain)
+        self.push_peer_stream(buf_stream, local_addr, remote_addr, domain)
             .await
     }
 
@@ -111,7 +99,7 @@ impl Publish {
     ) -> Result<()> {
         self.server
             .create_accept_connect(
-                StreamFlow::new(0, rw),
+                StreamFlow::new(rw, None),
                 local_addr,
                 remote_addr,
                 domain,

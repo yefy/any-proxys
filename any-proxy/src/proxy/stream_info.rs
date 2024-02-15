@@ -21,6 +21,7 @@ pub enum ErrStatus {
 }
 
 use crate::proxy::StreamStreamContext;
+use any_base::stream_flow::StreamFlowErr;
 /// 200 对应的详细错误
 //200
 use lazy_static::lazy_static;
@@ -126,6 +127,69 @@ impl ErrStatus200 for ErrStatusUpstream {
     }
 }
 
+use any_base::stream_flow;
+pub struct ErrStatusInfo {
+    pub err: StreamFlowErr,
+    pub err_status_200: Box<dyn ErrStatus200>,
+    pub is_close: bool,
+    pub err_str: Option<ArcString>,
+    pub is_ups_close: bool,
+}
+
+impl ErrStatusInfo {
+    pub fn new(err: StreamFlowErr, err_status_200: Box<dyn ErrStatus200>) -> ErrStatusInfo {
+        let (is_close, err_str, is_ups_close) = Self::err(&err, &err_status_200);
+        ErrStatusInfo {
+            err,
+            err_status_200,
+            is_close,
+            err_str,
+            is_ups_close,
+        }
+    }
+
+    pub fn err(
+        err: &StreamFlowErr,
+        err_status_200: &Box<dyn ErrStatus200>,
+    ) -> (bool, Option<ArcString>, bool) {
+        if err == &stream_flow::StreamFlowErr::WriteClose {
+            (
+                true,
+                Some(err_status_200.write_close()),
+                err_status_200.is_ups_err(),
+            )
+        } else if err == &stream_flow::StreamFlowErr::ReadClose {
+            (
+                true,
+                Some(err_status_200.read_close()),
+                err_status_200.is_ups_err(),
+            )
+        } else if err == &stream_flow::StreamFlowErr::WriteReset {
+            (
+                true,
+                Some(err_status_200.write_reset()),
+                err_status_200.is_ups_err(),
+            )
+        } else if err == &stream_flow::StreamFlowErr::ReadReset {
+            (
+                true,
+                Some(err_status_200.read_reset()),
+                err_status_200.is_ups_err(),
+            )
+        } else if err == &stream_flow::StreamFlowErr::WriteTimeout {
+            (false, Some(err_status_200.write_timeout()), false)
+        } else if err == &stream_flow::StreamFlowErr::ReadTimeout {
+            (false, Some(err_status_200.read_timeout()), false)
+        } else if err == &stream_flow::StreamFlowErr::WriteErr {
+            (false, Some(err_status_200.write_err()), false)
+        } else if err == &stream_flow::StreamFlowErr::ReadErr {
+            (false, Some(err_status_200.read_err()), false)
+        } else {
+            (true, None, false)
+        }
+    }
+}
+
 pub struct StreamInfo {
     pub executors: Option<ExecutorsLocal>,
     pub server_stream_info: Arc<ServerStreamInfo>,
@@ -145,6 +209,7 @@ pub struct StreamInfo {
     pub upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
     pub upstream_stream_flow_info: ArcMutex<StreamFlowInfo>,
     pub stream_work_times: Vec<(String, f32)>,
+    pub stream_work_times2: Vec<(bool, String, f32)>,
     pub stream_work_time: Option<Instant>,
     pub is_discard_flow: bool,
     pub is_open_ebpf: bool,
@@ -198,6 +263,7 @@ impl StreamInfo {
             upstream_connect_flow_info: ArcMutex::new(StreamFlowInfo::new()),
             upstream_stream_flow_info: ArcMutex::new(StreamFlowInfo::new()),
             stream_work_times: Vec::new(),
+            stream_work_times2: Vec::new(),
             stream_work_time: Some(Instant::now()),
             is_discard_flow: false,
             is_open_ebpf: false,
@@ -223,7 +289,7 @@ impl StreamInfo {
         }
     }
 
-    pub fn add_work_time(&mut self, name: &str) {
+    pub fn add_work_time1(&mut self, name: &str) {
         if self.debug_is_open_stream_work_times {
             let stream_work_time = self
                 .stream_work_time
@@ -233,7 +299,19 @@ impl StreamInfo {
                 .as_secs_f32();
             self.stream_work_times
                 .push((name.to_string(), stream_work_time));
-            self.stream_work_time = Some(Instant::now());
+        }
+    }
+
+    pub fn add_work_time2(&mut self, is_client: bool, name: &str) {
+        if self.debug_is_open_stream_work_times {
+            let stream_work_time = self
+                .stream_work_time
+                .as_ref()
+                .unwrap()
+                .elapsed()
+                .as_secs_f32();
+            self.stream_work_times2
+                .push((is_client, name.to_string(), stream_work_time));
         }
     }
 }

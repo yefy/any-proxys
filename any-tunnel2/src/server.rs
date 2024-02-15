@@ -5,8 +5,8 @@ use super::stream_flow::StreamFlow;
 use super::tunnel::Tunnel;
 use super::Protocol4;
 use crate::peer_client::PeerClientSender;
-use any_base::stream::StreamReadWriteTokio;
 use any_base::stream_flow::StreamReadWriteFlow;
+use any_base::stream_flow::StreamReadWriteTokio;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -49,20 +49,10 @@ impl Publish {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
+        let rw = any_base::stream::Stream::new(rw);
         let buf_stream = any_base::io::buf_stream::BufStream::new(rw);
-        self.push_peer_stream_buf_stream(buf_stream, local_addr, remote_addr)
+        self.push_peer_stream(buf_stream, local_addr, remote_addr)
             .await
-    }
-
-    pub async fn push_peer_stream_buf_stream<RW: StreamReadWriteTokio + 'static>(
-        &self,
-        rw: RW,
-        local_addr: SocketAddr,
-        remote_addr: SocketAddr,
-    ) -> Result<()> {
-        use any_base::stream::Stream;
-        let rw = Stream::new(rw);
-        self.push_peer_stream(rw, local_addr, remote_addr).await
     }
 
     pub async fn push_peer_stream<RW: StreamReadWriteFlow + 'static>(
@@ -74,7 +64,7 @@ impl Publish {
         self.server
             .insert_peer_stream(
                 self.tunnel_key.clone(),
-                StreamFlow::new(0, rw),
+                StreamFlow::new(rw, None),
                 local_addr,
                 remote_addr,
             )
@@ -162,8 +152,7 @@ impl Server {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
-        let (mut r, _) = tokio::io::split(&mut stream);
-        let tunnel_hello = protopack::read_tunnel_hello(&mut r)
+        let tunnel_hello = protopack::read_tunnel_hello(&mut stream)
             .await
             .map_err(|e| anyhow!("err:read_tunnel_hello => e:{}", e))?;
         log::debug!("server tunnel_hello:{:?}", tunnel_hello);

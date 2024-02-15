@@ -339,7 +339,7 @@ impl Anyproxy {
     ) {
         self.executor._start(
             #[cfg(feature = "anyspawn-count")]
-            format!("{}:{}", file!(), line!()),
+            None,
             move |_| async move {
                 anyproxy_group
                     .stop(is_fast_shutdown, shutdown_timeout)

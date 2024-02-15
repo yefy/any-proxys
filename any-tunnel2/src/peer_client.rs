@@ -429,9 +429,8 @@ impl PeerClient {
             session_id,
         };
         log::debug!("client hello_pack:{:?}", hello_pack);
-        let (_, mut w) = tokio::io::split(&mut stream);
         protopack::write_pack(
-            &mut w,
+            &mut stream,
             protopack::TunnelHeaderType::TunnelHello,
             &hello_pack,
             true,

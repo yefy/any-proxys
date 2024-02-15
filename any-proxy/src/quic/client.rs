@@ -164,7 +164,7 @@ impl client::Connection for Connection {
             }
             Ok((w, r)) => {
                 let stream = Stream::new(r, w);
-                let stream = StreamFlow::new(0, stream);
+                let stream = StreamFlow::new(stream, None);
                 Ok((Protocol7::Quic, stream, local_addr, remote_addr))
             }
         }

@@ -5,8 +5,6 @@ use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
 use crate::proxy::{proxy, StreamCloseType};
 use any_base::stream_flow::StreamFlow;
-#[cfg(unix)]
-use any_base::typ::ArcMutexTokio;
 use any_base::typ::{Share, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -17,6 +15,8 @@ pub struct HttpStream {
     scc: ShareRw<StreamConfigContext>,
     upstream_stream: Option<StreamFlow>,
     is_single: bool,
+    is_client_sendfile: bool,
+    is_upstream_sendfile: bool,
 }
 
 impl HttpStream {
@@ -25,16 +25,28 @@ impl HttpStream {
         scc: ShareRw<StreamConfigContext>,
         upstream_stream: StreamFlow,
         is_single: bool,
+        is_client_sendfile: bool,
+        is_upstream_sendfile: bool,
     ) -> HttpStream {
         HttpStream {
             http_arg,
             scc,
             upstream_stream: Some(upstream_stream),
             is_single,
+            is_client_sendfile,
+            is_upstream_sendfile,
         }
     }
 
-    pub async fn start(self, mut stream: StreamFlow) -> Result<()> {
+    pub async fn start(mut self, mut stream: StreamFlow) -> Result<()> {
+        self.upstream_stream.as_mut().unwrap().set_stream_info(Some(
+            self.http_arg
+                .stream_info
+                .get()
+                .upstream_stream_flow_info
+                .clone(),
+        ));
+
         let stream_info = self.http_arg.stream_info.clone();
         let client_stream_flow_info = {
             let mut stream_info = stream_info.get_mut();
@@ -69,21 +81,18 @@ impl proxy::Stream for HttpStream {
         client_stream: StreamFlow,
     ) -> Result<()> {
         let upstream_stream = self.upstream_stream.take().unwrap();
-        #[cfg(unix)]
-        let client_sendfile = ArcMutexTokio::default();
-        #[cfg(unix)]
-        let upstream_sendfile = ArcMutexTokio::default();
 
         let ret = if self.is_single {
+            stream_info
+                .get_mut()
+                .add_work_time1("stream_to_stream_single");
             StreamStream::stream_to_stream_single(
                 self.scc.clone(),
                 stream_info.clone(),
                 client_stream,
                 upstream_stream,
-                #[cfg(unix)]
-                client_sendfile,
-                #[cfg(unix)]
-                upstream_sendfile,
+                self.is_client_sendfile,
+                self.is_upstream_sendfile,
             )
             .await
             .map_err(|e| {
@@ -94,15 +103,14 @@ impl proxy::Stream for HttpStream {
                 )
             })
         } else {
+            stream_info.get_mut().add_work_time1("stream_to_stream");
             StreamStream::stream_to_stream(
                 self.scc.clone(),
                 stream_info.clone(),
                 client_stream,
                 upstream_stream,
-                #[cfg(unix)]
-                client_sendfile,
-                #[cfg(unix)]
-                upstream_sendfile,
+                self.is_client_sendfile,
+                self.is_upstream_sendfile,
                 StreamCloseType::Shutdown,
                 StreamCloseType::Fast,
             )
@@ -116,7 +124,10 @@ impl proxy::Stream for HttpStream {
             })
         };
 
-        self.http_arg.stream_info.get_mut().add_work_time("end");
+        self.http_arg
+            .stream_info
+            .get_mut()
+            .add_work_time1("stream_to_stream end");
 
         ret
     }

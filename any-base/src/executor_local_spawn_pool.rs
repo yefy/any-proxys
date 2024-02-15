@@ -38,7 +38,7 @@ impl ExecutorLocalSpawnPool {
 
     pub fn _start<S, F>(
         &mut self,
-        #[cfg(feature = "anyspawn-count")] name: String,
+        #[cfg(feature = "anyspawn-count")] name: Option<String>,
         service: S,
     ) -> Result<()>
     where

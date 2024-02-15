@@ -72,10 +72,13 @@ strip = true
 
 [dependencies]
 any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-anyhow = {path = "../anyhow"}
-awaitgroup = {path = "../awaitgroup"}
-any-tunnel = {path = "../any-tunnel", features = ["anypool-dynamic-pool"], default-features = false}
+anyhow = {path = "../3rdparty/anyhow"}
+awaitgroup = {path = "../3rdparty/awaitgroup"}
+any-tunnel = {path = "../any-tunnel"}
 any-tunnel2 = {path = "../any-tunnel2", features = ["anyack", "anyruntime-tokio-spawn"], default-features = false}
+hyper = { path = "../3rdparty/hyper-0.14.23", features = ["full"] }
+#hyper = { version = "0.14.23", features = ["full"] }
+#hyper = {git = "https://github.com/hyperium/hyper", features = ["full"]}
 #quinn = {path = "../quinn-0.8.5"}
 quinn = "0.9.3"
 log = "0.4.17"
@@ -110,8 +113,6 @@ syncpool = "0.1.6"
 num = "0.4.0"
 num-derive = "0.3.3"
 num-traits = "0.2.15"
-hyper = { version = "0.14.23", features = ["full"] }
-#hyper = {git = "https://github.com/hyperium/hyper", features = ["full"]}
 dynamic-pool = "0.2.2"
 zip = "0.6.3"
 page_size = "0.5.0"
@@ -126,6 +127,11 @@ linked_hash_set = "0.1"
 once_cell = "1.0"
 url = "2.3.1"
 futures-core = "0.3.29"
+md5 = "0.7.0"
+time = "0.2"
+
+[dependencies.httpdate]
+version = "1.0"
 
 [dependencies.libbpf-rs]
 version = "0.20"
@@ -139,11 +145,15 @@ optional = true
 version = "0.6.3"
 
 [build-dependencies.anyhow]
-path = "../anyhow"
+path = "../3rdparty/anyhow"
 
 [dependencies.socket2]
 version = "0.4.2"
 features = ["all"]
+
+[dependencies.nix]
+version = "0.27.1"
+features = ["socket"]
 
 [target."cfg(unix)".dependencies.jemallocator]
 version = "0.5.0"

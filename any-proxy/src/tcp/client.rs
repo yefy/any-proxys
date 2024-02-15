@@ -10,8 +10,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::io;
 use std::net::SocketAddr;
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
@@ -128,12 +126,8 @@ impl client::Connection for Connection {
                 let remote_addr = tcp_stream
                     .peer_addr()
                     .map_err(|e| anyhow!("err:tcp_stream.peer_addr => e:{}", e))?;
-                #[cfg(unix)]
-                let fd = tcp_stream.as_raw_fd();
-                #[cfg(not(unix))]
-                let fd = 0;
-                let stream = Stream::new(tcp_stream);
-                let stream = StreamFlow::new(fd, stream);
+                let stream = Stream::new(tcp_stream, self.context.config.clone());
+                let stream = StreamFlow::new(stream, None);
                 Ok((Protocol7::Tcp, stream, local_addr, remote_addr))
             }
         }

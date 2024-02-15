@@ -1,7 +1,7 @@
 use crate::config as conf;
 use crate::config::http_core_plugin::PluginHandleStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
-use crate::proxy::{StreamCacheBuffer, StreamCloseType};
+use crate::proxy::StreamCloseType;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny};
@@ -18,14 +18,12 @@ lazy_static! {
 pub struct ConfStream {
     pub buffer_cache: Arc<String>,
     pub stream_cache_size: i64,
-    pub is_open_stream_cache_merge: bool,
-    pub open_stream_cache_merge_mil_time: u64,
     pub is_open_stream_cache: bool,
     pub tmp_file_size: i64,
     pub limit_rate_after: i64,
-    pub max_limit_rate: u64,
-    pub max_stream_cache_size: u64,
-    pub max_tmp_file_size: u64,
+    pub max_limit_rate: usize,
+    pub max_stream_cache_size: i64,
+    pub max_tmp_file_size: i64,
     pub is_tmp_file_io_page: bool,
     pub page_size: usize,
     pub min_cache_buffer_size: usize,
@@ -33,6 +31,11 @@ pub struct ConfStream {
     pub min_cache_file_size: usize,
     pub plugin_handle_stream: ArcRwLockTokio<PluginHandleStream>,
     pub read_buffer_size: usize,
+    pub write_buffer_size: usize,
+    pub stream_delay_mil_time: u64,
+    pub stream_nopush: bool,
+    pub stream_nodelay_size: i64,
+    pub sendfile_max_write_size: usize,
 }
 
 impl ConfStream {
@@ -41,18 +44,19 @@ impl ConfStream {
         limit_rate_after: u64,
         limit_rate: u64,
         stream_cache_size: usize,
-        is_open_stream_cache_merge: bool,
-        open_stream_cache_merge_mil_time: u64,
         is_open_stream_cache: bool,
         is_tmp_file_io_page: bool,
         read_buffer_page_size: usize,
+        mut write_buffer_page_size: usize,
+        stream_delay_mil_time: u64,
+        stream_nopush: bool,
+        stream_nodelay_size: i64,
+        sendfile_max_write_size: usize,
     ) -> Self {
         use crate::util::default_config;
 
         let buffer_cache = if is_open_stream_cache {
-            if tmp_file_size > 0 && stream_cache_size > 0 {
-                "file_and_cache".to_string()
-            } else if tmp_file_size > 0 && stream_cache_size <= 0 {
+            if tmp_file_size > 0 {
                 "file".to_string()
             } else {
                 "cache".to_string()
@@ -61,49 +65,64 @@ impl ConfStream {
             "memory".to_string()
         };
 
+        if write_buffer_page_size < read_buffer_page_size {
+            write_buffer_page_size = read_buffer_page_size;
+        }
+
         let page_size = default_config::PAGE_SIZE.load(Ordering::Relaxed);
         let mut ssc = ConfStream {
             buffer_cache: Arc::new(buffer_cache),
             stream_cache_size: stream_cache_size as i64,
-            is_open_stream_cache_merge,
-            open_stream_cache_merge_mil_time,
             is_open_stream_cache,
             tmp_file_size: tmp_file_size as i64,
             limit_rate_after: limit_rate_after as i64,
-            max_limit_rate: limit_rate,
-            max_stream_cache_size: stream_cache_size as u64,
-            max_tmp_file_size: tmp_file_size,
+            max_limit_rate: limit_rate as usize,
+            max_stream_cache_size: stream_cache_size as i64,
+            max_tmp_file_size: tmp_file_size as i64,
             is_tmp_file_io_page,
             page_size,
-            min_cache_buffer_size: StreamCacheBuffer::buffer_size(),
-            min_read_buffer_size: page_size,
-            min_cache_file_size: page_size * 256,
+            min_cache_buffer_size: page_size * 4 * 8,
+            min_read_buffer_size: page_size * 2,
+            min_cache_file_size: page_size * 1024,
             plugin_handle_stream: ArcRwLockTokio::default(),
             read_buffer_size: read_buffer_page_size * page_size,
+            write_buffer_size: write_buffer_page_size * page_size,
+            stream_delay_mil_time,
+            stream_nopush,
+            stream_nodelay_size,
+            sendfile_max_write_size,
         };
 
-        if ssc.stream_cache_size > 0 && ssc.stream_cache_size < ssc.min_cache_buffer_size as i64 {
+        if ssc.read_buffer_size < ssc.min_read_buffer_size {
+            ssc.read_buffer_size = ssc.min_read_buffer_size;
+        }
+
+        if ssc.write_buffer_size < ssc.read_buffer_size {
+            ssc.write_buffer_size = ssc.read_buffer_size;
+        }
+
+        if ssc.stream_cache_size < ssc.min_cache_buffer_size as i64 {
             ssc.stream_cache_size = ssc.min_cache_buffer_size as i64;
-            ssc.max_stream_cache_size = ssc.min_cache_buffer_size as u64;
+            ssc.max_stream_cache_size = ssc.min_cache_buffer_size as i64;
         }
 
         if ssc.tmp_file_size > 0 && ssc.tmp_file_size < ssc.min_cache_file_size as i64 {
             ssc.tmp_file_size = ssc.min_cache_file_size as i64;
-            ssc.max_tmp_file_size = ssc.min_cache_file_size as u64;
+            ssc.max_tmp_file_size = ssc.min_cache_file_size as i64;
         }
 
         if ssc.stream_cache_size > 0 {
             let stream_cache_size =
                 (ssc.stream_cache_size / ssc.page_size as i64 + 1) * ssc.page_size as i64;
             ssc.stream_cache_size = stream_cache_size;
-            ssc.max_stream_cache_size = stream_cache_size as u64;
+            ssc.max_stream_cache_size = stream_cache_size;
         }
 
         if ssc.tmp_file_size > 0 {
             let tmp_file_size =
                 (ssc.tmp_file_size / ssc.page_size as i64 + 1) * ssc.page_size as i64;
             ssc.tmp_file_size = tmp_file_size;
-            ssc.max_tmp_file_size = tmp_file_size as u64;
+            ssc.max_tmp_file_size = tmp_file_size;
         }
 
         ssc
@@ -112,8 +131,6 @@ impl ConfStream {
 
 pub struct Conf {
     pub stream_cache_size: usize,
-    pub is_open_stream_cache_merge: bool,
-    pub open_stream_cache_merge_mil_time: u64,
     pub is_upload_open_stream_cache: bool,
     pub is_download_open_stream_cache: bool,
     pub debug_is_open_stream_work_times: bool,
@@ -129,6 +146,7 @@ pub struct Conf {
     pub upload_tmp_file_size: u64,
     pub debug_is_open_print: bool,
     pub is_open_sendfile: bool,
+    pub sendfile_max_write_size: usize,
     pub tcp_config_name: String,
     pub quic_config_name: String,
     pub is_proxy_protocol_hello: bool,
@@ -139,18 +157,23 @@ pub struct Conf {
     pub download: Arc<ConfStream>,
     pub upload: Arc<ConfStream>,
     pub read_buffer_page_size: usize,
+    pub write_buffer_page_size: usize,
     pub is_port_direct_ebpf: bool,
     pub client_timeout_mil_time_ebpf: u64,
     pub upstream_timeout_mil_time_ebpf: u64,
     pub close_type: StreamCloseType,
+    pub stream_delay_mil_time: u64,
+    pub stream_nopush: bool,
+    pub stream_nodelay_size: i64,
+    pub directio: u64,
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
 const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_default";
 const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_default";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
-const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 2;
-const OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT: u64 = 100;
+const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 8;
+const WRITE_BUFFER_PAGE_SIZE_DEFAULT: usize = 16;
 const CLIENT_TIMEOUT_MIL_TIME_EBPF_DEFAULT: u64 = 120000;
 const UPSTREAM_TIMEOUT_MIL_TIME_EBPF_DEFAULT: u64 = 2000;
 const CLOSE_TYPE_DEFAULT: StreamCloseType = StreamCloseType::Shutdown;
@@ -158,15 +181,17 @@ const CLOSE_TYPE_FAST: &str = "fast";
 const CLOSE_TYPE_SHUTDOWM: &str = "shutdown";
 const CLOSE_TYPE_WAIT_EMPTY: &str = "wait_empty";
 const CLOSE_TYPE_ALL: &str = "fast shutdown wait_empty";
+const IS_OPEN_STREAM_CACHE: bool = true;
+const STREAM_MAX_DELAY_MIL_TIME_DEFAULT: u64 = 200;
+const STREAM_NODELAY_SIZE_DEFAULT: i64 = 8192;
+const SENDFILE_MAX_WRITE_SIZE_DEFAULT: usize = 1048576;
 
 impl Conf {
     pub fn new() -> Self {
         Conf {
             stream_cache_size: STREAM_CACHE_SIZE_DEFAULT,
-            is_open_stream_cache_merge: true,
-            open_stream_cache_merge_mil_time: OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT,
-            is_upload_open_stream_cache: false,
-            is_download_open_stream_cache: false,
+            is_upload_open_stream_cache: IS_OPEN_STREAM_CACHE,
+            is_download_open_stream_cache: IS_OPEN_STREAM_CACHE,
             debug_is_open_stream_work_times: false,
             debug_print_access_log_time: 0,
             debug_print_stream_flow_time: 0,
@@ -180,6 +205,7 @@ impl Conf {
             upload_tmp_file_size: 0,
             debug_is_open_print: false,
             is_open_sendfile: false,
+            sendfile_max_write_size: SENDFILE_MAX_WRITE_SIZE_DEFAULT,
             tcp_config_name: TCP_CONFIG_NAME_DEFAULT.to_string(),
             quic_config_name: QUIC_CONFIG_NAME_DEFAULT.to_string(),
             is_proxy_protocol_hello: false,
@@ -187,13 +213,22 @@ impl Conf {
             is_open_ebpf: false,
             http_context: HTTP_CONTEXT.clone(),
             is_disable_share_http_context: false,
-            download: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
-            upload: Arc::new(ConfStream::new(1, 1, 1, 1, true, 100, false, true, 2)),
+            download: Arc::new(ConfStream::new(
+                1, 1, 1, 1, false, true, 2, 2, 0, false, 8192, 0,
+            )),
+            upload: Arc::new(ConfStream::new(
+                1, 1, 1, 1, false, true, 2, 2, 0, false, 8192, 0,
+            )),
             read_buffer_page_size: READ_BUFFER_PAGE_SIZE_DEFAULT,
+            write_buffer_page_size: WRITE_BUFFER_PAGE_SIZE_DEFAULT,
             is_port_direct_ebpf: true,
             client_timeout_mil_time_ebpf: CLIENT_TIMEOUT_MIL_TIME_EBPF_DEFAULT,
             upstream_timeout_mil_time_ebpf: UPSTREAM_TIMEOUT_MIL_TIME_EBPF_DEFAULT,
             close_type: CLOSE_TYPE_DEFAULT,
+            stream_delay_mil_time: 0,
+            stream_nopush: false,
+            stream_nodelay_size: STREAM_NODELAY_SIZE_DEFAULT,
+            directio: 0,
         }
     }
 }
@@ -203,26 +238,6 @@ lazy_static! {
         module::Cmd {
             name: "stream_cache_size".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(stream_cache_size(ms, conf_arg, cmd, conf)),
-            typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_MAIN
-                | conf::CMD_CONF_TYPE_SERVER
-                | conf::CMD_CONF_TYPE_LOCAL,
-        },
-        module::Cmd {
-            name: "is_open_stream_cache_merge".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(is_open_stream_cache_merge(
-                ms, conf_arg, cmd, conf
-            )),
-            typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_MAIN
-                | conf::CMD_CONF_TYPE_SERVER
-                | conf::CMD_CONF_TYPE_LOCAL,
-        },
-        module::Cmd {
-            name: "open_stream_cache_merge_mil_time".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(open_stream_cache_merge_mil_time(
-                ms, conf_arg, cmd, conf
-            )),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
@@ -365,20 +380,26 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
-            name: "tcp_config_name".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(tcp_config_name(ms, conf_arg, cmd, conf)),
+            name: "sendfile_max_write_size".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(sendfile_max_write_size(
+                ms, conf_arg, cmd, conf
+            )),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
+            name: "tcp_config_name".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(tcp_config_name(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_SERVER,
+        },
+        module::Cmd {
             name: "quic_config_name".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(quic_config_name(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_MAIN
-                | conf::CMD_CONF_TYPE_SERVER
-                | conf::CMD_CONF_TYPE_LOCAL,
+            conf_typ: conf::CMD_CONF_TYPE_SERVER,
         },
         module::Cmd {
             name: "is_proxy_protocol_hello".to_string(),
@@ -423,6 +444,16 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
+            name: "write_buffer_page_size".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(write_buffer_page_size(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
             name: "is_port_direct_ebpf".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(is_port_direct_ebpf(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
@@ -453,6 +484,38 @@ lazy_static! {
         module::Cmd {
             name: "close_type".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(close_type(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "stream_delay_mil_time".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(stream_delay_mil_time(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "stream_nopush".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(stream_nopush(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "stream_nodelay_size".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(stream_nodelay_size(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "directio".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(directio(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
@@ -547,17 +610,10 @@ async fn merge_conf(
         if child_conf.stream_cache_size == STREAM_CACHE_SIZE_DEFAULT {
             child_conf.stream_cache_size = parent_conf.stream_cache_size;
         }
-        if child_conf.is_open_stream_cache_merge == true {
-            child_conf.is_open_stream_cache_merge = parent_conf.is_open_stream_cache_merge;
-        }
-        if child_conf.open_stream_cache_merge_mil_time == OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT {
-            child_conf.open_stream_cache_merge_mil_time =
-                parent_conf.open_stream_cache_merge_mil_time;
-        }
-        if child_conf.is_upload_open_stream_cache == false {
+        if child_conf.is_upload_open_stream_cache == IS_OPEN_STREAM_CACHE {
             child_conf.is_upload_open_stream_cache = parent_conf.is_upload_open_stream_cache;
         }
-        if child_conf.is_download_open_stream_cache == false {
+        if child_conf.is_download_open_stream_cache == IS_OPEN_STREAM_CACHE {
             child_conf.is_download_open_stream_cache = parent_conf.is_download_open_stream_cache;
         }
         if child_conf.debug_is_open_stream_work_times == false {
@@ -600,6 +656,9 @@ async fn merge_conf(
         if child_conf.is_open_sendfile == false {
             child_conf.is_open_sendfile = parent_conf.is_open_sendfile;
         }
+        if child_conf.sendfile_max_write_size == SENDFILE_MAX_WRITE_SIZE_DEFAULT {
+            child_conf.sendfile_max_write_size = parent_conf.sendfile_max_write_size;
+        }
         if child_conf.tcp_config_name == TCP_CONFIG_NAME_DEFAULT
             && parent_conf.tcp_config_name.len() > 0
         {
@@ -629,6 +688,10 @@ async fn merge_conf(
             child_conf.read_buffer_page_size = parent_conf.read_buffer_page_size.clone();
         }
 
+        if child_conf.write_buffer_page_size == WRITE_BUFFER_PAGE_SIZE_DEFAULT {
+            child_conf.write_buffer_page_size = parent_conf.write_buffer_page_size.clone();
+        }
+
         if child_conf.is_port_direct_ebpf == true {
             child_conf.is_port_direct_ebpf = parent_conf.is_port_direct_ebpf.clone();
         }
@@ -647,16 +710,33 @@ async fn merge_conf(
             child_conf.close_type = parent_conf.close_type.clone();
         }
 
+        if child_conf.stream_delay_mil_time == 0 {
+            child_conf.stream_delay_mil_time = parent_conf.stream_delay_mil_time.clone();
+        }
+
+        if child_conf.stream_nopush == false {
+            child_conf.stream_nopush = parent_conf.stream_nopush.clone();
+        }
+        if child_conf.stream_nodelay_size == STREAM_NODELAY_SIZE_DEFAULT {
+            child_conf.stream_nodelay_size = parent_conf.stream_nodelay_size.clone();
+        }
+        if child_conf.directio == 0 {
+            child_conf.directio = parent_conf.directio.clone();
+        }
+
         child_conf.download = Arc::new(ConfStream::new(
             child_conf.download_tmp_file_size,
             child_conf.download_limit_rate_after,
             child_conf.download_limit_rate,
             child_conf.stream_cache_size,
-            child_conf.is_open_stream_cache_merge,
-            child_conf.open_stream_cache_merge_mil_time,
             child_conf.is_download_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
+            child_conf.write_buffer_page_size,
+            child_conf.stream_delay_mil_time,
+            child_conf.stream_nopush,
+            child_conf.stream_nodelay_size,
+            child_conf.sendfile_max_write_size,
         ));
 
         child_conf.upload = Arc::new(ConfStream::new(
@@ -664,11 +744,14 @@ async fn merge_conf(
             child_conf.upload_limit_rate_after,
             child_conf.upload_limit_rate,
             child_conf.stream_cache_size,
-            child_conf.is_open_stream_cache_merge,
-            child_conf.open_stream_cache_merge_mil_time,
             child_conf.is_upload_open_stream_cache,
             child_conf.is_tmp_file_io_page,
             child_conf.read_buffer_page_size,
+            child_conf.write_buffer_page_size,
+            child_conf.stream_delay_mil_time,
+            child_conf.stream_nopush,
+            child_conf.stream_nodelay_size,
+            child_conf.sendfile_max_write_size,
         ));
 
         use super::http_core_plugin;
@@ -715,11 +798,7 @@ async fn init_conf(
     _main_confs: typ::ArcUnsafeAny,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
-    let conf = conf.get_mut::<Conf>();
-    if conf.read_buffer_page_size > 0 {
-        use crate::util::default_config::MIN_CACHE_BUFFER_NUM;
-        MIN_CACHE_BUFFER_NUM.store(conf.read_buffer_page_size, Ordering::SeqCst);
-    }
+    let _conf = conf.get_mut::<Conf>();
     return Ok(());
 }
 
@@ -731,43 +810,7 @@ async fn stream_cache_size(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.stream_cache_size = *conf_arg.value.get::<usize>();
-    if c.stream_cache_size <= 0 {
-        c.stream_cache_size = StreamCacheBuffer::buffer_size();
-    }
     log::trace!("c.stream_cache_size:{:?}", c.stream_cache_size);
-    return Ok(());
-}
-
-async fn is_open_stream_cache_merge(
-    _ms: module::Modules,
-    conf_arg: module::ConfArg,
-    _cmd: module::Cmd,
-    conf: typ::ArcUnsafeAny,
-) -> Result<()> {
-    let c = conf.get_mut::<Conf>();
-    c.is_open_stream_cache_merge = *conf_arg.value.get::<bool>();
-    log::trace!(
-        "c.is_open_stream_cache_merge:{:?}",
-        c.is_open_stream_cache_merge
-    );
-    return Ok(());
-}
-
-async fn open_stream_cache_merge_mil_time(
-    _ms: module::Modules,
-    conf_arg: module::ConfArg,
-    _cmd: module::Cmd,
-    conf: typ::ArcUnsafeAny,
-) -> Result<()> {
-    let c = conf.get_mut::<Conf>();
-    c.open_stream_cache_merge_mil_time = *conf_arg.value.get::<u64>();
-    log::trace!(
-        "c.open_stream_cache_merge_mil_time:{:?}",
-        c.open_stream_cache_merge_mil_time
-    );
-    if c.open_stream_cache_merge_mil_time <= 0 {
-        c.open_stream_cache_merge_mil_time = OPEN_STREAM_CACHE_MERGE_MIL_TIME_DEFAULT;
-    }
     return Ok(());
 }
 
@@ -980,6 +1023,17 @@ async fn is_open_sendfile(
     log::trace!("c.is_open_sendfile:{:?}", c.is_open_sendfile);
     return Ok(());
 }
+async fn sendfile_max_write_size(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.sendfile_max_write_size = *conf_arg.value.get::<usize>();
+    log::trace!("c.sendfile_max_write_size:{:?}", c.sendfile_max_write_size);
+    return Ok(());
+}
 async fn tcp_config_name(
     _ms: module::Modules,
     conf_arg: module::ConfArg,
@@ -1089,8 +1143,27 @@ async fn read_buffer_page_size(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.read_buffer_page_size = conf_arg.value.get::<usize>().clone();
+    if c.read_buffer_page_size < 2 {
+        c.read_buffer_page_size = 2
+    }
 
     log::trace!("c.read_buffer_page_size:{:?}", c.read_buffer_page_size);
+    return Ok(());
+}
+
+async fn write_buffer_page_size(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.write_buffer_page_size = conf_arg.value.get::<usize>().clone();
+    if c.write_buffer_page_size < 2 {
+        c.write_buffer_page_size = 2
+    }
+
+    log::trace!("c.write_buffer_page_size:{:?}", c.write_buffer_page_size);
     return Ok(());
 }
 
@@ -1167,5 +1240,60 @@ async fn close_type(
     }
 
     log::trace!("c.close_type:{:?}", c.close_type);
+    return Ok(());
+}
+
+async fn stream_delay_mil_time(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.stream_delay_mil_time = conf_arg.value.get::<u64>().clone();
+    if c.stream_delay_mil_time > STREAM_MAX_DELAY_MIL_TIME_DEFAULT {
+        c.stream_delay_mil_time = STREAM_MAX_DELAY_MIL_TIME_DEFAULT;
+    }
+
+    log::trace!("c.stream_delay_mil_time:{:?}", c.stream_delay_mil_time);
+    return Ok(());
+}
+
+async fn stream_nopush(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.stream_nopush = conf_arg.value.get::<bool>().clone();
+
+    log::trace!("c.stream_nopush:{:?}", c.stream_nopush);
+    return Ok(());
+}
+
+async fn stream_nodelay_size(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.stream_nodelay_size = conf_arg.value.get::<usize>().clone() as i64;
+
+    log::trace!("c.stream_nodelay_size:{:?}", c.stream_nodelay_size);
+    return Ok(());
+}
+
+async fn directio(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.directio = conf_arg.value.get::<u64>().clone();
+
+    log::trace!("c.directio:{:?}", c.directio);
     return Ok(());
 }

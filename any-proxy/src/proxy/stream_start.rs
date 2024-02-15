@@ -3,11 +3,13 @@ use super::proxy;
 use super::stream_info;
 use super::stream_info::ErrStatus;
 use super::stream_info::StreamInfo;
+use crate::proxy::stream_info::ErrStatusInfo;
 use crate::proxy::StreamTimeout;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
 use any_base::stream_flow;
 use any_base::typ::{ArcMutex, Share};
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use chrono::Local;
@@ -158,19 +160,25 @@ pub async fn stream_info_parse(
     let upstream_stream_flow_info = stream_info.upstream_stream_flow_info.clone();
     let mut client_stream_flow_info = client_stream_flow_info.get_mut();
     let mut upstream_stream_flow_info = upstream_stream_flow_info.get_mut();
-
     if stream_info.ssc_upload.is_some() {
-        let ssc_download = stream_info.ssc_download.get();
-        let ssd = ssc_download.ssd.get();
-        if ssd.total_read_size == 0
-            || ssd.total_write_size == 0
-            || ssd.total_read_size != ssd.total_write_size
-        {
+        let ssc = stream_info.ssc_download.get();
+        let ssd = ssc.ssd.get();
+        if ssd.total_read_size == 0 && ssd.total_write_size == 0 {
             is_error = true;
         }
-        let ssc_upload = stream_info.ssc_upload.get();
-        let ssd = ssc_upload.ssd.get();
-        if ssd.total_read_size != ssd.total_write_size {
+        if ssd.stream_cache_size > ssc.cs.max_stream_cache_size {
+            is_error = true;
+        }
+        if ssd.tmp_file_size > ssc.cs.max_tmp_file_size {
+            is_error = true;
+        }
+
+        let ssc = stream_info.ssc_upload.get();
+        let ssd = ssc.ssd.get();
+        if ssd.stream_cache_size > ssc.cs.max_stream_cache_size {
+            is_error = true;
+        }
+        if ssd.tmp_file_size > ssc.cs.max_tmp_file_size {
             is_error = true;
         }
     }
@@ -258,79 +266,63 @@ pub async fn stream_info_parse(
             }
         }
 
-        let (err, err_status_200): (
-            stream_flow::StreamFlowErr,
-            Option<Box<dyn stream_info::ErrStatus200>>,
-        ) = if client_stream_flow_info.err != stream_flow::StreamFlowErr::Init
-            && upstream_stream_flow_info.err != stream_flow::StreamFlowErr::Init
+        let errs = if client_stream_flow_info.err_time_millis
+            <= upstream_stream_flow_info.err_time_millis
         {
-            if client_stream_flow_info.err_time_millis >= upstream_stream_flow_info.err_time_millis
-            {
-                (
+            vec![
+                ErrStatusInfo::new(
                     client_stream_flow_info.err.clone(),
-                    Some(Box::new(stream_info::ErrStatusClient {})),
-                )
-            } else {
-                (
+                    Box::new(stream_info::ErrStatusClient {}),
+                ),
+                ErrStatusInfo::new(
                     upstream_stream_flow_info.err.clone(),
-                    Some(Box::new(stream_info::ErrStatusUpstream {})),
-                )
-            }
-        } else if client_stream_flow_info.err != stream_flow::StreamFlowErr::Init {
-            (
-                client_stream_flow_info.err.clone(),
-                Some(Box::new(stream_info::ErrStatusClient {})),
-            )
-        } else if upstream_stream_flow_info.err != stream_flow::StreamFlowErr::Init {
-            (
-                upstream_stream_flow_info.err.clone(),
-                Some(Box::new(stream_info::ErrStatusUpstream {})),
-            )
+                    Box::new(stream_info::ErrStatusUpstream {}),
+                ),
+            ]
         } else {
-            (stream_flow::StreamFlowErr::Init, None)
+            vec![
+                ErrStatusInfo::new(
+                    upstream_stream_flow_info.err.clone(),
+                    Box::new(stream_info::ErrStatusUpstream {}),
+                ),
+                ErrStatusInfo::new(
+                    client_stream_flow_info.err.clone(),
+                    Box::new(stream_info::ErrStatusClient {}),
+                ),
+            ]
         };
 
-        if err != stream_flow::StreamFlowErr::Init {
-            let err_status_200 = err_status_200.as_ref().unwrap();
-            if err == stream_flow::StreamFlowErr::WriteClose {
-                is_close = true;
-                stream_info.err_status_str = Some(err_status_200.write_close());
-                if err_status_200.is_ups_err() {
-                    is_ups_close = true;
-                }
-            } else if err == stream_flow::StreamFlowErr::ReadClose {
-                is_close = true;
-                stream_info.err_status_str = Some(err_status_200.read_close());
-                if err_status_200.is_ups_err() {
-                    is_ups_close = true;
-                }
-            } else if err == stream_flow::StreamFlowErr::WriteReset {
-                is_close = true;
-                stream_info.err_status_str = Some(err_status_200.write_reset());
-                if err_status_200.is_ups_err() {
-                    is_ups_close = true;
-                }
-            } else if err == stream_flow::StreamFlowErr::ReadReset {
-                is_close = true;
-                stream_info.err_status_str = Some(err_status_200.read_reset());
-                if err_status_200.is_ups_err() {
-                    is_ups_close = true;
-                }
-            } else if err == stream_flow::StreamFlowErr::WriteTimeout {
-                is_error = true;
-                stream_info.err_status_str = Some(err_status_200.write_timeout());
-            } else if err == stream_flow::StreamFlowErr::ReadTimeout {
-                is_error = true;
-                stream_info.err_status_str = Some(err_status_200.read_timeout());
-            } else if err == stream_flow::StreamFlowErr::WriteErr {
-                is_error = true;
-                stream_info.err_status_str = Some(err_status_200.write_err());
-            } else if err == stream_flow::StreamFlowErr::ReadErr {
-                is_error = true;
-                stream_info.err_status_str = Some(err_status_200.read_err());
-            }
+        if errs[0].is_close && errs[1].is_close {
+            is_close = true;
+        }
+
+        if !errs[0].is_close || !errs[1].is_close {
+            is_error = true;
+        }
+
+        if errs[0].is_ups_close || errs[1].is_ups_close {
+            is_ups_close = true;
+        }
+
+        if errs[0].err_str.is_some() && errs[1].err_str.is_some() {
+            stream_info.err_status_str = Some(ArcString::new(format!(
+                "({})({})",
+                errs[0].err_str.as_ref().unwrap().as_str(),
+                errs[1].err_str.as_ref().unwrap().as_str()
+            )));
+        } else if errs[0].err_str.is_some() {
+            stream_info.err_status_str = Some(ArcString::new(format!(
+                "({})(nil)",
+                errs[0].err_str.as_ref().unwrap().as_str()
+            )));
+        } else if errs[1].err_str.is_some() {
+            stream_info.err_status_str = Some(ArcString::new(format!(
+                "(nil)({})",
+                errs[1].err_str.as_ref().unwrap().as_str()
+            )));
         }
     } else if stream_info.err_status == ErrStatus::ServiceUnavailable {
+        is_error = true;
         let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.clone();
         let upstream_connect_flow_info = upstream_connect_flow_info.get();
         if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteTimeout {

@@ -863,8 +863,7 @@ impl Modules {
                     log::trace!("init_main_confs_vec main_index:{}", main_index);
                     (v.unwrap())(self.clone(), self.main_confs.clone())
                         .await
-                        .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
-                        .unwrap();
+                        .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))?;
                 }
             }
             {

@@ -9,6 +9,8 @@ use crate::protopack;
 use crate::proxy::port_config::PortConfigListen;
 use crate::stream::server::ServerStreamInfo;
 use any_base::executor_local_spawn::ExecutorsLocal;
+#[cfg(feature = "anyproxy-ebpf")]
+use any_base::io::async_stream::Stream;
 use any_base::module::module::Modules;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::Share;
@@ -78,29 +80,30 @@ impl proxy::Stream for PortStream {
     async fn do_start(
         &mut self,
         stream_info: Share<StreamInfo>,
-        client_stream: StreamFlow,
+        mut _client_stream: StreamFlow,
     ) -> Result<()> {
         let scc = self.port_config_listen.port_config_context.scc.clone();
         stream_info.get_mut().scc = scc.clone();
 
         #[cfg(feature = "anyproxy-ebpf")]
-        let client_stream = if scc.get().http_core_conf().is_port_direct_ebpf
+        let _client_stream = if scc.get().http_core_conf().is_port_direct_ebpf
             && scc.get().http_core_conf().is_open_ebpf
-            && client_stream.fd() > 0
+            && _client_stream.raw_fd() > 0
         {
+            stream_info.get_mut().add_work_time1("connect_and_ebpf");
             let ret =
-                StreamStream::connect_and_ebpf(scc.clone(), stream_info.clone(), client_stream)
+                StreamStream::connect_and_ebpf(scc.clone(), stream_info.clone(), _client_stream)
                     .await?;
             if ret.is_none() {
                 return Ok(());
             }
             ret.unwrap()
         } else {
-            client_stream
+            _client_stream
         };
 
-        let client_buf_reader = any_base::io::buf_reader::BufReader::new(client_stream);
-        stream_info.get_mut().add_work_time("tunnel_stream");
+        let client_buf_reader = any_base::io_rb::buf_reader::BufReader::new(_client_stream);
+        stream_info.get_mut().add_work_time1("tunnel_stream");
         let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
@@ -117,8 +120,7 @@ impl proxy::Stream for PortStream {
         }
         let client_buf_reader = client_buf_reader.unwrap();
 
-        stream_info.get_mut().add_work_time("heartbeat");
-
+        stream_info.get_mut().add_work_time1("heartbeat");
         let ret = HeartbeatStream::heartbeat_stream(
             client_buf_reader,
             stream_info,
@@ -130,8 +132,7 @@ impl proxy::Stream for PortStream {
         }
         let (mut client_buf_reader, stream_info) = ret.unwrap();
 
-        stream_info.get_mut().add_work_time("hello");
-
+        stream_info.get_mut().add_work_time1("hello");
         let hello = {
             stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
             //quic协议ssl_domain有值
@@ -196,9 +197,10 @@ impl proxy::Stream for PortStream {
             );
         }
 
-        let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
+        stream_info.get_mut().add_work_time1("connect_and_stream");
+        let (_client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
 
-        StreamStream::connect_and_stream(scc, stream_info, client_buffer, client_stream).await
+        StreamStream::connect_and_stream(scc, stream_info, client_buffer, _client_stream).await
     }
 }

@@ -23,6 +23,7 @@ pub struct ServerStreamInfo {
     pub local_addr: Option<SocketAddr>,
     pub domain: Option<ArcString>,
     pub is_tls: bool,
+    pub raw_fd: i32,
 }
 
 #[async_trait]
@@ -183,7 +184,13 @@ where
             let service = service.clone();
             executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                format!("{}:{} => {}:{}", file!(), line!(), name, local_addr),
+                Some(format!(
+                    "{}:{} => {}:{}",
+                    file!(),
+                    line!(),
+                    name,
+                    local_addr
+                )),
                 move |executors| async move {
                     let stream = connection
                         .stream()
@@ -211,7 +218,7 @@ where
             let connection_listen_shutdown_tx = listen_shutdown_tx.clone();
             executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                format!("{}:{} => {}:{}", file!(), line!(), name, local_addr),
+                None,
                 move |executors| async move {
                     let mut stream_shutdown_thread_tx = connection_shutdown_thread_tx.subscribe();
                     let mut stream_listen_shutdown_tx = connection_listen_shutdown_tx.subscribe();
@@ -232,7 +239,13 @@ where
                         let service = service.clone();
                         executors._start(
                             #[cfg(feature = "anyspawn-count")]
-                            format!("{}:{} => {}:{}", file!(), line!(), name, local_addr),
+                            Some(format!(
+                                "{}:{} => {}:{}",
+                                file!(),
+                                line!(),
+                                name,
+                                local_addr
+                            )),
                             move |executor| async move {
                                 let (stream, mut server_stream_info) = stream.unwrap();
                                 if server_stream_info.local_addr.is_none() {

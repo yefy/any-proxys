@@ -41,9 +41,5 @@ lazy_static! {
 }
 
 lazy_static! {
-    pub static ref MIN_CACHE_BUFFER_NUM: AtomicUsize = AtomicUsize::new(2);
-}
-
-lazy_static! {
     pub static ref HOT_PID: ArcRwLock<String> = ArcRwLock::default();
 }

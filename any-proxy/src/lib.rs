@@ -12,7 +12,6 @@ pub mod tunnel2;
 pub mod upstream;
 pub mod util;
 
-use any_base::io;
 use any_tunnel2::Protocol4;
 use anyhow::anyhow;
 use anyhow::Result;

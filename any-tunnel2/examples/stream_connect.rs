@@ -39,12 +39,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
             .map_err(|e| anyhow!("err:TcpStream::connect => e:{}", e))?;
         let local_addr = stream.local_addr()?;
         let remote_addr = stream.peer_addr()?;
-        let (r, w) = tokio::io::split(stream);
-        Ok((
-            StreamFlow::new(0, Box::new(r), Box::new(w)),
-            local_addr,
-            remote_addr,
-        ))
+        Ok((StreamFlow::new_tokio(stream), local_addr, remote_addr))
     }
     async fn addr(&self) -> Result<SocketAddr> {
         let connect_addr =

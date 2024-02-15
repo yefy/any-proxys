@@ -1,5 +1,5 @@
 use crate::io::async_write_msg::AsyncWriteBuf;
-use crate::util::StreamMsg;
+use crate::util::StreamReadMsg;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -32,19 +32,21 @@ impl Stream {
     }
 }
 
+impl crate::io::async_stream::Stream for Stream {
+    fn raw_fd(&self) -> i32 {
+        0
+    }
+    fn is_sendfile(&self) -> bool {
+        false
+    }
+}
+
 impl crate::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
-    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        return Poll::Ready(io::Result::Ok(()));
-    }
-    fn poll_try_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        return Poll::Ready(io::Result::Ok(()));
+    fn poll_raw_fd(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<i32> {
+        return Poll::Ready(0);
     }
 }
 
@@ -53,19 +55,33 @@ impl crate::io::async_read_msg::AsyncReadMsg for Stream {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         _msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        return Poll::Ready(Ok(StreamMsg::new()));
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        return Poll::Ready(Ok(StreamReadMsg::new()));
     }
     fn poll_read_msg(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         _msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        return Poll::Ready(Ok(StreamMsg::new()));
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        return Poll::Ready(Ok(StreamReadMsg::new()));
     }
 
     fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
+    }
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
+
+    fn is_read_msg(&self) -> bool {
+        false
+    }
+    fn read_cache_size(&self) -> usize {
+        0
     }
 }
 
@@ -80,6 +96,25 @@ impl crate::io::async_write_msg::AsyncWriteMsg for Stream {
 
     fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        return Poll::Ready(io::Result::Ok(()));
+    }
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _file_fd: i32,
+        _seek: u64,
+        _size: usize,
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(Ok(0))
+    }
+
+    fn is_write_msg(&self) -> bool {
+        false
+    }
+    fn write_cache_size(&self) -> usize {
+        0
     }
 }
 

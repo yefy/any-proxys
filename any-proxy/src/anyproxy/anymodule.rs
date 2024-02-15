@@ -119,7 +119,10 @@ pub fn add_modules() -> Result<()> {
     module::add_module(stream_stream_tmp_file::module())?;
     module::add_module(stream_stream_write::module())?;
 
-    module::parse_modules()?;
+    use crate::config::http_server_stream_test;
+    module::add_module(http_server_stream_test::module())?;
+    use crate::config::http_server_static_test;
+    module::add_module(http_server_static_test::module())?;
 
     Ok(())
 }

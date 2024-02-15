@@ -1,4 +1,4 @@
-use crate::io::buf_reader::BufReader;
+use any_base::io_rb::buf_reader::BufReader;
 use any_base::util::ArcString;
 use any_tunnel::protopack;
 use any_tunnel::protopack::TUNNEL_VERSION;

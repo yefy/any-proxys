@@ -1,11 +1,7 @@
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
-#[cfg(feature = "anypool-dynamic-pool")]
-use dynamic_pool::DynamicPool;
-#[cfg(feature = "anypool-dynamic-pool")]
-use dynamic_pool::DynamicPoolItem;
-use dynamic_pool::DynamicReset;
+use bytes::Bytes;
 use serde::ser;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -14,10 +10,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub const MIN_CACHE_BUFFER: usize = 8192 * 2;
 pub const TUNNEL_MAX_HEADER_SIZE: usize = 4096;
 pub const TUNNEL_VERSION: &'static str = "tunnel.0.1.0";
-
-pub struct TunnelDynamicPool {
-    pub tunnel_data: DynamicPoolTunnelData,
-}
 
 //TunnelHeaderSize_u16 TunnelHeader TunnelHello
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -64,36 +56,17 @@ pub struct TunnelDataHeader {
     pub pack_size: u32,
 }
 
-#[cfg(feature = "anypool-dynamic-pool")]
-pub type DynamicTunnelData = DynamicPoolItem<TunnelData>;
-
-#[cfg(not(feature = "anypool-dynamic-pool"))]
 pub type DynamicTunnelData = TunnelData;
 
-#[cfg(feature = "anypool-dynamic-pool")]
-pub type DynamicPoolTunnelData = DynamicPool<TunnelData>;
-
-#[cfg(not(feature = "anypool-dynamic-pool"))]
-pub struct DynamicPoolTunnelData {}
-#[cfg(not(feature = "anypool-dynamic-pool"))]
-impl DynamicPoolTunnelData {
-    pub fn new() -> DynamicPoolTunnelData {
-        DynamicPoolTunnelData {}
-    }
-    pub fn take(&self) -> DynamicTunnelData {
-        TunnelData::default() as DynamicTunnelData
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TunnelData {
+pub struct TunnelDataVec {
     pub header: TunnelDataHeader,
     pub datas: Vec<u8>,
 }
 
-impl Default for TunnelData {
+impl Default for TunnelDataVec {
     fn default() -> Self {
-        TunnelData {
+        TunnelDataVec {
             header: TunnelDataHeader {
                 pack_id: 0,
                 pack_size: 0,
@@ -103,18 +76,38 @@ impl Default for TunnelData {
     }
 }
 
-impl DynamicReset for TunnelData {
-    fn reset(&mut self) {
-        unsafe {
-            self.datas.set_len(0);
+impl TunnelDataVec {
+    fn resize(&mut self) {
+        if self.datas.len() < self.header.pack_size as usize {
+            self.datas.resize(self.header.pack_size as usize, 0);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TunnelData {
+    pub header: TunnelDataHeader,
+    pub datas: Bytes,
+}
+
+impl From<Bytes> for TunnelData {
+    fn from(datas: Bytes) -> Self {
+        TunnelData {
+            header: TunnelDataHeader {
+                pack_id: 0,
+                pack_size: 0,
+            },
+            datas,
         }
     }
 }
 
 impl TunnelData {
-    fn resize(&mut self) {
-        if self.datas.len() < self.header.pack_size as usize {
-            self.datas.resize(self.header.pack_size as usize, 0);
+    pub fn new(data: TunnelDataVec) -> Self {
+        let TunnelDataVec { header, datas } = data;
+        TunnelData {
+            header,
+            datas: Bytes::from(datas),
         }
     }
 }
@@ -137,14 +130,9 @@ pub async fn read_tunnel_hello<R: AsyncRead + std::marker::Unpin>(
     buf_reader: &mut R,
 ) -> Result<TunnelHello> {
     let mut slice = [0u8; TUNNEL_MAX_HEADER_SIZE];
-    let pack = read_pack(
-        buf_reader,
-        &mut slice,
-        Some(TunnelHeaderType::TunnelHello),
-        None,
-    )
-    .await
-    .map_err(|e| anyhow!("err:read_pack => e:{}", e))?;
+    let pack = read_pack(buf_reader, &mut slice, Some(TunnelHeaderType::TunnelHello))
+        .await
+        .map_err(|e| anyhow!("err:read_pack => e:{}", e))?;
     if pack.is_none() {
         return Err(anyhow!("err:not tunnel_hello"));
     }
@@ -165,7 +153,6 @@ pub async fn read_tunnel_hello_ack<R: AsyncRead + std::marker::Unpin>(
         buf_reader,
         &mut slice,
         Some(TunnelHeaderType::TunnelHelloAck),
-        None,
     )
     .await
     .map_err(|e| anyhow!("err:read_pack => e:{}", e))?;
@@ -244,9 +231,8 @@ where
 pub async fn read_pack_all<R: AsyncRead + std::marker::Unpin>(
     buf_reader: &mut R,
     slice: &mut [u8],
-    buffer_pool: &TunnelDynamicPool,
 ) -> Result<TunnelPack> {
-    let pack = read_pack(buf_reader, slice, None, Some(buffer_pool)).await?;
+    let pack = read_pack(buf_reader, slice, None).await?;
     if pack.is_none() {
         return Err(anyhow!("err:pack.is_none"));
     }
@@ -257,7 +243,6 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
     buf_reader: &mut R,
     slice: &mut [u8],
     typ: Option<TunnelHeaderType>,
-    buffer_pool: Option<&TunnelDynamicPool>,
 ) -> Result<Option<TunnelPack>> {
     //let mut slice = [0u8; TUNNEL_MAX_HEADER_SIZE];
     let header_size = buf_reader
@@ -320,7 +305,7 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
             Ok(Some(TunnelPack::TunnelHelloAck(value)))
         }
         TunnelHeaderType::TunnelData => {
-            let mut tunnel_data = buffer_pool.unwrap().tunnel_data.take();
+            let mut tunnel_data = TunnelDataVec::default();
             tunnel_data.header =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:TunnelData=> e:{}", e))?;
             log::trace!("read_pack body:{:?}", tunnel_data.header);
@@ -334,7 +319,7 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
                 .await
                 .map_err(|e| anyhow!("err:TunnelData => e:{}", e))?;
             log::trace!("read_pack datas.len:{:?}", tunnel_data.datas.len());
-            Ok(Some(TunnelPack::TunnelData(tunnel_data)))
+            Ok(Some(TunnelPack::TunnelData(TunnelData::new(tunnel_data))))
         }
         TunnelHeaderType::TunnelAddConnect => {
             let value: TunnelAddConnect = toml::from_slice(body_slice)

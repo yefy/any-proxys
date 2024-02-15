@@ -1,23 +1,26 @@
-#[cfg(unix)]
-use super::sendfile::SendFile;
 use super::stream_info::StreamInfo;
 use super::StreamConfigContext;
 use super::StreamStreamContext;
 use crate::protopack;
+use crate::proxy::stream_stream_buf::StreamStreamCacheWriteDeque;
 use crate::proxy::{
-    get_flag, util as proxy_util, StreamCloseType, StreamStreamData, StreamStreamShare,
+    util as proxy_util, DelayState, StreamCloseType, StreamStreamData, StreamStreamShare,
+    StreamStreamShareContext,
 };
 use any_base::future_wait::FutureWait;
+use any_base::io::async_stream::Stream;
+use any_base::io::async_write_msg::AsyncWriteMsg;
 use any_base::stream_flow::{StreamFlow, StreamFlowRead, StreamFlowWrite};
-use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw, ValueOption};
+use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcUnsafeAny, Share, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::LinkedList;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 pub struct StreamStream {}
@@ -91,14 +94,13 @@ impl StreamStream {
 
                 let _ = upstream_stream.flush().await;
 
-                stream_info.get_mut().add_work_time(&format!(
-                    "first cache write {}: len={}",
-                    get_flag(true),
-                    len
-                ));
+                stream_info
+                    .get_mut()
+                    .add_work_time1(&format!("header client to upstream: len={}", len));
             }
         }
 
+        stream_info.get_mut().add_work_time1("ebpf_and_stream");
         Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await
     }
 
@@ -127,6 +129,7 @@ impl StreamStream {
 
         use crate::proxy::stream_info::ErrStatus;
         stream_info.get_mut().err_status = ErrStatus::Ok;
+        stream_info.get_mut().add_work_time1("ebpf_and_stream");
         match Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await {
             Ok(()) => Ok(None),
             Err(e) => Err(e),
@@ -246,34 +249,71 @@ impl StreamStream {
         }
     }
 
+    pub fn is_sendfile(
+        client_stream_fd: i32,
+        upstream_stream_fd: i32,
+        scc: ShareRw<StreamConfigContext>,
+        stream_info: Share<StreamInfo>,
+    ) -> (bool, bool) {
+        let mut stream_info = stream_info.get_mut();
+        let scc = scc.get();
+        let http_core_conf = scc.http_core_conf();
+        if http_core_conf.is_open_sendfile {
+            let is_client_sendfile = if client_stream_fd > 0 {
+                stream_info.open_sendfile = Some("sendfile_upload".to_string());
+                true
+            } else {
+                false
+            };
+
+            let is_upstream_sendfile = if upstream_stream_fd > 0 {
+                if stream_info.open_sendfile.is_none() {
+                    stream_info.open_sendfile = Some("sendfile_upload".to_string());
+                } else {
+                    let open_sendfile = stream_info.open_sendfile.take().unwrap();
+                    stream_info.open_sendfile = Some(open_sendfile + "_download");
+                }
+                true
+            } else {
+                false
+            };
+            (is_client_sendfile, is_upstream_sendfile)
+        } else {
+            (false, false)
+        }
+    }
+
     pub async fn ebpf_and_stream(
         scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client_stream: StreamFlow,
-        _upstream_stream: StreamFlow,
+        mut _upstream_stream: StreamFlow,
     ) -> Result<()> {
         #[cfg(feature = "anyproxy-ebpf")]
         if scc.get().http_core_conf().is_open_ebpf {
+            let client_stream_fd = client_stream.raw_fd();
+            let upstream_stream_fd = _upstream_stream.raw_fd();
+
             use crate::config::any_ebpf_core;
             use crate::ebpf::any_ebpf::AnyEbpfTx;
             let ms = scc.get().ms.clone();
             let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
             let ebpf_tx = any_ebpf_core_conf.ebpf();
-            if ebpf_tx.is_some() && client_stream.fd() > 0 && _upstream_stream.fd() > 0 {
+            if ebpf_tx.is_some() && client_stream_fd > 0 && upstream_stream_fd > 0 {
                 let sock_map_data = {
                     let mut stream_info = stream_info.get_mut();
                     let upstream_connect_info = stream_info.upstream_connect_info.clone();
                     let upstream_connect_info = upstream_connect_info.get();
 
                     stream_info.is_discard_timeout = true;
-                    stream_info.add_work_time("ebpf");
+                    stream_info.add_work_time1("ebpf");
                     stream_info.is_open_ebpf = true;
 
                     AnyEbpfTx::sock_map_data(
-                        client_stream.fd(),
+                        client_stream_fd,
                         stream_info.server_stream_info.remote_addr,
                         stream_info.server_stream_info.local_addr.clone().unwrap(),
-                        _upstream_stream.fd(),
+                        upstream_stream_fd,
                         upstream_connect_info.remote_addr.clone(),
                         upstream_connect_info.local_addr.clone(),
                     )
@@ -288,7 +328,7 @@ impl StreamStream {
                     .await?;
                 let _ = rx.recv().await;
 
-                stream_info.get_mut().add_work_time("stream_to_stream");
+                stream_info.get_mut().add_work_time1("wait_ebpf_stream");
 
                 let ret = StreamStream::wait_ebpf_stream(
                     scc.clone(),
@@ -305,7 +345,7 @@ impl StreamStream {
                     )
                 });
 
-                stream_info.get_mut().add_work_time("stream_to_stream end");
+                stream_info.get_mut().add_work_time1("stream_to_stream end");
 
                 let rx = ebpf_tx
                     .as_ref()
@@ -317,58 +357,24 @@ impl StreamStream {
             }
         }
 
-        #[cfg(unix)]
-        let (client_sendfile, upstream_sendfile) = {
-            let mut stream_info = stream_info.get_mut();
-            let scc = scc.get();
-            let http_core_conf = scc.http_core_conf();
-            if http_core_conf.is_open_sendfile {
-                let client_stream_fd = client_stream.fd();
-                let client_sendfile =
-                    if client_stream_fd > 0 && http_core_conf.upload_tmp_file_size > 0 {
-                        stream_info.open_sendfile = Some("sendfile_upload".to_string());
-                        ArcMutexTokio::new(SendFile::new(
-                            client_stream_fd,
-                            stream_info.client_stream_flow_info.clone(),
-                        ))
-                    } else {
-                        ArcMutexTokio::default()
-                    };
+        let client_stream_fd = client_stream.raw_fd();
+        let upstream_stream_fd = _upstream_stream.raw_fd();
+        let (is_client_sendfile, is_upstream_sendfile) = Self::is_sendfile(
+            client_stream_fd,
+            upstream_stream_fd,
+            scc.clone(),
+            stream_info.clone(),
+        );
 
-                let upstream_stream_fd = _upstream_stream.fd();
-                let upstream_sendfile =
-                    if upstream_stream_fd > 0 && http_core_conf.download_tmp_file_size > 0 {
-                        if stream_info.open_sendfile.is_none() {
-                            stream_info.open_sendfile = Some("sendfile_upload".to_string());
-                        } else {
-                            let open_sendfile = stream_info.open_sendfile.take().unwrap();
-                            stream_info.open_sendfile = Some(open_sendfile + "_download");
-                        }
-                        ArcMutexTokio::new(SendFile::new(
-                            upstream_stream_fd,
-                            stream_info.upstream_stream_flow_info.clone(),
-                        ))
-                    } else {
-                        ArcMutexTokio::default()
-                    };
-                (client_sendfile, upstream_sendfile)
-            } else {
-                (ArcMutexTokio::default(), ArcMutexTokio::default())
-            }
-        };
-
-        stream_info.get_mut().add_work_time("stream_to_stream");
-
+        stream_info.get_mut().add_work_time1("stream_to_stream");
         let close_type = scc.get().http_core_conf().close_type;
         let ret = StreamStream::stream_to_stream(
             scc.clone(),
             stream_info.clone(),
             client_stream,
             _upstream_stream,
-            #[cfg(unix)]
-            client_sendfile,
-            #[cfg(unix)]
-            upstream_sendfile,
+            is_client_sendfile,
+            is_upstream_sendfile,
             close_type,
             close_type,
         )
@@ -381,7 +387,7 @@ impl StreamStream {
             )
         });
 
-        stream_info.get_mut().add_work_time("stream_to_stream end");
+        stream_info.get_mut().add_work_time1("stream_to_stream end");
 
         ret
     }
@@ -391,8 +397,8 @@ impl StreamStream {
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
-        #[cfg(unix)] client_sendfile: ArcMutexTokio<SendFile>,
-        #[cfg(unix)] upstream_sendfile: ArcMutexTokio<SendFile>,
+        is_client_sendfile: bool,
+        is_upstream_sendfile: bool,
         client_close_type: StreamCloseType,
         upstream_close_type: StreamCloseType,
     ) -> Result<()> {
@@ -417,13 +423,13 @@ impl StreamStream {
                 limit_rate_after: download.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
+                stream_nodelay_size: download.stream_nodelay_size,
             }),
+            delay_version: AtomicUsize::new(0),
+            delay_state: ArcRwLock::new(DelayState::Init),
             delay_wait: FutureWait::new(),
-            delay_wait_stop: FutureWait::new(),
             delay_ok: Arc::new(AtomicBool::new(false)),
-            is_delay: Arc::new(AtomicBool::new(false)),
-            #[cfg(unix)]
-            sendfile: client_sendfile,
+            is_sendfile: is_client_sendfile,
             is_client: false,
             close_type: upstream_close_type,
             wait_group: wait_group.clone(),
@@ -444,13 +450,13 @@ impl StreamStream {
                 limit_rate_after: upload.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
+                stream_nodelay_size: upload.stream_nodelay_size,
             }),
+            delay_version: AtomicUsize::new(0),
+            delay_state: ArcRwLock::new(DelayState::Init),
             delay_wait: FutureWait::new(),
-            delay_wait_stop: FutureWait::new(),
             delay_ok: Arc::new(AtomicBool::new(false)),
-            is_delay: Arc::new(AtomicBool::new(false)),
-            #[cfg(unix)]
-            sendfile: upstream_sendfile,
+            is_sendfile: is_upstream_sendfile,
             is_client: true,
             close_type: client_close_type,
             wait_group,
@@ -461,6 +467,15 @@ impl StreamStream {
             other_close_wait: download_close,
         });
 
+        {
+            let mut stream_info = stream_info.get_mut();
+            stream_info.ssc_download.set(ssc_download.clone());
+            stream_info.ssc_upload.set(ssc_upload.clone());
+        }
+
+        stream_info
+            .get_mut()
+            .add_work_time1("do_single_stream_to_stream");
         let ret: Result<()> = async {
             tokio::select! {
                 ret = StreamStream::do_single_stream_to_stream(
@@ -490,13 +505,75 @@ impl StreamStream {
         ret
     }
 
+    pub async fn stream_single(
+        scc: ShareRw<StreamConfigContext>,
+        stream_info: Share<StreamInfo>,
+        client: StreamFlow,
+        is_client_sendfile: bool,
+    ) -> Result<()> {
+        let wait_group = awaitgroup::WaitGroup::new();
+        let client_worker_inner = wait_group.worker().add();
+
+        let upload_read = FutureWait::new();
+        let download_read = FutureWait::new();
+        let upload_close = FutureWait::new();
+        let download_close = FutureWait::new();
+
+        let (client_read, client_write) = client.split();
+        let download = scc.get().http_core_conf().download.clone();
+        let ssc_download = Arc::new(StreamStreamContext {
+            cs: download.clone(),
+            curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
+            ssd: ArcRwLock::new(StreamStreamData {
+                stream_cache_size: download.stream_cache_size,
+                tmp_file_size: download.tmp_file_size,
+                limit_rate_after: download.limit_rate_after,
+                total_read_size: 0,
+                total_write_size: 0,
+                stream_nodelay_size: download.stream_nodelay_size,
+            }),
+            delay_version: AtomicUsize::new(0),
+            delay_state: ArcRwLock::new(DelayState::Init),
+            delay_wait: FutureWait::new(),
+            delay_ok: Arc::new(AtomicBool::new(false)),
+            is_sendfile: is_client_sendfile,
+            is_client: false,
+            close_type: StreamCloseType::Fast,
+            wait_group: wait_group.clone(),
+            worker_inner: client_worker_inner,
+            read_wait: download_read.clone(),
+            other_read_wait: upload_read.clone(),
+            close_wait: download_close.clone(),
+            other_close_wait: upload_close.clone(),
+        });
+
+        {
+            let mut stream_info = stream_info.get_mut();
+            stream_info.ssc_download.set(ssc_download.clone());
+        }
+
+        stream_info
+            .get_mut()
+            .add_work_time1("do_single_stream_to_stream");
+
+        StreamStream::do_single_stream_to_stream(
+            ssc_download,
+            scc,
+            stream_info,
+            client_read,
+            client_write,
+        )
+        .await
+        .map_err(|e| anyhow!("err:client => e:{}", e))
+    }
+
     pub async fn stream_to_stream_single(
         scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
-        #[cfg(unix)] client_sendfile: ArcMutexTokio<SendFile>,
-        #[cfg(unix)] upstream_sendfile: ArcMutexTokio<SendFile>,
+        is_client_sendfile: bool,
+        is_upstream_sendfile: bool,
     ) -> Result<()> {
         let wait_group = awaitgroup::WaitGroup::new();
         let client_worker_inner = wait_group.worker().add();
@@ -519,13 +596,13 @@ impl StreamStream {
                 limit_rate_after: download.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
+                stream_nodelay_size: download.stream_nodelay_size,
             }),
+            delay_version: AtomicUsize::new(0),
+            delay_state: ArcRwLock::new(DelayState::Init),
             delay_wait: FutureWait::new(),
-            delay_wait_stop: FutureWait::new(),
             delay_ok: Arc::new(AtomicBool::new(false)),
-            is_delay: Arc::new(AtomicBool::new(false)),
-            #[cfg(unix)]
-            sendfile: client_sendfile,
+            is_sendfile: is_client_sendfile,
             is_client: false,
             close_type: StreamCloseType::Fast,
             wait_group: wait_group.clone(),
@@ -546,13 +623,13 @@ impl StreamStream {
                 limit_rate_after: upload.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
+                stream_nodelay_size: upload.stream_nodelay_size,
             }),
+            delay_version: AtomicUsize::new(0),
+            delay_state: ArcRwLock::new(DelayState::Init),
             delay_wait: FutureWait::new(),
-            delay_wait_stop: FutureWait::new(),
             delay_ok: Arc::new(AtomicBool::new(false)),
-            is_delay: Arc::new(AtomicBool::new(false)),
-            #[cfg(unix)]
-            sendfile: upstream_sendfile,
+            is_sendfile: is_upstream_sendfile,
             is_client: true,
             close_type: StreamCloseType::Fast,
             wait_group,
@@ -569,6 +646,9 @@ impl StreamStream {
             stream_info.ssc_upload.set(ssc_upload.clone());
         }
 
+        stream_info
+            .get_mut()
+            .add_work_time1("do_single_stream_to_stream1");
         let ret = StreamStream::do_single_stream_to_stream(
             ssc_upload,
             scc.clone(),
@@ -587,6 +667,9 @@ impl StreamStream {
             Ok(()) => {}
         }
 
+        stream_info
+            .get_mut()
+            .add_work_time1("do_single_stream_to_stream2");
         StreamStream::do_single_stream_to_stream(
             ssc_download,
             scc,
@@ -605,6 +688,9 @@ impl StreamStream {
         read: StreamFlowRead,
         write: StreamFlowWrite,
     ) -> Result<()> {
+        stream_info
+            .get_mut()
+            .add_work_time2(ssc.is_client, "do_stream_to_stream");
         let ret: Result<()> = async {
             tokio::select! {
                 _ = StreamStream::limit_timeout_reset(ssc.clone()) => {
@@ -643,25 +729,36 @@ impl StreamStream {
         ssc: Arc<StreamStreamContext>,
         _stream_info: Share<StreamInfo>,
     ) {
-        let open_stream_cache_merge_mil_time = ssc.cs.open_stream_cache_merge_mil_time;
+        let mut stream_delay_mil_time = ssc.cs.stream_delay_mil_time;
+        if stream_delay_mil_time <= 0 {
+            stream_delay_mil_time = u64::MAX;
+            tokio::time::sleep(tokio::time::Duration::from_millis(stream_delay_mil_time)).await;
+        }
+        *ssc.delay_state.get_mut() = DelayState::Wait;
         loop {
-            ssc.delay_wait.clone().await;
-            ssc.is_delay.store(true, Ordering::SeqCst);
+            if *ssc.delay_state.get() == DelayState::Wait {
+                ssc.delay_wait.clone().await;
+            }
+
+            let version = ssc.delay_version.load(Ordering::SeqCst);
+
             ssc.delay_ok.store(false, Ordering::SeqCst);
 
+            *ssc.delay_state.get_mut() = DelayState::Start;
             tokio::select! {
                 biased;
-                _ = ssc.delay_wait_stop.clone() => {
-                },
-                _= tokio::time::sleep(tokio::time::Duration::from_millis(open_stream_cache_merge_mil_time)) => {
-                    ssc.delay_ok.store(true, Ordering::SeqCst);
-                    ssc.read_wait.waker();
+                _= tokio::time::sleep(tokio::time::Duration::from_millis(stream_delay_mil_time)) => {
+                    let version2 = ssc.delay_version.load(Ordering::SeqCst);
+                    if version == version2 && *ssc.delay_state.get() == DelayState::Start {
+                        *ssc.delay_state.get_mut() = DelayState::Wait;
+                        ssc.delay_ok.store(true, Ordering::SeqCst);
+                        ssc.read_wait.waker();
+                    }
                 },
                 else => {
                     continue;
                 }
             }
-            ssc.is_delay.store(false, Ordering::SeqCst);
         }
     }
 
@@ -672,34 +769,51 @@ impl StreamStream {
         r: StreamFlowRead,
         w: StreamFlowWrite,
     ) -> Result<()> {
+        let (_w_raw_fd, is_write_msg, is_write_vectored) =
+            { (w.raw_fd(), w.is_write_msg(), w.is_write_vectored()) };
+
         let plugin_handle_stream = ssc.cs.plugin_handle_stream.clone();
         use crate::config::http_core;
         let ctx_index_len = http_core::module().get().ctx_index_len as usize;
         let plugins: Vec<Option<ArcUnsafeAny>> = vec![None; ctx_index_len];
-        let sss = StreamStreamShare {
+        let sss = Arc::new(StreamStreamShare {
+            sss_ctx: ShareRw::new(StreamStreamShareContext {
+                write_buffer_deque: Some(StreamStreamCacheWriteDeque::new(
+                    ssc.cs.write_buffer_size,
+                )),
+                write_buffer: None,
+                read_buffer: None,
+                read_err: None,
+                caches: LinkedList::new(),
+                write_err: None,
+                plugins,
+                is_first_write: true,
+                is_stream_cache: false,
+                #[cfg(unix)]
+                is_set_tcp_nopush: false,
+            }),
             ssc: ssc.clone(),
             _scc: scc.clone(),
-            stream_info,
+            stream_info: stream_info.clone(),
             r: ArcMutexTokio::new(r),
             w: ArcMutexTokio::new(w),
-            write_buffer: None,
-            read_buffer: None,
-            read_err: None,
-            caches: LinkedList::new(),
-            buffer_pool: ValueOption::default(),
-            write_err: None,
-            plugins,
-            is_first_write: true,
-            is_stream_cache: false,
-        };
-        let sss = ShareRw::new(sss);
+            _w_raw_fd,
+            is_write_msg,
+            is_write_vectored,
+        });
 
         let plugin_handle_stream = if let &StreamCloseType::WaitEmpty = &ssc.close_type {
+            stream_info
+                .get_mut()
+                .add_work_time2(ssc.is_client, "WaitEmpty");
             let ms = scc.get().ms.clone();
             use crate::config::http_core_plugin;
             let http_core_plugin_conf = http_core_plugin::main_conf(&ms).await;
             http_core_plugin_conf.plugin_handle_stream_cache.clone()
         } else {
+            stream_info
+                .get_mut()
+                .add_work_time2(ssc.is_client, "!= WaitEmpty");
             plugin_handle_stream
         };
 

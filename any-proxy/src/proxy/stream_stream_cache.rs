@@ -1,14 +1,20 @@
-use super::StreamCacheBuffer;
 use crate::config::http_core_plugin::PluginHandleStream;
-use crate::proxy::{get_flag, StreamCloseType, StreamStatus};
+use crate::proxy::stream_stream_buf::{
+    StreamStreamBuffer, StreamStreamBytes, StreamStreamCacheRead,
+};
+use crate::proxy::{StreamCloseType, StreamStatus, SENDFILE_EAGAIN_TIME_MILLIS};
 use crate::proxy::{StreamStreamShare, LIMIT_SLEEP_TIME_MILLIS, NORMAL_SLEEP_TIME_MILLIS};
+use any_base::io::async_read_msg::AsyncReadMsg;
 use any_base::io::async_read_msg::AsyncReadMsgExt;
 use any_base::io::async_stream::AsyncStreamExt;
-use any_base::typ::{ArcRwLockTokio, ShareRw};
+use any_base::io::async_write_msg::BufFile;
+use any_base::typ::ArcRwLockTokio;
+use any_base::util::StreamReadMsg;
 use anyhow::anyhow;
 use anyhow::Result;
-use dynamic_pool::{DynamicPool, DynamicPoolItem};
 use lazy_static::lazy_static;
+use std::collections::VecDeque;
+use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
 use tokio::io::AsyncReadExt;
@@ -26,131 +32,119 @@ pub async fn set_cache_handle(plugin: PluginHandleStream) -> Result<()> {
     Ok(())
 }
 
-pub async fn cache_handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus> {
+pub async fn cache_handle_run(sss: Arc<StreamStreamShare>) -> Result<StreamStatus> {
     handle_run(sss).await
 }
 
-pub async fn handle_run(sss: ShareRw<StreamStreamShare>) -> Result<StreamStatus> {
-    let (ssd, stream_info, is_client, read_buffer_size) = {
-        let mut sss = sss.get_mut();
-        let cs = sss.ssc.cs.clone();
-        let stream_info = sss.stream_info.clone();
+pub async fn handle_run(sss: Arc<StreamStreamShare>) -> Result<StreamStatus> {
+    let ssc = sss.ssc.clone();
+    let stream_info = sss.stream_info.clone();
+
+    {
         let mut stream_info = stream_info.get_mut();
+        stream_info.buffer_cache = Some(ssc.cs.buffer_cache.clone());
+        stream_info.add_work_time2(ssc.is_client, "cache");
+    }
+    sss.sss_ctx.get_mut().is_stream_cache = true;
 
-        stream_info.buffer_cache = Some(cs.buffer_cache.clone());
-        stream_info.add_work_time(&format!("{} cache", get_flag(sss.ssc.is_client)));
-
-        {
-            let buffer_size = cs.min_cache_buffer_size as i64;
-            let maximum_capacity = std::cmp::max(cs.stream_cache_size, buffer_size * 4);
-
-            let initial_capacity = 1;
-            let maximum_capacity = (maximum_capacity / buffer_size) as usize + initial_capacity;
-            let buffer_pool = DynamicPool::new(
-                initial_capacity,
-                maximum_capacity,
-                StreamCacheBuffer::default,
-            );
-            sss.buffer_pool.set(buffer_pool);
-        }
-        sss.is_stream_cache = true;
-        (
-            sss.ssc.ssd.clone(),
-            sss.stream_info.clone(),
-            sss.ssc.is_client,
-            cs.read_buffer_size,
-        )
-    };
     let mut is_first = true;
+    let mut stream_status = StreamStatus::WriteEmpty;
 
-    let mut stream_status = StreamStatus::DataEmpty;
     loop {
         let is_read = {
-            let ssd = ssd.get();
-            let sss = sss.get();
-            (ssd.stream_cache_size > 0 || ssd.tmp_file_size > 0) && sss.read_err.is_none()
+            let ssd = ssc.ssd.get();
+            let sss_ctx = sss.sss_ctx.get();
+            (ssd.stream_cache_size > 0 || ssd.tmp_file_size > 0) && sss_ctx.read_err.is_none()
         };
         if is_read {
-            let buffer = read(sss.clone(), read_buffer_size, &stream_status)
-                .await
-                .map_err(|e| anyhow!("err:read => e:{}", e))?;
-            let mut sss = sss.get_mut();
+            let buffers = read(&sss, &stream_status).await?;
             if is_first {
                 is_first = false;
                 stream_info
                     .get_mut()
-                    .add_work_time(&format!("first read {}", get_flag(is_client)));
+                    .add_work_time2(ssc.is_client, "first read");
             }
-            sss.read_buffer = Some(buffer);
+            if buffers.len() > 0 {
+                for buffer in buffers {
+                    sss.sss_ctx.get_mut().read_buffer = Some(buffer);
+                    let handle_next = &*CACHE_HANDLE_NEXT.get().await;
+                    stream_status = (handle_next)(sss.clone())
+                        .await
+                        .map_err(|e| anyhow!("err:CACHE_HANDLE_NEXT => e:{}", e))?;
+
+                    check_stream_close(&sss, &stream_status).await?;
+                }
+                continue;
+            }
         } else {
-            StreamStreamShare::stream_status_sleep(&stream_status, is_client).await;
+            StreamStreamShare::stream_status_sleep(&stream_status, ssc.is_client).await;
         }
+
         let handle_next = &*CACHE_HANDLE_NEXT.get().await;
         stream_status = (handle_next)(sss.clone())
             .await
             .map_err(|e| anyhow!("err:CACHE_HANDLE_NEXT => e:{}", e))?;
 
-        check_stream_close(sss.clone(), &stream_status).await?;
+        check_stream_close(&sss, &stream_status).await?;
     }
 }
 
 pub async fn check_stream_close(
-    sss: ShareRw<StreamStreamShare>,
+    sss: &StreamStreamShare,
     stream_status: &StreamStatus,
 ) -> Result<()> {
-    let (ssc, cs, stream_info, r) = {
-        let sss = sss.get();
-        (
-            sss.ssc.clone(),
-            sss.ssc.cs.clone(),
-            sss.stream_info.clone(),
-            sss.r.clone(),
-        )
-    };
-    stream_info.get_mut().buffer_cache = Some(cs.buffer_cache.clone());
+    let ssc = sss.ssc.clone();
+    let stream_info = sss.stream_info.clone();
 
-    let is_single = r.get_mut().await.is_single().await;
-    let is_sendfile_close = StreamStreamShare::is_sendfile_close(sss.clone(), stream_status).await;
+    let is_single = sss.r.get_mut().await.is_single().await;
+    let is_sendfile_close = StreamStreamShare::is_sendfile_close(sss, stream_status).await;
 
-    let ret: Result<()> = async {
-        let mut sss = sss.get_mut();
-        if let &StreamCloseType::WaitEmpty = &sss.ssc.close_type {
-            Ok(())
-        } else {
-            if sss.write_err.is_some() {
-                sss.write_err.take().unwrap()?;
-            }
-
-            if sss.read_err.is_some() && sss.is_read_empty() && sss.is_write_empty() {
-                sss.read_err.take().unwrap()?;
-            }
-            Ok(())
+    let ret: Result<bool> = async {
+        let mut sss_ctx = sss.sss_ctx.get_mut();
+        if let &StreamCloseType::WaitEmpty = &ssc.close_type {
+            return Ok(true);
         }
+        if sss_ctx.write_err.is_some() {
+            sss_ctx.write_err.take().unwrap()?;
+        }
+
+        if sss_ctx.read_err.is_some() && sss.is_read_empty(&sss_ctx) && sss.is_write_empty(&sss_ctx)
+        {
+            sss_ctx.read_err.take().unwrap()?;
+        }
+        Ok(false)
     }
     .await;
     if ret.is_err() {
-        let (w, ssc) = {
-            let sss = sss.get();
-            (sss.w.clone(), sss.ssc.clone())
-        };
-        let mut w = w.get_mut().await;
+        let mut w = sss.w.get_mut().await;
         let _ = w.flush().await;
         if let &StreamCloseType::Shutdown = &ssc.close_type {
             let _ = w.shutdown().await;
             ssc.worker_inner.done();
             let _ = ssc.wait_group.wait().await;
         }
+        stream_info
+            .get_mut()
+            .add_work_time2(ssc.is_client, "close1");
         ret?;
+        return Ok(());
+    }
+
+    let is_wait_empty = ret.unwrap();
+    if !is_wait_empty {
+        return Ok(());
     }
 
     let is_close = {
-        let sss = sss.get_mut();
-        sss.write_err.is_some()
-            || (sss.read_err.is_some() && sss.is_read_empty() && sss.is_write_empty())
+        let sss_ctx = sss.sss_ctx.get_mut();
+        sss_ctx.write_err.is_some()
+            || (sss_ctx.read_err.is_some()
+                && sss.is_read_empty(&sss_ctx)
+                && sss.is_write_empty(&sss_ctx))
             || (!is_single
                 && stream_info.get().close_num >= 1
-                && sss.is_read_empty()
-                && sss.is_write_empty())
+                && sss.is_read_empty(&sss_ctx)
+                && sss.is_write_empty(&sss_ctx))
             || is_sendfile_close
     };
 
@@ -166,13 +160,19 @@ pub async fn check_stream_close(
         stream_info.get_mut().close_num += 1;
         loop {
             if stream_info.get().close_num >= 2 {
-                let mut sss = sss.get_mut();
-                if sss.write_err.is_some() {
-                    sss.write_err.take().unwrap()?;
+                let mut sss_ctx = sss.sss_ctx.get_mut();
+                if sss_ctx.write_err.is_some() {
+                    stream_info
+                        .get_mut()
+                        .add_work_time2(ssc.is_client, "close2");
+                    sss_ctx.write_err.take().unwrap()?;
                 }
 
-                if sss.read_err.is_some() {
-                    sss.read_err.take().unwrap()?;
+                if sss_ctx.read_err.is_some() {
+                    stream_info
+                        .get_mut()
+                        .add_work_time2(ssc.is_client, "close2");
+                    sss_ctx.read_err.take().unwrap()?;
                 }
             }
 
@@ -198,52 +198,54 @@ pub async fn check_stream_close(
 }
 
 pub async fn read(
-    sss: ShareRw<StreamStreamShare>,
-    read_buffer_size: usize,
+    sss: &StreamStreamShare,
     stream_status: &StreamStatus,
-) -> Result<DynamicPoolItem<StreamCacheBuffer>> {
-    let mut buffer = {
-        let mut sss = sss.get_mut();
-        let ssd = sss.ssc.ssd.clone();
-        let ssd = ssd.get();
+) -> Result<VecDeque<StreamStreamCacheRead>> {
+    let ssc = sss.ssc.clone();
+    let mut r = sss.r.get_mut().await;
 
-        let mut buffer = if sss.read_buffer.is_some() {
-            sss.read_buffer.take().unwrap()
+    let (mut buffer, left) = {
+        let mut sss_ctx = sss.sss_ctx.get_mut();
+        let ssd = ssc.ssd.get();
+        let mut buffer = if sss_ctx.read_buffer.is_some() {
+            sss_ctx.read_buffer.take().unwrap()
         } else {
-            let mut buffer = sss.buffer_pool.get().take();
-            buffer.resize(None);
-            buffer
+            if r.is_read_msg() {
+                StreamStreamCacheRead::from_bytes(StreamStreamBytes::new())
+            } else {
+                StreamStreamCacheRead::from_buffer(StreamStreamBuffer::new(ssc.cs.read_buffer_size))
+            }
         };
 
-        if buffer.size <= buffer.read_size {
-            log::error!("err:buffer.size < buffer.read_size");
-            return Err(anyhow!("err:buffer.size < buffer.read_size"));
+        let read_size = buffer.remaining_() as i64;
+        let mut max_size = buffer.max_size() as i64;
+        if max_size <= 0 {
+            max_size = ssc.cs.read_buffer_size as i64;
         }
-
-        if ssd.stream_cache_size <= buffer.read_size as i64
-            && ssd.tmp_file_size <= buffer.read_size as i64
-        {
+        if ssd.stream_cache_size <= read_size && ssd.tmp_file_size <= read_size {
             log::error!("err:buffer.read_size");
             return Err(anyhow!("err:buffer.read_size"));
         }
         let mut is_find = false;
-        if ssd.stream_cache_size > 0 && ssd.stream_cache_size > buffer.read_size as i64 {
-            if buffer.read_size == 0 || (buffer.read_size > 0 && buffer.is_cache) {
+        if ssd.stream_cache_size > 0 && ssd.stream_cache_size > read_size {
+            if read_size == 0 || (read_size > 0 && buffer.is_cache) {
                 is_find = true;
                 buffer.is_cache = true;
-                if ssd.stream_cache_size < buffer.size as i64 {
-                    buffer.size = ssd.stream_cache_size as u64;
+                if ssd.stream_cache_size < max_size {
+                    max_size = ssd.stream_cache_size;
+                    buffer.resize_max_size(max_size as usize);
                 }
             }
         }
 
         if !is_find {
-            if ssd.tmp_file_size > 0 && ssd.tmp_file_size > buffer.read_size as i64 {
-                if buffer.read_size == 0 || (buffer.read_size > 0 && !buffer.is_cache) {
+            if ssd.tmp_file_size > 0 && ssd.tmp_file_size > read_size as i64 {
+                if read_size == 0 || (read_size > 0 && !buffer.is_cache) {
                     is_find = true;
                     buffer.is_cache = false;
-                    if ssd.tmp_file_size < buffer.size as i64 {
-                        buffer.size = ssd.tmp_file_size as u64;
+                    if ssd.tmp_file_size < max_size {
+                        max_size = ssd.tmp_file_size;
+                        buffer.resize_max_size(max_size as usize);
                     }
                 }
             }
@@ -253,101 +255,92 @@ pub async fn read(
             log::error!("err:!is_find");
             return Err(anyhow!("err:!is_find"));
         }
-        buffer
+        (buffer, max_size - read_size)
+    };
+
+    let sleep_read_time_millis = {
+        match &stream_status {
+            &StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
+            &StreamStatus::Full(is_sendfile) => {
+                tokio::task::yield_now().await;
+                if *is_sendfile {
+                    SENDFILE_EAGAIN_TIME_MILLIS
+                } else {
+                    0
+                }
+            }
+            &StreamStatus::Ok => 0,
+            &StreamStatus::WriteEmpty => NORMAL_SLEEP_TIME_MILLIS,
+        }
     };
 
     //limit  full DataEmpty
-    let ret: std::io::Result<usize> = async {
-        let (sleep_read_time_millis, r, read_wait, start_size, end_size) = {
-            let sss = sss.get();
-            let sleep_read_time_millis = match &stream_status {
-                &StreamStatus::Limit => LIMIT_SLEEP_TIME_MILLIS,
-                &StreamStatus::Full => {
-                    0
+    let ret: std::io::Result<Option<StreamStreamCacheRead>> = async {
+        if r.is_read_msg() {
+            let msg: StreamReadMsg = if sleep_read_time_millis > 0 {
+                tokio::select! {
+                    biased;
+                    ret = r.read_msg(left as usize) => {
+                        ret?
+                    },
+                    _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
+                        return Ok(None);
+                    },
+                     _= ssc.read_wait.clone() => {
+                        return Ok(None);
+                    },
+                    else => {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
+                        "err:do_stream_to_stream_or_file select close"
+                    )));
+                    }
                 }
-                &StreamStatus::Ok(_) => 0,
-                &StreamStatus::DataEmpty => {
-                    NORMAL_SLEEP_TIME_MILLIS
-                }
+            } else {
+                r.try_read_msg(left as usize).await?
             };
 
-            let start_size = buffer.read_size as usize;
-            let end_size = buffer.size as usize;
+            return Ok(buffer.push_back_ream_msg(msg));
+        }
 
-            (sleep_read_time_millis, sss.r.clone(), sss.ssc.read_wait.clone(), start_size, end_size)
-        };
-
-        let mut r = r.get_mut().await;
-        if r.is_read_msg().await {
-            if sleep_read_time_millis > 0 {
-                tokio::select! {
-                    biased;
-                    ret = r.read_msg(read_buffer_size) => {
-                        let msg = ret?;
-                        let n = msg.len();
-                        buffer.push_msg(msg);
-                        return Ok(n);
-                    },
-                    _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
-                        return Ok(0);
-                    },
-                     _= read_wait => {
-                        return Ok(0);
-                    },
-                    else => {
-                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                        "err:do_stream_to_stream_or_file select close"
-                    )));
-                    }
+        let buf = buffer.buf().unwrap();
+        let n = if sleep_read_time_millis > 0 {
+            tokio::select! {
+                biased;
+                ret = r.read(buf.free_data_mut()) => {
+                   ret?
+                },
+                _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
+                    return Ok(None);
+                },
+                 _= ssc.read_wait.clone() => {
+                    return Ok(None);
+                },
+                else => {
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
+                    "err:do_stream_to_stream_or_file select close"
+                )));
                 }
-            } else {
-                let msg  = r.try_read_msg(read_buffer_size).await?;
-                let n = msg.len();
-                buffer.push_msg(msg);
-                return Ok(n);
             }
         } else {
-            if sleep_read_time_millis > 0 {
-                tokio::select! {
-                    biased;
-                    ret = r.read(buffer.data_mut(start_size, end_size)) => {
-                        let n = ret?;
-                        return Ok(n);
-                    },
-                    _= tokio::time::sleep(std::time::Duration::from_millis(sleep_read_time_millis)) => {
-                        return Ok(0);
-                    },
-                     _= read_wait => {
-                        return Ok(0);
-                    },
-                    else => {
-                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, anyhow!(
-                        "err:do_stream_to_stream_or_file select close"
-                    )));
-                    }
-                }
-            } else {
-               let n = r.try_read(buffer.data_mut(start_size, end_size)).await?;
-                return Ok(n);
-            }
-        }
+            r.try_read(buf.free_data_mut()).await?
+        };
+        buffer.add_size(n);
+        return Ok(None);
     }
     .await;
 
-    let mut sss = sss.get_mut();
     if let Err(ref e) = ret {
-        //log::trace!("{}, read_err = Some(ret)", get_flag(sss.ssc.is_client));
         if e.kind() != std::io::ErrorKind::ConnectionReset {
             return Err(anyhow!("err:{}", e))?;
         }
-        sss.read_err = Some(Err(anyhow!(
-            "err:stream read => flag:{}, e:{}",
-            get_flag(sss.ssc.is_client),
-            e
-        )));
-    } else {
-        let size = ret.unwrap() as u64;
-        buffer.read_size += size;
+        sss.sss_ctx.get_mut().read_err = Some(Err(anyhow!("err:stream read => e:{}", e)));
+        return Ok(VecDeque::from([buffer]));
     }
-    Ok(buffer)
+
+    let ret = ret.unwrap();
+    if ret.is_none() {
+        Ok(VecDeque::from([buffer]))
+    } else {
+        Ok(VecDeque::from([buffer, ret.unwrap()]))
+    }
 }

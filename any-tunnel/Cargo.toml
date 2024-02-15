@@ -37,18 +37,17 @@ strip = true
 
 
 [features]
-default = ["anypool-dynamic-pool"]
+default = []
 anydebug-error = ["anydebug", "anyerror"]
 anydebug = []
 anyerror = []
-anypool-dynamic-pool = []
 anyruntime-tokio-spawn-local =[]
 anyruntime-tokio-spawn =[]
 
 [dependencies]
 any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-anyhow = {path = "../anyhow"}
-awaitgroup = {path = "../awaitgroup"}
+anyhow = {path = "../3rdparty/anyhow"}
+awaitgroup = {path = "../3rdparty/awaitgroup"}
 tokio = { version = "1.35.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
@@ -63,7 +62,6 @@ async-trait = "0.1.52"
 hashbrown = "0.11.2"
 async-channel = "1.8.0"
 scopeguard = "1.1.0"
-dynamic-pool = "0.2.2"
 num = "0.4"
 num-derive = "0.3"
 num-traits = "0.2"

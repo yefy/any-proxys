@@ -1,4 +1,4 @@
-use crate::io::async_stream::AsyncStream;
+use crate::io::async_write_msg::AsyncWriteMsg;
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
@@ -14,7 +14,7 @@ use std::task::{Context, Poll};
 /// as well as the number of bytes read once the read operation is completed.
 pub(crate) fn writable<'a, R>(reader: &'a mut R) -> Writable<'a, R>
 where
-    R: AsyncStream + Unpin + ?Sized,
+    R: AsyncWriteMsg + Unpin + ?Sized,
 {
     Writable {
         reader,
@@ -39,7 +39,7 @@ pin_project! {
 
 impl<R> Future for Writable<'_, R>
 where
-    R: AsyncStream + Unpin + ?Sized,
+    R: AsyncWriteMsg + Unpin + ?Sized,
 {
     type Output = io::Result<()>;
 

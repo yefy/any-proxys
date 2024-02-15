@@ -33,7 +33,7 @@ impl module::Server for Upstream {
             let ms = ms.clone();
             self.executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                format!("{}:{}", file!(), line!()),
+                None,
                 move |executors| async move {
                     let server = UpstreamServer::new(executors, ups_data, ms)
                         .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;

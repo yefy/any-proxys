@@ -122,7 +122,7 @@ impl module::Server for Domain {
 
             self.executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                format!("{}:{}", file!(), line!()),
+                None,
                 move |executors| async move {
                     let domain_server = domain_server::DomainServer::new(
                         ms,

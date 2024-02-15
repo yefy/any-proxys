@@ -1,4 +1,4 @@
-use crate::io::async_stream::AsyncStream;
+use crate::io::async_read_msg::AsyncReadMsg;
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
@@ -24,7 +24,7 @@ macro_rules! ready {
 /// as well as the number of bytes read once the read operation is completed.
 pub(crate) fn try_read<'a, R>(reader: &'a mut R, buf: &'a mut [u8]) -> TryRead<'a, R>
 where
-    R: AsyncStream + Unpin + ?Sized,
+    R: AsyncReadMsg + Unpin + ?Sized,
 {
     TryRead {
         reader,
@@ -51,7 +51,7 @@ pin_project! {
 
 impl<R> Future for TryRead<'_, R>
 where
-    R: AsyncStream + Unpin + ?Sized,
+    R: AsyncReadMsg + Unpin + ?Sized,
 {
     type Output = io::Result<usize>;
 

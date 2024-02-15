@@ -1,7 +1,7 @@
 use crate::io::async_read_msg::AsyncReadMsg;
 use crate::io::async_stream::AsyncStream;
 use crate::io::async_write_msg::{AsyncWriteBuf, AsyncWriteMsg};
-use crate::util::StreamMsg;
+use crate::util::StreamReadMsg;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::io;
@@ -101,44 +101,42 @@ impl<T> WriteHalf<T> {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
-
+use crate::io::async_stream::Stream;
+impl<T: Stream> crate::io::async_stream::Stream for ReadHalf<T> {
+    fn raw_fd(&self) -> i32 {
+        unsafe { &*self.inner.stream.get() }.raw_fd()
+    }
+    fn is_sendfile(&self) -> bool {
+        unsafe { &*self.inner.stream.get() }.is_sendfile()
+    }
+}
 impl<T: AsyncStream> crate::io::async_stream::AsyncStream for ReadHalf<T> {
     fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_single(cx)
     }
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
         let mut inner = ready!(self.inner.poll_lock(cx));
-        inner.stream_pin().poll_write_ready(cx)
-    }
-
-    fn poll_try_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let mut inner = ready!(self.inner.poll_lock(cx));
-        inner.stream_pin().poll_try_read(cx, buf)
+        inner.stream_pin().poll_raw_fd(cx)
     }
 }
 
+impl<T: Stream> crate::io::async_stream::Stream for WriteHalf<T> {
+    fn raw_fd(&self) -> i32 {
+        unsafe { &*self.inner.stream.get() }.raw_fd()
+    }
+    fn is_sendfile(&self) -> bool {
+        unsafe { &*self.inner.stream.get() }.is_sendfile()
+    }
+}
 impl<T: AsyncStream> crate::io::async_stream::AsyncStream for WriteHalf<T> {
     fn poll_is_single(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_single(cx)
     }
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_raw_fd(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<i32> {
         let mut inner = ready!(self.inner.poll_lock(cx));
-        inner.stream_pin().poll_write_ready(cx)
-    }
-
-    fn poll_try_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let mut inner = ready!(self.inner.poll_lock(cx));
-        inner.stream_pin().poll_try_read(cx, buf)
+        inner.stream_pin().poll_raw_fd(cx)
     }
 }
 
@@ -147,7 +145,7 @@ impl<T: AsyncReadMsg> crate::io::async_read_msg::AsyncReadMsg for ReadHalf<T> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_try_read_msg(cx, msg_size)
     }
@@ -155,7 +153,7 @@ impl<T: AsyncReadMsg> crate::io::async_read_msg::AsyncReadMsg for ReadHalf<T> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
+    ) -> Poll<io::Result<StreamReadMsg>> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_read_msg(cx, msg_size)
     }
@@ -163,6 +161,22 @@ impl<T: AsyncReadMsg> crate::io::async_read_msg::AsyncReadMsg for ReadHalf<T> {
     fn poll_is_read_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_read_msg(cx)
+    }
+
+    fn poll_try_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_try_read(cx, buf)
+    }
+
+    fn is_read_msg(&self) -> bool {
+        unsafe { &*self.inner.stream.get() }.is_read_msg()
+    }
+    fn read_cache_size(&self) -> usize {
+        unsafe { &*self.inner.stream.get() }.read_cache_size()
     }
 }
 
@@ -179,6 +193,27 @@ impl<T: AsyncWriteMsg> crate::io::async_write_msg::AsyncWriteMsg for WriteHalf<T
     fn poll_is_write_msg(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_is_write_msg(cx)
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_write_ready(cx)
+    }
+    fn poll_sendfile(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        file_fd: i32,
+        seek: u64,
+        size: usize,
+    ) -> Poll<io::Result<usize>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_sendfile(cx, file_fd, seek, size)
+    }
+
+    fn is_write_msg(&self) -> bool {
+        unsafe { &*self.inner.stream.get() }.is_write_msg()
+    }
+    fn write_cache_size(&self) -> usize {
+        unsafe { &*self.inner.stream.get() }.write_cache_size()
     }
 }
 
@@ -201,6 +236,19 @@ impl<T: AsyncWrite> AsyncWrite for WriteHalf<T> {
     ) -> Poll<Result<usize, io::Error>> {
         let mut inner = ready!(self.inner.poll_lock(cx));
         inner.stream_pin().poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let mut inner = ready!(self.inner.poll_lock(cx));
+        inner.stream_pin().poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        unsafe { Pin::new_unchecked(&mut *self.inner.stream.get()) }.is_write_vectored()
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {

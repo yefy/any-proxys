@@ -17,10 +17,10 @@ impl TunnelStream {
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
         server_stream_info: Arc<ServerStreamInfo>,
-        mut client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
+        mut client_buf_reader: any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>,
         stream_info: Share<StreamInfo>,
         executors: ExecutorsLocal,
-    ) -> Result<Option<any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>>> {
+    ) -> Result<Option<any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>>> {
         log::debug!(
             "server protocol7:{}",
             server_stream_info.protocol7.to_string()
@@ -42,7 +42,7 @@ impl TunnelStream {
             stream_info.get_mut().is_discard_flow = true;
             stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
-                any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+                any_base::io::buf_writer::BufWriter::new(client_buf_reader.to_io_buf_reader()),
             );
             //let (r, w) = tokio::io::split(client_buf_stream);
             // tunnel_publish
@@ -61,7 +61,7 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel_publish.push_peer_stream_buf_stream(
+                        ret = tunnel_publish.push_peer_stream(
                            client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,
@@ -96,7 +96,7 @@ impl TunnelStream {
             stream_info.get_mut().is_discard_flow = true;
             stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
-                any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+                any_base::io::buf_writer::BufWriter::new(client_buf_reader.to_io_buf_reader()),
             );
             //let (r, w) = tokio::io::split(client_buf_stream);
             // tunnel2_publish
@@ -115,7 +115,7 @@ impl TunnelStream {
                 async {
                     tokio::select! {
                         biased;
-                        ret = tunnel2_publish.push_peer_stream_buf_stream(
+                        ret = tunnel2_publish.push_peer_stream(
                             client_buf_stream,
                             server_stream_info.local_addr.clone().unwrap(),
                             server_stream_info.remote_addr,

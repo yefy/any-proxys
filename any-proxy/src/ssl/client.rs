@@ -130,13 +130,6 @@ impl client::Connection for Connection {
                     .peer_addr()
                     .map_err(|e| anyhow!("err:tcp_stream.peer_addr => e:{}", e))?;
 
-                //#[cfg(unix)]
-                //use std::os::unix::io::AsRawFd;
-                //#[cfg(unix)]
-                //let fd = tcp_stream.as_raw_fd();
-                //#[cfg(not(unix))]
-                let fd = 0;
-
                 #[cfg(feature = "anyproxy-openssl")]
                 {
                     use crate::util::cache as util_cache;
@@ -189,7 +182,7 @@ impl client::Connection for Connection {
                     let mut ssl_stream = SslStream::new(ssl, tcp_stream)?;
                     std::pin::Pin::new(&mut ssl_stream).connect().await?;
                     let stream = Stream::new(StreamData::Openssl(ssl_stream));
-                    let stream = StreamFlow::new(fd, stream);
+                    let stream = StreamFlow::new(stream, Some(vec!["shut down".to_string()]));
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
 
@@ -222,7 +215,7 @@ impl client::Connection for Connection {
                         .map_err(|e| anyhow!("err:connector.connect => e:{}", e))?;
 
                     let stream = Stream::new(StreamData::C(ssl_stream));
-                    let stream = StreamFlow::new(fd, stream);
+                    let stream = StreamFlow::new(stream, Some(vec!["shut down".to_string()]));
                     Ok((Protocol7::Ssl, stream, local_addr, remote_addr))
                 }
             }

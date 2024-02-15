@@ -2,7 +2,7 @@ use any_base::executor_local_spawn::ThreadRuntime;
 use any_base::io::async_write_msg::AsyncWriteBuf;
 use any_base::stream_flow::StreamFlow;
 use any_base::util::ArcString;
-use any_base::util::StreamMsg;
+use any_base::util::StreamReadMsg;
 use any_tunnel::client;
 use any_tunnel::peer_stream_connect::PeerStreamConnect;
 use any_tunnel::Protocol4;
@@ -33,8 +33,26 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     fn poll_is_single(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
     }
-    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&self.s).poll_write_ready(cx)
+}
+
+impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
+    fn poll_try_read_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        return Poll::Ready(Ok(StreamReadMsg::new()));
+    }
+    fn poll_read_msg(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _msg_size: usize,
+    ) -> Poll<io::Result<StreamReadMsg>> {
+        return Poll::Ready(Ok(StreamReadMsg::new()));
+    }
+
+    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
+        return Poll::Ready(false);
     }
     fn poll_try_read(
         mut self: Pin<&mut Self>,
@@ -57,27 +75,6 @@ impl any_base::io::async_stream::AsyncStream for Stream {
     }
 }
 
-impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
-    fn poll_try_read_msg(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        return Poll::Ready(Ok(StreamMsg::new()));
-    }
-    fn poll_read_msg(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _msg_size: usize,
-    ) -> Poll<io::Result<StreamMsg>> {
-        return Poll::Ready(Ok(StreamMsg::new()));
-    }
-
-    fn poll_is_read_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
-        return Poll::Ready(false);
-    }
-}
-
 impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
     fn poll_write_msg(
         self: Pin<&mut Self>,
@@ -89,6 +86,9 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
 
     fn poll_is_write_msg(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<bool> {
         return Poll::Ready(false);
+    }
+    fn poll_write_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&self.s).poll_write_ready(cx)
     }
 }
 
@@ -164,7 +164,7 @@ impl PeerStreamConnect for PeerStreamConnectTcp {
         let local_addr = stream.local_addr()?;
         let remote_addr = stream.peer_addr()?;
         let stream = Stream::new(stream);
-        Ok((StreamFlow::new(0, stream), local_addr, remote_addr))
+        Ok((StreamFlow::new(stream, None), local_addr, remote_addr))
     }
     async fn addr(&self) -> Result<SocketAddr> {
         let connect_addr = self

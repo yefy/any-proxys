@@ -43,8 +43,8 @@ anyspawn-parking-lot = []
 anyspawn-std-sync = []
 
 [dependencies]
-anyhow = {path = "../anyhow"}
-awaitgroup = {path = "../awaitgroup"}
+anyhow = {path = "../3rdparty/anyhow"}
+awaitgroup = {path = "../3rdparty/awaitgroup"}
 tokio = { version = "1.35.1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
