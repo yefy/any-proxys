@@ -7,9 +7,7 @@ use tracing::{debug, trace};
 use super::{Http1Transaction, Wants};
 use crate::body::{Body, DecodedLength, HttpBody};
 use crate::common::{task, Future, Pin, Poll, Unpin};
-use crate::proto::{
-    BodyLength, Conn, Dispatched, MessageHead, RequestHead,
-};
+use crate::proto::{BodyLength, Conn, Dispatched, MessageHead, RequestHead};
 use crate::upgrade::OnUpgrade;
 use any_base::io::async_write_msg::MsgWriteBuf;
 use any_base::stream_flow::StreamReadWriteFlow;
@@ -20,7 +18,6 @@ pub(crate) struct Dispatcher<D, Bs: HttpBody, I, T> {
     body_tx: Option<crate::body::Sender>,
     body_rx: Pin<Box<Option<Bs>>>,
     is_closing: bool,
-    is_body_close: bool,
 }
 
 pub(crate) trait Dispatch {
@@ -62,10 +59,10 @@ cfg_client! {
 impl<D, Bs, I, T> Dispatcher<D, Bs, I, T>
 where
     D: Dispatch<
-        PollItem = MessageHead<T::Outgoing>,
-        PollBody = Bs,
-        RecvItem = MessageHead<T::Incoming>,
-    > + Unpin,
+            PollItem = MessageHead<T::Outgoing>,
+            PollBody = Bs,
+            RecvItem = MessageHead<T::Incoming>,
+        > + Unpin,
     D::PollError: Into<Box<dyn StdError + Send + Sync>>,
     I: StreamReadWriteFlow + Unpin,
     T: Http1Transaction + Unpin,
@@ -79,7 +76,6 @@ where
             body_tx: None,
             body_rx: Box::pin(None),
             is_closing: false,
-            is_body_close: false,
         }
     }
 
@@ -263,7 +259,10 @@ where
                 if wants.contains(Wants::UPGRADE) {
                     let upgrade = self.conn.on_upgrade();
                     debug_assert!(!upgrade.is_none(), "empty upgrade");
-                    debug_assert!(head.extensions.get::<OnUpgrade>().is_none(), "OnUpgrade already set");
+                    debug_assert!(
+                        head.extensions.get::<OnUpgrade>().is_none(),
+                        "OnUpgrade already set"
+                    );
                     head.extensions.insert(upgrade);
                 }
                 self.dispatch.recv_msg(Ok((head, body)))?;
@@ -328,7 +327,7 @@ where
                     self.close();
                     return Poll::Ready(Ok(()));
                 }
-            } else if self.is_body_close || !self.conn.can_buffer_body() {
+            } else if !self.conn.can_buffer_body() {
                 ready!(self.poll_flush(cx))?;
             } else {
                 // A new scope is needed :(
@@ -368,10 +367,6 @@ where
                             self.conn.write_body(chunk);
                         }
                     } else {
-                        if !self.is_body_close {
-                            self.is_body_close = true;
-                            continue;
-                        }
                         *clear_body = true;
                         self.conn.end_body()?;
                     }
@@ -416,10 +411,10 @@ where
 impl<D, Bs, I, T> Future for Dispatcher<D, Bs, I, T>
 where
     D: Dispatch<
-        PollItem = MessageHead<T::Outgoing>,
-        PollBody = Bs,
-        RecvItem = MessageHead<T::Incoming>,
-    > + Unpin,
+            PollItem = MessageHead<T::Outgoing>,
+            PollBody = Bs,
+            RecvItem = MessageHead<T::Incoming>,
+        > + Unpin,
     D::PollError: Into<Box<dyn StdError + Send + Sync>>,
     I: StreamReadWriteFlow + Unpin,
     T: Http1Transaction + Unpin,
