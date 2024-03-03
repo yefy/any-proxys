@@ -4,6 +4,16 @@ git clone https://github.com/yefy/any-proxys.git
 cd any-proxys  
 cargo build --release --bin anyproxy  
 ```
+linux:需要安装 
+apt install gcc
+apt install g++
+apt install make
+apt install pkg-config
+apt install openssl
+apt install libssl-dev
+
+window:需要安装openssl
+
 如何本地没安装openssl建议使用rustls库: 
 cargo build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
 ```

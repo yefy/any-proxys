@@ -240,7 +240,7 @@ impl server::Connection for Connection {
                         local_addr
                     ));
                 }
-                Some(domain.unwrap().to_string())
+                Some(domain.unwrap().into())
             };
 
             let stream = Stream::new(StreamData::S(ssl_stream));
@@ -249,7 +249,8 @@ impl server::Connection for Connection {
                 tokio::time::Duration::from_secs(self.config.tcp_recv_timeout as u64);
             let write_timeout =
                 tokio::time::Duration::from_secs(self.config.tcp_send_timeout as u64);
-            stream.set_config(read_timeout, write_timeout, ArcMutex::default());
+            stream.set_config(read_timeout, write_timeout, None);
+            let raw_fd = stream.raw_fd();
             Ok(Some((
                 stream,
                 ServerStreamInfo {
@@ -258,6 +259,7 @@ impl server::Connection for Connection {
                     local_addr: Some(local_addr),
                     domain,
                     is_tls: true,
+                    raw_fd,
                 },
             )))
         }
