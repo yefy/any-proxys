@@ -78,35 +78,14 @@ pub async fn handle_run(
     sss: Arc<StreamStreamShare>,
     handle: ArcRwLockTokio<PluginHandleStream>,
 ) -> Result<StreamStatus> {
-    let ssc = sss.ssc.clone();
     let plugin = {
         let mut sss_ctx = sss.sss_ctx.get_mut();
         use crate::config::stream_stream_tmp_file;
         let ctx_index = stream_stream_tmp_file::module().get().ctx_index as usize;
         let plugin = sss_ctx.plugins[ctx_index].clone();
         if plugin.is_none() {
-            let mut _plugin = StreamStreamTmpFile::new();
-            if ssc.cs.tmp_file_size > 0 {
-                let fw = Builder::new()
-                    .append(true)
-                    .tempfile()
-                    .map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
-                //NamedTempFile::new().map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
-                let fr = fw
-                    .reopen()
-                    .map_err(|e| anyhow!("err:fw.reopen => e:{}", e))?;
-
-                #[cfg(unix)]
-                {
-                    use std::os::unix::io::AsRawFd;
-                    _plugin.fr_fd = fr.as_raw_fd();
-                }
-
-                _plugin.fw = Some(ArcMutex::new(fw));
-                _plugin.fr = Some(ArcMutex::new(fr));
-            }
-
-            let plugin = ArcUnsafeAny::new(Box::new(_plugin));
+            let plugin = StreamStreamTmpFile::new();
+            let plugin = ArcUnsafeAny::new(Box::new(plugin));
             sss_ctx.plugins[ctx_index] = Some(plugin.clone());
             plugin
         } else {
@@ -248,6 +227,28 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
     };
 
     change_stream_size(buffer.is_cache, size as i64, &mut ssd.get_mut());
+    {
+        let plugin = plugin.get_mut::<StreamStreamTmpFile>();
+        if plugin.fw.is_none() {
+            let fw = Builder::new()
+                .append(true)
+                .tempfile()
+                .map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
+            //NamedTempFile::new().map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
+            let fr = fw
+                .reopen()
+                .map_err(|e| anyhow!("err:fw.reopen => e:{}", e))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::AsRawFd;
+                plugin.fr_fd = fr.as_raw_fd();
+            }
+
+            plugin.fw = Some(ArcMutex::new(fw));
+            plugin.fr = Some(ArcMutex::new(fr));
+        }
+    }
     let fw = plugin.get::<StreamStreamTmpFile>().fw();
     if ssc.cs.is_tmp_file_io_page {
         let fw_seek = {
