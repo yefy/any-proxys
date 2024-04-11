@@ -2,9 +2,10 @@
 cd $HOME  
 git clone https://github.com/yefy/any-proxys.git  
 cd any-proxys  
+git checkout any-proxys-v2.0.0
 cargo build --release --bin anyproxy  
 ```
-linux:需要安装 
+linux:需要安装: 
 apt install gcc
 apt install g++
 apt install make
@@ -12,7 +13,8 @@ apt install pkg-config
 apt install openssl
 apt install libssl-dev
 
-window:需要安装openssl
+window:需要安装: 
+openssl
 
 如何本地没安装openssl建议使用rustls库: 
 cargo build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
@@ -42,7 +44,7 @@ host 127.0.0.1 www.example.cn
 
 #开启源站
 ./anyproxy -c conf/anyproxy_origin.conf或是使用nginx做源站见下面链接  
-[nginx 源站 支持 http https](https://github.com/yefy/any-proxys/blob/main/any-proxy/doc/nginx%E6%BA%90%E7%AB%99%E6%94%AF%E6%8C%81http%E5%92%8Chttps.md)  
+[nginx 源站 支持 http https](https://github.com/yefy/any-proxys/blob/any-proxys-v2.0.0/any-proxy/doc/nginx%E6%BA%90%E7%AB%99%E6%94%AF%E6%8C%81http%E5%92%8Chttps.md)  
 
 #中转代理  
 ./anyproxy -c conf/anyproxy_proxy_to_origin.conf  

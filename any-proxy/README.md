@@ -2,10 +2,10 @@
 rust语言编写高性能、高度模块化、插件化的负载平衡器、四层和七层反向代理服务，支持tcp、quic、ssl、any-tunnel、http、https、http2.0、https2.0、websocket、websockets、内核态ebpf等
 
 # anyproxy doc
-[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)
+[文档](https://github.com/yefy/any-proxys/tree/any-proxys-v2.0.0/any-proxy/doc)
 
 # any-tunnel doc
-[文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
+[文档](https://github.com/yefy/any-proxys/blob/any-proxys-v2.0.0/any-tunnel/README.md)
 
 # 特点
 跨平台（Linux、Window、Mac等）协程框架编码简单  
@@ -18,7 +18,7 @@ Linux reuseport多线程无锁并发
 高性能，cpu占用低（和nginx相媲美的性能）    
 内存安全没有泄漏风险，且内存占用低，无gc  
 支持tcp、quic、ssl、any-tunnel四层代理协议相互转换  
-功能非常强大配置文件解析，见[文档](https://github.com/yefy/any-proxys/blob/main/any-proxy/doc/%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E7%BB%93%E6%9E%84.md)   
+功能非常强大配置文件解析，见[文档](https://github.com/yefy/any-proxys/blob/any-proxys-v2.0.0/any-proxy/doc/%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E7%BB%93%E6%9E%84.md)   
 配置文件热加载  
 linux reuseport环境支持程序热升级    
 支持any-tunnel在高延迟网络加速，socket流缓存    
