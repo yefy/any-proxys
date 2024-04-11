@@ -36,7 +36,7 @@ impl AnyproxyGroup {
     pub async fn start(&mut self) -> Result<()> {
         log::trace!("anyproxy_group start");
         let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-        let mut ms = module::Modules::new(Some(self.ms.clone()));
+        let mut ms = module::Modules::new(Some(self.ms.clone()), false);
         ms.parse_module_config(&file_name, None)
             .await
             .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
@@ -62,7 +62,7 @@ impl AnyproxyGroup {
         let (_config_tx, _) = broadcast::channel(100);
         let mut _worker_threads = common_conf.worker_threads;
         let mut _block_on_worker_threads = common_conf.worker_threads;
-        #[cfg(windows)]
+        #[cfg(not(unix))]
         {
             _worker_threads = 1;
         }
@@ -125,7 +125,7 @@ impl AnyproxyGroup {
         let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
         let file_name = anyproxy_conf_full_path.as_str();
 
-        let mut ms = module::Modules::new(Some(self.ms.clone()));
+        let mut ms = module::Modules::new(Some(self.ms.clone()), false);
         let ret = ms
             .parse_module_config(file_name, None)
             .await
@@ -173,7 +173,7 @@ impl AnyproxyGroup {
         let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
         let file_name = anyproxy_conf_full_path.as_str();
 
-        let mut ms = module::Modules::new(None);
+        let mut ms = module::Modules::new(None, false);
         let ret = ms
             .parse_module_config(&file_name, None)
             .await

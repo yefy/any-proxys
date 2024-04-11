@@ -137,9 +137,9 @@ impl WebsocketServer {
     ) -> Result<()> {
         let body = {
             let scc = scc.get();
-            use crate::config::http_server_echo_websocket;
+            use crate::config::net_server_echo_websocket;
             let http_server_echo_websocket_conf =
-                http_server_echo_websocket::currs_conf(scc.http_server_confs());
+                net_server_echo_websocket::currs_conf(scc.net_server_confs());
             http_server_echo_websocket_conf.body.clone()
         };
         let (mut w, _r) = client_stream.split();

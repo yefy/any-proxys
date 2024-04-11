@@ -1,16 +1,14 @@
 use crate::config::config_toml::AccessConfig;
+use crate::proxy::http_proxy::http_filter::http_filter_headers_pre::{run_wasm_plugin, WasmHost};
 use crate::proxy::proxy::AccessContext;
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::stream_var;
-use crate::stream::server::ServerStreamInfo;
 use crate::util::var::Var;
-use crate::Protocol7;
 use any_base::typ::Share;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,22 +17,7 @@ pub struct AccessLog {}
 impl AccessLog {
     pub async fn parse_config_access_log(access: &Vec<AccessConfig>) -> Result<Vec<AccessContext>> {
         let mut access_map = HashMap::new();
-        let stream_info_test = StreamInfo::new(
-            Arc::new(ServerStreamInfo {
-                protocol7: Protocol7::Tcp,
-                remote_addr: SocketAddr::from(([127, 0, 0, 1], 8080)),
-                local_addr: Some(SocketAddr::from(([127, 0, 0, 1], 18080))),
-                domain: None,
-                is_tls: false,
-                raw_fd: 0,
-            }),
-            false,
-            None,
-            0,
-            0,
-            0,
-            false,
-        );
+        use crate::util::default_config::VAR_STREAM_INFO;
 
         let mut access_context = Vec::new();
         for access in access {
@@ -49,7 +32,7 @@ impl AccessLog {
                     .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
                 access_format_vars_test.for_each(|var| {
                     let var_name = Var::var_name(var);
-                    let value = stream_var::find(var_name, &stream_info_test)
+                    let value = stream_var::find(var_name, &VAR_STREAM_INFO)
                         .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
                     Ok(value)
                 })?;
@@ -119,16 +102,16 @@ impl AccessLog {
 
     pub async fn access_log(stream_info: Share<StreamInfo>) -> Result<()> {
         let stream_info = stream_info.get_mut();
-        use crate::config::http_access_log;
+        use crate::config::net_access_log;
         let scc = stream_info.scc.get();
-        let http_access_log_conf = http_access_log::currs_conf(scc.http_server_confs());
+        let net_access_log_conf = net_access_log::currs_conf(scc.net_server_confs());
 
-        for (index, access) in http_access_log_conf.access.iter().enumerate() {
+        for (index, access) in net_access_log_conf.access.iter().enumerate() {
             if access.access_log {
                 if access.is_err_access_log && !stream_info.is_err {
                     continue;
                 }
-                let access_context = &http_access_log_conf.access_context[index];
+                let access_context = &net_access_log_conf.access_context[index];
                 let mut access_format_var = Var::copy(&access_context.access_format_vars)
                     .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
                 access_format_var.for_each(|var| {
@@ -174,12 +157,12 @@ impl AccessLog {
 
     pub async fn debug_access_log(stream_info: Share<StreamInfo>) -> Result<()> {
         let stream_info = stream_info.get();
-        use crate::config::http_access_log;
+        use crate::config::net_access_log;
         let scc = stream_info.scc.get();
-        let http_access_log_conf = http_access_log::currs_conf(scc.http_server_confs());
+        let net_access_log_conf = net_access_log::currs_conf(scc.net_server_confs());
 
-        for (index, _) in http_access_log_conf.access.iter().enumerate() {
-            let access_context = &http_access_log_conf.access_context[index];
+        for (index, _) in net_access_log_conf.access.iter().enumerate() {
+            let access_context = &net_access_log_conf.access_context[index];
             let mut access_format_var = Var::copy(&access_context.access_format_vars)
                 .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
             access_format_var.for_each(|var| {
@@ -198,6 +181,39 @@ impl AccessLog {
                 .join()
                 .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
             log::info!("***debug***{}", access_log_data);
+        }
+        Ok(())
+    }
+
+    pub async fn wasm_access_log(stream_info: Share<StreamInfo>) -> Result<()> {
+        if stream_info.get().scc.is_none() {
+            return Ok(());
+        }
+        log::trace!(
+            "session_id:{}, wasm_access_log",
+            stream_info.get().session_id
+        );
+        use crate::config::net_access_log;
+        use crate::config::net_core_wasm;
+        let (ms, net_curr_conf) = {
+            let stream_info = stream_info.get();
+            let scc = stream_info.scc.get();
+            (scc.ms(), scc.net_curr_conf())
+        };
+        let conf = net_access_log::curr_conf(&net_curr_conf);
+
+        if conf.wasm_plugin_confs.is_none() {
+            return Ok(());
+        }
+        let wasm_plugin_confs = conf.wasm_plugin_confs.as_ref().unwrap();
+        let net_core_wasm_conf = net_core_wasm::main_conf(&ms).await;
+        for wasm_plugin_conf in &wasm_plugin_confs.wasm {
+            let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
+            let plugin = WasmHost::new(stream_info.clone());
+            let ret = run_wasm_plugin(&wasm_plugin_conf.wasm_config, plugin, &wasm_plugin).await;
+            if let Err(e) = &ret {
+                log::error!("wasm_access_log:{}", e);
+            }
         }
         Ok(())
     }

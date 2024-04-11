@@ -44,7 +44,7 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
-        typ: conf::MODULE_TYPE_HTTP,
+        typ: conf::MODULE_TYPE_NET,
         create_server: None,
     });
 }
@@ -121,12 +121,12 @@ async fn init_conf(
     _main_confs: typ::ArcUnsafeAny,
     _conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
-    use crate::config::http_core_plugin;
+    use crate::config::net_core_plugin;
     let (plugin_handle_stream_cache, plugin_handle_set_stream_cache) = {
-        let http_core_plugin_conf = http_core_plugin::main_conf_mut(&ms).await;
+        let net_core_plugin_conf = net_core_plugin::main_conf_mut(&ms).await;
         (
-            http_core_plugin_conf.plugin_handle_stream_cache.clone(),
-            http_core_plugin_conf.plugin_handle_set_stream_cache.clone(),
+            net_core_plugin_conf.plugin_handle_stream_cache.clone(),
+            net_core_plugin_conf.plugin_handle_set_stream_cache.clone(),
         )
     };
 

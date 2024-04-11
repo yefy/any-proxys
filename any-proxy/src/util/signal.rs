@@ -9,7 +9,7 @@ pub async fn quit() -> bool {
             }
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         tokio::time::sleep(std::time::Duration::from_secs(1000000)).await;
         return false;
@@ -27,7 +27,7 @@ pub async fn stop() -> bool {
             }
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         tokio::time::sleep(std::time::Duration::from_secs(1000000)).await;
         return false;
@@ -45,7 +45,7 @@ pub async fn hup() -> bool {
             }
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         tokio::time::sleep(std::time::Duration::from_secs(1000000)).await;
         return false;
@@ -63,7 +63,7 @@ pub async fn user1() -> bool {
             }
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         tokio::time::sleep(std::time::Duration::from_secs(1000000)).await;
         return false;
@@ -81,7 +81,7 @@ pub async fn user2() -> bool {
             }
         }
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         tokio::time::sleep(std::time::Duration::from_secs(1000000)).await;
         return false;

@@ -1,6 +1,7 @@
 pub mod anyproxy;
 pub mod config;
 pub mod ebpf;
+pub mod macros;
 pub mod protopack;
 pub mod proxy;
 pub mod quic;
@@ -11,10 +12,26 @@ pub mod tunnel;
 pub mod tunnel2;
 pub mod upstream;
 pub mod util;
+pub mod wasm;
 
 use any_tunnel2::Protocol4;
 use anyhow::anyhow;
 use anyhow::Result;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WasmPluginConf {
+    pub wasm_path: String,
+    pub wasm_config: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WasmPluginConfs {
+    pub wasm: Vec<WasmPluginConf>,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Protocol7 {
@@ -35,12 +52,12 @@ impl Protocol7 {
             Protocol7::Tcp => "tcp".to_string(),
             Protocol7::Ssl => "ssl".to_string(),
             Protocol7::Quic => "quic".to_string(),
-            Protocol7::TunnelTcp => "tunnel_tcp".to_string(),
-            Protocol7::TunnelSsl => "tunnel_ssl".to_string(),
-            Protocol7::TunnelQuic => "tunnel_quic".to_string(),
-            Protocol7::Tunnel2Tcp => "tunnel2_tcp".to_string(),
-            Protocol7::Tunnel2Ssl => "tunnel2_ssl".to_string(),
-            Protocol7::Tunnel2Quic => "tunnel2_quic".to_string(),
+            Protocol7::TunnelTcp => "tunnelTcp".to_string(),
+            Protocol7::TunnelSsl => "tunnelSsl".to_string(),
+            Protocol7::TunnelQuic => "tunnelQuic".to_string(),
+            Protocol7::Tunnel2Tcp => "tunnel2Tcp".to_string(),
+            Protocol7::Tunnel2Ssl => "tunnel2Ssl".to_string(),
+            Protocol7::Tunnel2Quic => "tunnel2Quic".to_string(),
         }
     }
 
@@ -49,12 +66,12 @@ impl Protocol7 {
             "tcp" => Ok(Protocol7::Tcp),
             "ssl" => Ok(Protocol7::Ssl),
             "quic" => Ok(Protocol7::Quic),
-            "tunnel_tcp" => Ok(Protocol7::TunnelTcp),
-            "tunnel_ssl" => Ok(Protocol7::TunnelSsl),
-            "tunnel_quic" => Ok(Protocol7::TunnelQuic),
-            "tunnel2_tcp" => Ok(Protocol7::Tunnel2Tcp),
-            "tunnel2_ssl" => Ok(Protocol7::Tunnel2Ssl),
-            "tunnel2_quic" => Ok(Protocol7::Tunnel2Quic),
+            "tunnelTcp" => Ok(Protocol7::TunnelTcp),
+            "tunnelSsl" => Ok(Protocol7::TunnelSsl),
+            "tunnelQuic" => Ok(Protocol7::TunnelQuic),
+            "tunnel2Tcp" => Ok(Protocol7::Tunnel2Tcp),
+            "tunnel2Ssl" => Ok(Protocol7::Tunnel2Ssl),
+            "tunnel2Quic" => Ok(Protocol7::Tunnel2Quic),
             _ => {
                 return Err(anyhow!("err:Protocol7 nil"));
             }
@@ -146,4 +163,18 @@ impl Protocol77 {
             }
         }
     }
+}
+
+pub enum Error {
+    //继续进行
+    Ok,
+    //结束当前循环
+    Break,
+    //结束所有循环
+    Finish,
+    //退出请求
+    Error,
+    Ext1,
+    Ext2,
+    Ext3,
 }

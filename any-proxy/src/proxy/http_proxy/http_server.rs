@@ -1,28 +1,14 @@
-use super::http_hyper_connector::HttpHyperConnector;
-use super::HyperExecutorLocal;
-use crate::config::config_toml::HttpServerProxyConfig;
-use crate::config::config_toml::HttpVersion;
-use crate::proxy::http_proxy::stream::Stream;
-use crate::proxy::http_proxy::{http_connection, HTTP_HELLO_KEY};
+use crate::proxy::http_proxy::http_connection;
 use crate::proxy::ServerArg;
-use crate::proxy::{util as proxy_util, StreamConfigContext};
-use crate::stream::connect::{Connect, ConnectInfo};
+use crate::proxy::StreamConfigContext;
 use any_base::stream_flow::StreamFlow;
-use anyhow::anyhow;
 use anyhow::Result;
 //use hyper::body::HttpBody;
 use crate::proxy::http_proxy::http_stream::HttpStream;
-use crate::proxy::stream_info::StreamInfo;
-use crate::{Protocol7, Protocol77};
 use any_base::io::buf_reader::BufReader;
-use any_base::typ::{Share, ShareRw};
-use base64::{engine::general_purpose, Engine as _};
-use http::header::HOST;
-use hyper::client::connect::ReqArg;
-use hyper::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
-use hyper::{Body, Version};
-use std::sync::Arc;
-use std::time::Duration;
+use any_base::typ::ShareRw;
+use hyper::http::{Request, Response};
+use hyper::Body;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -32,21 +18,34 @@ pub async fn http_server_handle(
         any_base::io::buf_writer::BufWriter::new(client_buf_reader),
     );
 
-    http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
-        Box::pin(http_server_run_handle(arg, http_arg, scc, req))
+    http_connection(arg, client_buf_stream, |arg, http_arg, scc, request| {
+        Box::pin(http_server_run_handle(arg, http_arg, scc, request))
     })
     .await
 }
 
 pub async fn http_server_run_handle(
-    _arg: ServerArg,
+    arg: ServerArg,
     http_arg: ServerArg,
     scc: ShareRw<StreamConfigContext>,
-    req: Request<Body>,
+    request: Request<Body>,
 ) -> Result<Response<Body>> {
-    HttpServer::new(http_arg).run(scc, req).await
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    http_arg.executors.clone()._start(
+        #[cfg(feature = "anyspawn-count")]
+        Some(format!("{}:{}", file!(), line!())),
+        move |_| async move {
+            HttpStream::new(arg, http_arg, scc, request, tx)
+                .start()
+                .await
+        },
+    );
+    Ok(rx
+        .await
+        .map_err(|e| anyhow::anyhow!("err:http_server_run_handle Response<Body> => err:{}", e))?)
 }
 
+/*
 pub struct HttpServer {
     http_arg: ServerArg,
 }
@@ -59,9 +58,9 @@ impl HttpServer {
     pub async fn run(
         &mut self,
         scc: ShareRw<StreamConfigContext>,
-        req: Request<Body>,
+        request: Request<Body>,
     ) -> Result<Response<Body>> {
-        let ret = self.do_run(scc, req).await;
+        let ret = self.do_run(scc, request).await;
         if let Err(e) = ret {
             log::error!("err:run => e:{}", e);
             return Ok(Response::builder()
@@ -74,9 +73,9 @@ impl HttpServer {
     pub async fn do_run(
         &mut self,
         scc: ShareRw<StreamConfigContext>,
-        mut req: Request<Body>,
+        mut request: Request<Body>,
     ) -> Result<Response<Body>> {
-        log::trace!("client req = {:#?}", req);
+        log::trace!("client request = {:#?}", request);
         let (is_proxy_protocol_hello, connect_func) =
             proxy_util::upsteam_connect_info(self.http_arg.stream_info.clone(), scc.clone())
                 .await?;
@@ -95,7 +94,7 @@ impl HttpServer {
                 .stream_info
                 .get_mut()
                 .upstream_protocol_hello_size = hello_str.len();
-            req.headers_mut().insert(
+            request.headers_mut().insert(
                 HeaderName::from_bytes(HTTP_HELLO_KEY.as_bytes())?,
                 HeaderValue::from_bytes(hello_str.as_bytes())?,
             );
@@ -106,12 +105,12 @@ impl HttpServer {
             stream_info.server_stream_info.raw_fd
         };
 
-        let version = req.version();
+        let version = request.version();
         let protocol7 = connect_func.protocol7().await;
         let upstream_is_tls = connect_func.is_tls().await;
 
         //let upstream_host = connect_func.host().await?;
-        let upstream_host = req.headers().get(HOST);
+        let upstream_host = request.headers().get(HOST);
         if upstream_host.is_none() {
             return Err(anyhow!("host nil"));
         }
@@ -119,8 +118,8 @@ impl HttpServer {
 
         let proxy = {
             let scc = scc.get();
-            use crate::config::http_server_proxy;
-            let http_server_proxy_conf = http_server_proxy::currs_conf(scc.http_server_confs());
+            use crate::config::net_server_proxy_http;
+            let http_server_proxy_conf = net_server_proxy_http::currs_conf(scc.net_server_confs());
             http_server_proxy_conf.proxy.clone()
         };
 
@@ -147,7 +146,7 @@ impl HttpServer {
             "{}://{}{}",
             upstream_scheme,
             upstream_host,
-            req.uri()
+            request.uri()
                 .path_and_query()
                 .map(|x| x.as_str())
                 .unwrap_or("/")
@@ -155,13 +154,13 @@ impl HttpServer {
         log::trace!("url_string = {}", url_string);
         let uri = url_string.parse()?;
 
-        *req.uri_mut() = uri;
-        req.headers_mut().remove(HOST);
-        req.headers_mut().remove("connection");
-        *req.version_mut() = upstream_version;
-        log::trace!("upstream req = {:#?}", req);
+        *request.uri_mut() = uri;
+        request.headers_mut().remove(HOST);
+        request.headers_mut().remove("connection");
+        *request.version_mut() = upstream_version;
+        log::trace!("upstream request = {:#?}", request);
 
-        let (req_parts, req_body) = req.into_parts();
+        let (req_parts, req_body) = request.into_parts();
         let (client_req_sender, client_req_body) = Body::channel();
         let client_req = Request::from_parts(req_parts, client_req_body);
 
@@ -324,13 +323,13 @@ impl HttpServer {
         let http_context = {
             let stream_info = self.http_arg.stream_info.get();
             let scc = stream_info.scc.get();
-            use crate::config::http_core;
-            let http_core_conf = http_core::currs_conf(scc.http_server_confs());
+            use crate::config::net_core;
+            let net_core_conf = net_core::currs_conf(scc.net_server_confs());
 
-            if http_core_conf.is_disable_share_http_context {
+            if net_core_conf.is_disable_share_http_context {
                 self.http_arg.http_context.clone()
             } else {
-                http_core_conf.http_context.clone()
+                net_core_conf.http_context.clone()
             }
         };
 
@@ -367,3 +366,4 @@ impl HttpServer {
         Ok(client)
     }
 }
+ */

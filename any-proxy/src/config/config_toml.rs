@@ -460,7 +460,20 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] ${write_max_block_time_ms} ${buffer_cache} ${upstream_dispatch} ${is_proxy_protocol_hello} ${is_open_ebpf} ${open_sendfile} ${local_protocol} -> ${upstream_protocol} ${request_id} ${client_addr} ${remote_addr} ${local_addr} ${upstream_addr} ${domain} ${upstream_host} ${status} ${status_str} ${is_timeout_exit} ${session_time} ${upstream_connect_time} ${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} ${client_protocol_hello_size} ${upstream_protocol_hello_size} [${stream_work_times}] ${stream_stream_info}".to_string()
+    "[${local_time}] stream_max_write_time:${write_max_block_time_ms} buffer_cache:${buffer_cache} \
+        upstream_balancer:${upstream_balancer} hello:${is_proxy_protocol_hello} ebpf:${is_open_ebpf} \
+        sendfile:${open_sendfile} ${local_protocol} -> ${upstream_protocol} \
+        request_id:[${request_id}] client_addr:${client_addr} remote_addr:${remote_addr} local_addr:${local_addr} upstream_addr:${upstream_addr} \
+        domain:${domain} upstream_host:${upstream_host} ${status} ${status_str} timeout_exit:${is_timeout_exit} \
+        session_time:${session_time} upstream_connect_time:${upstream_connect_time} \
+        stream_bytes:${client_bytes_received} ${upstream_bytes_sent} ${upstream_bytes_received} ${client_bytes_sent} \
+        ${upstream_curr_stream_size} ${upstream_max_stream_size} ${upstream_min_stream_cache_size} \
+        client_protocol_hello_size:${client_protocol_hello_size} upstream_protocol_hello_size:${upstream_protocol_hello_size} \
+        stream_work_times:[${stream_work_times}] stream_stream_info:[${stream_stream_info}] \
+        http_local_cache_req_count:${http_local_cache_req_count} http_cache_status:${http_cache_status} \
+        http_cache_file_status:${http_cache_file_status} http_is_upstream:${http_is_upstream} \
+        http_last_slice_upstream_index:${http_last_slice_upstream_index} \
+        http_max_upstream_count:${http_max_upstream_count} http_is_cache:${http_is_cache}".to_string()
 }
 
 fn default_access_log_stdout() -> bool {

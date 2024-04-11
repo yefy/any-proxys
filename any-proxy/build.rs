@@ -4,6 +4,7 @@ use libbpf_cargo::SkeletonBuilder;
 use std::fs::create_dir_all;
 #[cfg(feature = "anyproxy-ebpf")]
 const SRC: &str = "./src/ebpf/bpf/any_ebpf.bpf.c";
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
@@ -68,7 +69,14 @@ pub fn extract(file_name: &str, target: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let mut config = vergen::Config::default();
+    *config.git_mut().sha_kind_mut() = vergen::ShaKind::Short;
+    *config.git_mut().commit_timestamp_kind_mut() = vergen::TimestampKind::DateOnly;
+    let _ = vergen::vergen(config).map_err(|e| anyhow::anyhow!("err:ergen::vergen => e:{}", e));
+
     #[cfg(feature = "anyproxy-ebpf")]
     {
         let file_name = "./src/ebpf/bpf/vmlinux.h";
@@ -98,4 +106,5 @@ fn main() {
             .expect("bpf compilation failed");
         println!("cargo:rerun-if-changed={}", SRC);
     }
+    Ok(())
 }

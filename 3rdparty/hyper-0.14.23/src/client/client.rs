@@ -21,6 +21,8 @@ use crate::body::{Body, HttpBody};
 use crate::common::{exec::BoxSendFuture, sync_wrapper::SyncWrapper, lazy as hyper_lazy, task, Future, Lazy, Pin, Poll};
 use crate::rt::Executor;
 use crate::client::connect::ReqArg;
+use bytes::Bytes;
+use any_base::util::HttpHeaderExt;
 
 /// A Client to make outgoing HTTP requests.
 ///
@@ -40,6 +42,19 @@ struct Config {
     set_host: bool,
     ver: Ver,
 }
+
+
+/// A Client to make outgoing HTTP requests.
+pub struct  AnyProxyHyperBuf(pub Bytes);
+/// A Client to make outgoing HTTP requests.
+pub struct AnyProxyRawHeaders(pub AnyProxyHyperBuf);
+
+/// A Client to make outgoing HTTP requests.
+pub struct  AnyProxyHyperHttpHeaderExt(pub HttpHeaderExt);
+/// A Client to make outgoing HTTP requests.
+pub struct AnyProxyRawHttpHeaderExt(pub AnyProxyHyperHttpHeaderExt);
+
+
 
 /// A `Future` that will resolve to an HTTP Response.
 ///

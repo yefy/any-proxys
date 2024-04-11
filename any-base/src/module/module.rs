@@ -13,6 +13,44 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+/*
+//主模块才有
+create_server
+
+//创建main
+create_main_confs -> create_conf
+
+//创建server
+create_server_confs -> create_conf
+
+//创建local
+create_local_confs -> create_conf
+
+for {
+      main -> server -> local
+}
+//上面基本只能做自己的配置文件解析
+
+
+//相同main中有个多个配置要处理，可以在自己的main中处理
+//不同的main中有个多个配置要处理，可以统一一个相同main中处理
+// main -> server -> local做完，才开始初始化
+//只是初始化全部main
+init_main_confs_map   ->   init_conf
+
+//共享数据引用在这里处理， 共享数据只能保存在main中
+// main -> server -> local做完，才开始merge
+//只是old main， main全部main合并
+merge_old_main_confs_map  -> merge_old_conf
+
+//server local 要引用main中的数据， 先合并完后在访问上级
+// main -> server -> local做完，才开始merge
+//递归main  server local  进行合并
+merge_confs_map    -> merge_conf
+
+//全局共享数据参考 any-proxy\src\confighttp_core_proxy.rs   proxy_cache  proxy_cache_name的处理
+*/
+
 lazy_static! {
     pub static ref G_MODULES: ArcMutex<GModules> = ArcMutex::new(GModules::new());
 }
@@ -757,10 +795,11 @@ pub struct Modules {
     old_ms: ArcMutex<Modules>,
     merge_old_main_confs_map: ArcMutex<HashMap<i32, MergeOldMainConfs>>,
     merge_confs_map: ArcMutex<HashMap<i32, MergeConfs>>,
+    is_work_thread: bool,
 }
 unsafe impl Send for Modules {}
 impl Modules {
-    pub fn new(old_ms: Option<Modules>) -> Modules {
+    pub fn new(old_ms: Option<Modules>, is_work_thread: bool) -> Modules {
         let old_ms = if old_ms.is_some() {
             ArcMutex::new(old_ms.unwrap())
         } else {
@@ -774,7 +813,12 @@ impl Modules {
             old_ms,
             merge_old_main_confs_map: ArcMutex::default(),
             merge_confs_map: ArcMutex::default(),
+            is_work_thread,
         }
+    }
+
+    pub fn is_work_thread(&self) -> bool {
+        self.is_work_thread
     }
 
     pub fn main_confs(&self) -> ArcUnsafeAny {

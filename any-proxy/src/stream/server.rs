@@ -153,13 +153,14 @@ where
     let local_addr = listen_server
         .listen_addr()
         .map_err(|e| anyhow!("err:listen_server.listen_addr => e:{}", e))?;
-
-    log::debug!(
-        "start listen thread_id:{:?}, Protocol7:{}, listen_addr:{}",
-        std::thread::current().id(),
-        listen_server.protocol7().to_string(),
-        local_addr
-    );
+    if log::log_enabled!(log::Level::Debug) {
+        log::debug!(
+            "start listen thread_id:{:?}, Protocol7:{}, listen_addr:{}",
+            std::thread::current().id(),
+            listen_server.protocol7().to_string(),
+            local_addr
+        );
+    }
     let mut accept_shutdown_thread_tx = executors.context.shutdown_thread_tx.subscribe();
     let mut accept_listen_shutdown_tx = listen_shutdown_tx.subscribe();
     let is_fast_shutdown = loop {
@@ -267,12 +268,14 @@ where
     executor
         .stop("listen stop", is_fast_shutdown, shutdown_timeout)
         .await;
-    log::debug!(
-        "close listen thread_id:{:?}, Protocol7{}, listen_addr:{}",
-        std::thread::current().id(),
-        listen_server.protocol7().to_string(),
-        local_addr
-    );
+    if log::log_enabled!(log::Level::Debug) {
+        log::debug!(
+            "close listen thread_id:{:?}, Protocol7{}, listen_addr:{}",
+            std::thread::current().id(),
+            listen_server.protocol7().to_string(),
+            local_addr
+        );
+    }
 
     Ok(())
 }

@@ -98,7 +98,7 @@ impl AnyproxyWork {
                 .unwrap()
                 .block_on(async {
                     let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-                    let mut ms = module::Modules::new(Some(ms));
+                    let mut ms = module::Modules::new(Some(ms), true);
                     ms.parse_module_config(&file_name, None)
                         .await
                         .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
@@ -152,7 +152,7 @@ impl AnyproxyWork {
                             .unwrap()
                             .block_on(async {
                                 let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-                                let mut ms = module::Modules::new(Some(ms));
+                                let mut ms = module::Modules::new(Some(ms), true);
                                 ms.parse_module_config(&file_name, None)
                                     .await
                                     .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;

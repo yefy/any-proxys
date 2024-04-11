@@ -7,6 +7,7 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 use crate::protopack;
 use crate::proxy::port_config::PortConfigListen;
+use crate::proxy::util::run_plugin_handle_access;
 use crate::stream::server::ServerStreamInfo;
 use any_base::executor_local_spawn::ExecutorsLocal;
 #[cfg(feature = "anyproxy-ebpf")]
@@ -24,70 +25,78 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct PortStream {
-    _ms: Modules,
+    ms: Modules,
     executors: ExecutorsLocal,
     server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: Option<tunnel_server::Publish>,
     tunnel2_publish: Option<tunnel2_server::Publish>,
     port_config_listen: Arc<PortConfigListen>,
+    client_stream: Option<StreamFlow>,
 }
 
 impl PortStream {
     pub fn new(
-        _ms: Modules,
+        ms: Modules,
         executors: ExecutorsLocal,
         server_stream_info: ServerStreamInfo,
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
         port_config_listen: Arc<PortConfigListen>,
+        client_stream: StreamFlow,
     ) -> Result<PortStream> {
         Ok(PortStream {
-            _ms,
+            ms,
             executors,
             server_stream_info: Arc::new(server_stream_info),
             tunnel_publish,
             tunnel2_publish,
             port_config_listen,
+            client_stream: Some(client_stream),
         })
     }
 
-    pub async fn start(self, mut stream: StreamFlow) -> Result<()> {
+    pub async fn start(self) -> Result<()> {
         log::trace!("port stream start");
         let stream_info = {
+            let session_id = {
+                use crate::config::common_core;
+                let common_core_conf = common_core::main_conf_mut(&self.ms).await;
+                let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
+                session_id
+            };
             let scc = self.port_config_listen.port_config_context.scc.get();
-            let http_core_conf = scc.http_core_conf();
+            let net_core_conf = scc.net_core_conf();
             StreamInfo::new(
                 self.server_stream_info.clone(),
-                http_core_conf.debug_is_open_stream_work_times,
+                net_core_conf.debug_is_open_stream_work_times,
                 Some(self.executors.clone()),
-                http_core_conf.debug_print_access_log_time,
-                http_core_conf.debug_print_stream_flow_time,
-                http_core_conf.stream_so_singer_time,
-                http_core_conf.debug_is_open_print,
+                net_core_conf.debug_print_access_log_time,
+                net_core_conf.debug_print_stream_flow_time,
+                net_core_conf.stream_so_singer_time,
+                net_core_conf.debug_is_open_print,
+                session_id,
             )
         };
         let stream_info = Share::new(stream_info);
-
-        stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
         let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
-
-        stream_start::do_start(self, stream_info, stream, shutdown_thread_rx).await
+        stream_start::do_start(self, stream_info, shutdown_thread_rx).await
     }
 }
 
 #[async_trait]
 impl proxy::Stream for PortStream {
-    async fn do_start(
-        &mut self,
-        stream_info: Share<StreamInfo>,
-        mut _client_stream: StreamFlow,
-    ) -> Result<()> {
+    async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
+        let mut _client_stream = self.client_stream.take().unwrap();
+        _client_stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
+
         let scc = self.port_config_listen.port_config_context.scc.clone();
         stream_info.get_mut().scc = scc.clone();
 
+        run_plugin_handle_access(scc.clone(), stream_info.clone()).await?;
+
         #[cfg(feature = "anyproxy-ebpf")]
-        let _client_stream = if scc.get().http_core_conf().is_port_direct_ebpf
-            && scc.get().http_core_conf().is_open_ebpf
+        let _client_stream = if scc.get().net_core_conf().is_port_direct_ebpf
+            && scc.get().net_core_conf().is_open_ebpf
             && _client_stream.raw_fd() > 0
         {
             stream_info.get_mut().add_work_time1("connect_and_ebpf");
@@ -139,7 +148,7 @@ impl proxy::Stream for PortStream {
             stream_info.get_mut().ssl_domain = self.server_stream_info.domain.clone();
             stream_info.get_mut().remote_domain = self.server_stream_info.domain.clone();
             //优先使用本地配置值
-            stream_info.get_mut().local_domain = Some(scc.get().http_core_conf().domain.clone());
+            stream_info.get_mut().local_domain = Some(scc.get().net_core_conf().domain.clone());
             let hello = protopack::anyproxy::read_hello(&mut client_buf_reader)
                 .await
                 .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;

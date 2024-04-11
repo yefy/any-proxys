@@ -49,7 +49,7 @@ impl Publish {
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> Result<()> {
-        let rw = any_base::stream::Stream::new(rw);
+        let rw = any_base::stream_tokio::Stream::new(rw);
         let buf_stream = any_base::io::buf_stream::BufStream::new(rw);
         self.push_peer_stream(buf_stream, local_addr, remote_addr)
             .await

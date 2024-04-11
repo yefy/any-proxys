@@ -1,23 +1,21 @@
-use crate::config::http_core_plugin::PluginHandleStream;
+use crate::config::net_core::get_tmp_file_fd;
+use crate::config::net_core_plugin::PluginHandleStream;
 use crate::proxy::stream_stream_buf::{
     StreamStreamBuf, StreamStreamBytes, StreamStreamCacheWrite, StreamStreamFile, StreamStreamWrite,
 };
 use crate::proxy::{StreamStatus, StreamStreamData, StreamStreamShare};
+use any_base::file_ext::FileExt;
 use any_base::io::async_write_msg::BufFile;
 use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny};
 use anyhow::Result;
 use anyhow::{anyhow, Error};
 use lazy_static::lazy_static;
 use std::cmp::min;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::mem::swap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
-use tempfile::Builder;
-use tempfile::NamedTempFile;
 
 lazy_static! {
     pub static ref CACHE_HANDLE_NEXT: ArcRwLockTokio<PluginHandleStream> =
@@ -50,9 +48,7 @@ pub async fn memory_handle_run(sss: Arc<StreamStreamShare>) -> Result<StreamStat
 
 pub struct StreamStreamTmpFile {
     fw_seek: u64,
-    fw: Option<ArcMutex<NamedTempFile>>,
-    fr_fd: i32,
-    fr: Option<ArcMutex<File>>,
+    file_ext: Arc<FileExt>,
     is_first_buffer: bool,
 }
 
@@ -60,17 +56,15 @@ impl StreamStreamTmpFile {
     pub fn new() -> Self {
         StreamStreamTmpFile {
             fw_seek: 0,
-            fw: None,
-            fr_fd: 0,
-            fr: None,
+            file_ext: FileExt::default_arc(),
             is_first_buffer: true,
         }
     }
-    pub fn fw(&self) -> ArcMutex<NamedTempFile> {
-        self.fw.clone().unwrap()
-    }
-    pub fn fr(&self) -> ArcMutex<File> {
-        self.fr.clone().unwrap()
+    pub async fn file_ext(&mut self) -> Result<Arc<FileExt>> {
+        if self.file_ext.file.is_none() {
+            self.file_ext = get_tmp_file_fd().await?;
+        }
+        Ok(self.file_ext.clone())
     }
 }
 
@@ -78,18 +72,37 @@ pub async fn handle_run(
     sss: Arc<StreamStreamShare>,
     handle: ArcRwLockTokio<PluginHandleStream>,
 ) -> Result<StreamStatus> {
+    let ssc = sss.ssc.clone();
     let plugin = {
-        let mut sss_ctx = sss.sss_ctx.get_mut();
-        use crate::config::stream_stream_tmp_file;
-        let ctx_index = stream_stream_tmp_file::module().get().ctx_index as usize;
-        let plugin = sss_ctx.plugins[ctx_index].clone();
+        let (ctx_index, plugin, ssd) = {
+            use crate::config::stream_stream_tmp_file;
+            let ctx_index = stream_stream_tmp_file::module().get().ctx_index as usize;
+            let sss_ctx = sss.sss_ctx.get_mut();
+            let plugin = sss_ctx.plugins[ctx_index].clone();
+            (ctx_index, plugin, sss.ssc.ssd.clone())
+        };
         if plugin.is_none() {
-            let plugin = StreamStreamTmpFile::new();
-            let plugin = ArcUnsafeAny::new(Box::new(plugin));
+            let mut _plugin = StreamStreamTmpFile::new();
+            let plugin = ArcUnsafeAny::new(Box::new(_plugin));
+            let mut sss_ctx = sss.sss_ctx.get_mut();
             sss_ctx.plugins[ctx_index] = Some(plugin.clone());
             plugin
         } else {
-            plugin.unwrap()
+            let plugin = plugin.unwrap();
+            if ssc.cs.max_tmp_file_size > 0 {
+                if ssc.cs.tmp_file_reopen_size > 0
+                    && ssd.get().tmp_file_curr_reopen_size >= ssc.cs.tmp_file_reopen_size
+                {
+                    ssd.get_mut().tmp_file_curr_reopen_size = 0;
+                    let plugin = plugin.get_mut::<StreamStreamTmpFile>();
+                    let file_ext = get_tmp_file_fd().await;
+                    if file_ext.is_ok() {
+                        plugin.file_ext = file_ext?;
+                        plugin.fw_seek = 0;
+                    }
+                }
+            }
+            plugin
         }
     };
 
@@ -108,6 +121,7 @@ pub fn change_stream_size(is_cache: bool, size: i64, ssd: &mut StreamStreamData)
         ssd.stream_cache_size -= size;
     } else {
         ssd.tmp_file_size -= size;
+        ssd.tmp_file_curr_reopen_size += size;
     }
 }
 
@@ -227,31 +241,9 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
     };
 
     change_stream_size(buffer.is_cache, size as i64, &mut ssd.get_mut());
-    {
-        let plugin = plugin.get_mut::<StreamStreamTmpFile>();
-        if plugin.fw.is_none() {
-            let fw = Builder::new()
-                .append(true)
-                .tempfile()
-                .map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
-            //NamedTempFile::new().map_err(|e| anyhow!("err:NamedTempFile::new => e:{}", e))?;
-            let fr = fw
-                .reopen()
-                .map_err(|e| anyhow!("err:fw.reopen => e:{}", e))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::io::AsRawFd;
-                plugin.fr_fd = fr.as_raw_fd();
-            }
-
-            plugin.fw = Some(ArcMutex::new(fw));
-            plugin.fr = Some(ArcMutex::new(fr));
-        }
-    }
-    let fw = plugin.get::<StreamStreamTmpFile>().fw();
+    let file_ext = plugin.get_mut::<StreamStreamTmpFile>().file_ext().await?;
     if ssc.cs.is_tmp_file_io_page {
-        let fw_seek = {
+        let mut fw_seek = {
             let plugin = plugin.get_mut::<StreamStreamTmpFile>();
             plugin.fw_seek
         };
@@ -273,11 +265,12 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
             size -= w_size;
 
             let write_buffer = buffer.clone();
-            let write_fw = fw.clone();
+            let write_fw = file_ext.file.clone();
             let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
                 let mut write_buffer = write_buffer.get_mut();
                 let mut buf = write_buffer.buffer().unwrap();
                 let mut write_fw = write_fw.get_mut();
+                write_fw.seek(std::io::SeekFrom::Start(fw_seek))?;
                 let ret = write_fw
                     .write_all(buf.chunk(w_size))
                     .map_err(|e| anyhow!("err:fw.write_all => e:{}, w_size:{}", e, w_size));
@@ -294,11 +287,16 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
             })
             .await?;
             ret?;
+            fw_seek += w_size as u64;
         }
     } else {
+        let plugin = plugin.get_mut::<StreamStreamTmpFile>();
+        let seek = plugin.fw_seek;
         let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
             let mut buf = buffer.buffer().unwrap();
-            let mut fw = fw.get_mut();
+            let fw = file_ext.file.clone();
+            let fw = &mut *fw.get_mut();
+            fw.seek(std::io::SeekFrom::Start(seek))?;
             let ret = fw
                 .write_all(buf.chunk(size))
                 .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
@@ -317,15 +315,16 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
     }
 
     let plugin = plugin.get_mut::<StreamStreamTmpFile>();
-    let mut sss_ctx = sss.sss_ctx.get_mut();
     let seek = plugin.fw_seek;
     plugin.fw_seek += size as u64;
+    let file_ext = plugin.file_ext().await?;
 
+    let mut sss_ctx = sss.sss_ctx.get_mut();
     let last_cache = sss_ctx.caches.back_mut();
     if last_cache.is_some() {
         let last_cache = last_cache.unwrap();
         if let StreamStreamWrite::File(last_cache) = &mut last_cache.data {
-            if last_cache.file_fd == plugin.fr_fd
+            if last_cache.file_ext.is_uniq_and_fd_eq(&file_ext.fix)
                 && last_cache.seek + last_cache.size as u64 == seek
             {
                 last_cache.size += size;
@@ -333,10 +332,8 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
             }
         }
     }
-    let buffer = StreamStreamCacheWrite::from_file(
-        StreamStreamFile::new(plugin.fr(), plugin.fr_fd, seek, size),
-        false,
-    );
+    let buffer =
+        StreamStreamCacheWrite::from_file(StreamStreamFile::new(file_ext, seek, size), false);
     sss_ctx.caches.push_back(buffer);
 
     return Ok(());
@@ -362,22 +359,14 @@ pub async fn read_buffer(sss: &StreamStreamShare) -> Result<StreamStatus> {
             return Ok(StreamStreamCacheWrite::from_bytes(buffer, is_cache));
         }
         #[cfg(unix)]
-        if ssc.is_sendfile && !sss.is_write_msg {
+        if ssc.is_sendfile && buffer.file().unwrap().file_ext.is_sendfile() {
             let buffer = buffer.to_file().unwrap();
             return Ok(StreamStreamCacheWrite::from_file(buffer, is_cache));
         }
 
-        use crate::util::default_config::PAGE_SIZE;
-        let page_size = PAGE_SIZE.load(Ordering::Relaxed);
+        let page_size = sss.page_size;
         let seek = buffer.file().unwrap().seek;
-        let mut write_buffer_size = ssc.cs.write_buffer_size;
-        if ssc.is_sendfile {
-            write_buffer_size = if ssc.cs.sendfile_max_write_size <= 0 {
-                usize::max_value()
-            } else {
-                ssc.cs.sendfile_max_write_size
-            }
-        }
+        let write_buffer_size = ssc.cs.write_buffer_size;
 
         let write_buffer_size = min(buffer.remaining_(), write_buffer_size);
         let write_buffer_size = if write_buffer_size <= page_size {
@@ -393,28 +382,36 @@ pub async fn read_buffer(sss: &StreamStreamShare) -> Result<StreamStatus> {
         };
 
         buffer.advance_(size);
-        let (fr, _file_fd) = {
-            let file = buffer.file().unwrap();
-            (file.fr.clone(), file.file_fd)
-        };
+        let fr = buffer.file().unwrap().file_ext.clone();
         if buffer.remaining_() > 0 {
             sss.sss_ctx.get_mut().caches.push_front(buffer);
         }
 
-        #[cfg(unix)]
-        if ssc.is_sendfile {
-            let buffer = StreamStreamFile::new(fr, _file_fd, seek, size);
-            return Ok(StreamStreamCacheWrite::from_file(buffer, is_cache));
-        }
-
         let ret: std::result::Result<StreamStreamCacheWrite, Error> =
             tokio::task::spawn_blocking(move || {
+                #[cfg(feature = "anyio-file")]
+                use std::time::Instant;
+                #[cfg(feature = "anyio-file")]
+                let start_time = Instant::now();
                 let mut buffer = StreamStreamBytes::new();
                 let mut data = vec![0u8; size];
+                let fr = fr.file.clone();
+                let fr = &mut *fr.get_mut();
+                log::trace!("tmpfile seek:{}, size:{}", seek, size);
+                fr.seek(std::io::SeekFrom::Start(seek))?;
                 let ret = fr
-                    .get_mut()
                     .read_exact(data.as_mut_slice())
                     .map_err(|e| anyhow!("err:fr.read_exact => e:{}, size:{}", e, size));
+
+                #[cfg(feature = "anyio-file")]
+                if start_time.elapsed().as_millis() > 100 {
+                    log::info!(
+                        "read_exact file:{} => seek:{}, size:{}",
+                        start_time.elapsed().as_millis(),
+                        seek,
+                        size
+                    );
+                }
                 match ret {
                     Ok(_) => {
                         buffer.push_back(data.into());

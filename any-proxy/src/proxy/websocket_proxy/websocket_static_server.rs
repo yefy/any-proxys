@@ -141,9 +141,9 @@ impl WebsocketServer {
     ) -> Result<()> {
         let file_name = {
             let scc = scc.get();
-            use crate::config::http_server_static_websocket;
+            use crate::config::net_server_static_websocket;
             let http_server_static_websocket_conf =
-                http_server_static_websocket::currs_conf(scc.http_server_confs());
+                net_server_static_websocket::currs_conf(scc.net_server_confs());
             let mut seq = "";
             log::trace!("name:{}", name);
             if name.len() <= 0 || name == "/" {

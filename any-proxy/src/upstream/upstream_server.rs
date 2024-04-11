@@ -226,7 +226,7 @@ impl UpstreamServer {
 
             use crate::config::upstream_core_plugin;
             if ups_data.is_sort_heartbeats_active
-                && ups_data.ups_config.balancer == upstream_core_plugin::FAIR
+                && ups_data.ups_config.balancer.as_str() == upstream_core_plugin::FAIR
             {
                 ups_data.is_sort_heartbeats_active = false;
                 ups_data.ups_heartbeats_active.sort_by(|a, b| {

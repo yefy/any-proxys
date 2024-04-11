@@ -58,7 +58,7 @@ mod tests;
 cfg_feature! {
     #![any(feature = "http1", feature = "http2")]
 
-    pub use self::client::{Builder, Client, ResponseFuture};
+    pub use self::client::{Builder, Client, ResponseFuture, AnyProxyRawHeaders, AnyProxyHyperBuf, AnyProxyRawHttpHeaderExt,AnyProxyHyperHttpHeaderExt};
 
     mod client;
     pub mod conn;

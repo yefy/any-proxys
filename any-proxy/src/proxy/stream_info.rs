@@ -5,7 +5,7 @@ use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::{ArcMutex, Share, ShareRw, ValueOption};
+use any_base::typ::{ArcMutex, OptionExt, Share, ShareRw};
 use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
@@ -127,7 +127,9 @@ impl ErrStatus200 for ErrStatusUpstream {
     }
 }
 
+use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use any_base::stream_flow;
+
 pub struct ErrStatusInfo {
     pub err: StreamFlowErr,
     pub err_status_200: Box<dyn ErrStatus200>,
@@ -200,7 +202,7 @@ pub struct StreamInfo {
     pub session_time: f32,
     pub debug_is_open_print: bool,
     pub request_id: ArcString,
-    pub protocol_hello: ValueOption<Arc<AnyproxyHello>>,
+    pub protocol_hello: OptionExt<Arc<AnyproxyHello>>,
     pub upstream_protocol_hello_size: usize,
     pub is_err: bool,
     pub err_status: ErrStatus,
@@ -214,7 +216,7 @@ pub struct StreamInfo {
     pub is_discard_flow: bool,
     pub is_open_ebpf: bool,
     pub open_sendfile: Option<String>,
-    pub ups_dispatch: Option<String>,
+    pub ups_balancer: Option<ArcString>,
     pub is_proxy_protocol_hello: bool,
     pub scc: ShareRw<StreamConfigContext>,
     pub is_discard_timeout: bool,
@@ -230,8 +232,10 @@ pub struct StreamInfo {
     pub debug_print_access_log_time: u64,
     pub debug_print_stream_flow_time: u64,
     pub stream_so_singer_time: usize,
-    pub ssc_download: ValueOption<Arc<StreamStreamContext>>,
-    pub ssc_upload: ValueOption<Arc<StreamStreamContext>>,
+    pub ssc_download: OptionExt<Arc<StreamStreamContext>>,
+    pub ssc_upload: OptionExt<Arc<StreamStreamContext>>,
+    pub session_id: u64,
+    pub http_r: OptionExt<Arc<HttpStreamRequest>>,
 }
 
 impl StreamInfo {
@@ -243,6 +247,7 @@ impl StreamInfo {
         debug_print_stream_flow_time: u64,
         stream_so_singer_time: usize,
         debug_is_open_print: bool,
+        session_id: u64,
     ) -> StreamInfo {
         StreamInfo {
             executors,
@@ -254,7 +259,7 @@ impl StreamInfo {
             session_time: 0.0,
             debug_is_open_print,
             request_id: ArcString::default(),
-            protocol_hello: ValueOption::default(),
+            protocol_hello: OptionExt::default(),
             upstream_protocol_hello_size: 0,
             is_err: false,
             err_status: ErrStatus::ClientProtoErr,
@@ -268,7 +273,7 @@ impl StreamInfo {
             is_discard_flow: false,
             is_open_ebpf: false,
             open_sendfile: None,
-            ups_dispatch: None,
+            ups_balancer: None,
             is_proxy_protocol_hello: false,
             scc: ShareRw::default(),
             is_discard_timeout: false,
@@ -284,8 +289,10 @@ impl StreamInfo {
             debug_print_access_log_time,
             debug_print_stream_flow_time,
             stream_so_singer_time,
-            ssc_download: ValueOption::default(),
-            ssc_upload: ValueOption::default(),
+            ssc_download: OptionExt::default(),
+            ssc_upload: OptionExt::default(),
+            session_id,
+            http_r: None.into(),
         }
     }
 

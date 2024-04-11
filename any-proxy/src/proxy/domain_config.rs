@@ -24,7 +24,7 @@ use std::future::Future;
 use std::pin::Pin;
 type DomainConfigFunc =
     fn(ArcMutex<DomainConfigListenMerge>) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
-use crate::config::http_server_core_plugin::PluginHandleProtocol;
+use crate::config::net_server_core_plugin::PluginHandleProtocol;
 use any_base::module::module;
 use any_base::typ::{ArcMutex, ArcRwLockTokio, ShareRw};
 

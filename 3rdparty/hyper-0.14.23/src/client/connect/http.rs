@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::task::{self, Poll};
 use std::time::Duration;
 
-use any_base::stream::Stream;
+use any_base::stream_tokio::Stream;
 use futures_util::future::Either;
 use http::uri::{Scheme, Uri};
 use pin_project_lite::pin_project;

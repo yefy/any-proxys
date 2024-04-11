@@ -19,6 +19,7 @@ use crate::common::buf::BufList;
 use crate::common::{task, Pin, Poll};
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::stream_flow::StreamReadWriteFlow;
+use any_base::util::HttpHeaderExt;
 
 /// The initial buffer size allocated before trying to read from IO.
 pub(crate) const INIT_BUFFER_SIZE: usize = 8192;
@@ -48,6 +49,7 @@ pub(crate) struct Buffered<T, B> {
     buf_file: MsgReadBufFile,
     #[cfg(unix)]
     is_set_tcp_nopush: bool,
+    header_ext: HttpHeaderExt,
 }
 
 impl<T, B> fmt::Debug for Buffered<T, B>
@@ -96,6 +98,7 @@ where
             buf_file: MsgReadBufFile::default(),
             #[cfg(unix)]
             is_set_tcp_nopush: false,
+            header_ext: HttpHeaderExt::new(),
         }
     }
 
@@ -227,7 +230,10 @@ where
                     raw_headers: parse_ctx.raw_headers,
                 },
             )? {
-                Some(msg) => {
+                Some(mut msg) => {
+                    msg.head.extensions.insert(crate::AnyProxyRawHttpHeaderExt(
+                        crate::AnyProxyHyperHttpHeaderExt(self.header_ext.clone()),
+                    ));
                     debug!("parsed {} headers", msg.head.headers.len());
 
                     #[cfg(all(feature = "server", feature = "runtime"))]
@@ -366,9 +372,11 @@ where
                                 break;
                             }
 
-                            let (_, file_fd, seek, size) = self.buf_file.get();
+                            let (file_ext, seek, size) = self.buf_file.get();
+                            //___wait___ sendfile是线程安全的
+                            //let header_ext = self.header_ext
                             let size = ready!(
-                                Pin::new(&mut self.io).poll_sendfile(cx, file_fd, seek, size)
+                                Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size)
                             )?;
 
                             self.buf_file.advance(size);
@@ -433,9 +441,9 @@ where
                             break;
                         }
 
-                        let (_, file_fd, seek, size) = self.buf_file.get();
+                        let (file_ext, seek, size) = self.buf_file.get();
                         let size =
-                            ready!(Pin::new(&mut self.io).poll_sendfile(cx, file_fd, seek, size))?;
+                            ready!(Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size))?;
 
                         self.buf_file.advance(size);
                         self.write_buf.advance(size);

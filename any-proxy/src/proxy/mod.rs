@@ -27,8 +27,8 @@ pub mod util;
 pub mod websocket_proxy;
 
 use crate::config::common_core;
-use crate::config::http_core;
-use crate::config::http_core::ConfStream;
+use crate::config::net_core;
+use crate::config::net_core::ConfStream;
 use crate::proxy::http_proxy::http_context::HttpContext;
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::stream_stream_buf::{
@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 pub struct StreamConfigContext {
     ms: module::Modules,
-    http_confs: Vec<typ::ArcUnsafeAny>,
+    net_confs: Vec<typ::ArcUnsafeAny>,
     server_confs: Vec<typ::ArcUnsafeAny>,
     curr_conf: ArcUnsafeAny,
     common_conf: ArcUnsafeAny,
@@ -59,14 +59,14 @@ pub struct StreamConfigContext {
 impl StreamConfigContext {
     pub fn new(
         ms: module::Modules,
-        http_confs: Vec<typ::ArcUnsafeAny>,
+        net_confs: Vec<typ::ArcUnsafeAny>,
         server_confs: Vec<typ::ArcUnsafeAny>,
         curr_conf: ArcUnsafeAny,
         common_conf: ArcUnsafeAny,
     ) -> Self {
         StreamConfigContext {
             ms,
-            http_confs,
+            net_confs,
             server_confs,
             curr_conf,
             common_conf,
@@ -78,14 +78,21 @@ impl StreamConfigContext {
     pub fn common_core_conf(&self) -> &common_core::Conf {
         common_core::curr_conf(&self.common_conf)
     }
-    pub fn http_core_conf(&self) -> &http_core::Conf {
-        http_core::curr_conf(&self.curr_conf)
+    pub fn net_core_conf(&self) -> &net_core::Conf {
+        net_core::curr_conf(&self.curr_conf)
     }
-    pub fn http_main_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
-        &self.http_confs
+    pub fn net_main_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+        &self.net_confs
     }
-    pub fn http_server_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+    //___wait___ 如果支持了local 这个函数不应该存在, 就使用net_curr_conf
+    pub fn net_server_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
         &self.server_confs
+    }
+    pub fn common_core_any_conf(&self) -> typ::ArcUnsafeAny {
+        self.common_conf.clone()
+    }
+    pub fn net_curr_conf(&self) -> typ::ArcUnsafeAny {
+        self.curr_conf.clone()
     }
 }
 
@@ -93,6 +100,7 @@ impl StreamConfigContext {
 pub struct StreamStreamData {
     pub stream_cache_size: i64,
     pub tmp_file_size: i64,
+    pub tmp_file_curr_reopen_size: i64,
     pub limit_rate_after: i64,
     pub total_read_size: u64,
     pub total_write_size: u64,
@@ -169,6 +177,8 @@ pub struct StreamStreamShare {
     _w_raw_fd: i32,
     is_write_msg: bool,
     is_write_vectored: bool,
+    _session_id: u64,
+    page_size: usize,
 }
 
 impl StreamStreamShare {

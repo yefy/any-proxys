@@ -10,6 +10,9 @@ use std::sync::Arc;
 lazy_static! {
     pub static ref SESSION_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(100000));
 }
+lazy_static! {
+    pub static ref TMPFILE_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(123456));
+}
 
 pub struct Conf {
     pub cpu_affinity: bool,
@@ -22,6 +25,7 @@ pub struct Conf {
     pub memlock_rlimit_curr: u64,
     pub memlock_rlimit_max: u64,
     pub session_id: Arc<AtomicU64>,
+    pub tmpfile_id: Arc<AtomicU64>,
 }
 
 impl Conf {
@@ -37,6 +41,7 @@ impl Conf {
             memlock_rlimit_curr: 128 << 20,
             memlock_rlimit_max: 128 << 20,
             session_id: SESSION_ID.clone(),
+            tmpfile_id: TMPFILE_ID.clone(),
         };
         let core_ids = core_affinity::get_core_ids().unwrap();
         conf.worker_threads = core_ids.len();
@@ -234,7 +239,7 @@ async fn reuseport(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.reuseport = *conf_arg.value.get::<bool>();
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     {
         if c.reuseport {
             return Err(anyhow::anyhow!("windows not support reuseport"));

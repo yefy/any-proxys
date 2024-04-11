@@ -301,7 +301,7 @@ where
                         recv_stream,
                         buf: Bytes::new(),
                     };
-                    let io = any_base::stream::Stream::new(io);
+                    let io = any_base::stream_tokio::Stream::new(io);
                     let upgraded = Upgraded::new(io, Bytes::new());
 
                     pending.fulfill(upgraded);

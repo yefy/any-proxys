@@ -1,7 +1,7 @@
-use crate::config::http_core_plugin::PluginHandleStream;
+use crate::config::net_core_plugin::PluginHandleStream;
 use crate::proxy::stream_stream_buf::StreamStreamCacheWriteDeque;
 use crate::proxy::{StreamStatus, StreamStreamShare};
-use any_base::io::async_write_msg::{AsyncWriteMsg, AsyncWriteMsgExt};
+use any_base::io::async_write_msg::{AsyncWriteMsg, AsyncWriteMsgExt, MsgWriteBuf};
 use any_base::typ::ArcRwLockTokio;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -209,7 +209,21 @@ pub async fn do_handle_run(
     let mut is_sendfile = false;
     let wn: std::io::Result<usize> = async {
         if sss.is_write_msg {
-            return w.write_msg(write_buffer_deque.msg_write_buf()).await;
+            let mut msg_write_buf = write_buffer_deque.msg_write_buf();
+            let rx = if let MsgWriteBuf::File(file) = &mut msg_write_buf {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                file.notify_tx.as_mut().unwrap().push(tx);
+                Some(rx)
+            } else {
+                None
+            };
+            let n = w.write_msg(msg_write_buf).await?;
+            if rx.is_some() {
+                log::debug!("write wait file start:{}", sss._session_id);
+                let _ = rx.unwrap().recv().await;
+                log::debug!("write wait file end:{}", sss._session_id);
+            }
+            return Ok(n);
         }
         if write_buffer_deque.is_file() {
             if w.write_cache_size() > 0 {
@@ -218,7 +232,11 @@ pub async fn do_handle_run(
             is_sendfile = true;
             let file_data = write_buffer_deque.file().unwrap();
             return w
-                .sendfile(file_data.file_fd, file_data.seek, file_data.size)
+                .sendfile(
+                    file_data.file_ext.fix.file_fd,
+                    file_data.seek,
+                    file_data.size,
+                )
                 .await;
         }
         if sss.is_write_vectored {
@@ -242,14 +260,12 @@ pub async fn do_handle_run(
         }
     }
 
-    let mut sss_ctx = sss.sss_ctx.get_mut();
     let mut stream_info = stream_info.get_mut();
     let mut ssd = ssd.get_mut();
-    if sss_ctx.is_first_write {
-        sss_ctx.is_first_write = false;
+    if sss.sss_ctx.get().is_first_write {
+        sss.sss_ctx.get_mut().is_first_write = false;
         stream_info.add_work_time2(sss.ssc.is_client, "first write");
     }
-
     if ssc.cs.max_limit_rate <= 0 {
         //
     } else if ssd.limit_rate_after > 0 {

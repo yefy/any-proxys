@@ -1,16 +1,21 @@
-use crate::config::http_server_stream_test::HttpServerStreamTestConfig;
+use crate::config::net_server_stream_test::HttpServerStreamTestConfig;
 use crate::proxy::util as proxy_util;
 use crate::proxy::ServerArg;
-#[cfg(unix)]
-use any_base::io::async_stream::Stream;
-use any_base::io::async_write_msg::{AsyncWriteMsg, AsyncWriteMsgExt, MsgReadBufFile};
+use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
+use any_base::io::async_write_msg::AsyncWriteMsg;
+use any_base::io::async_write_msg::AsyncWriteMsgExt;
+use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::ArcMutex;
+use any_base::typ::ArcMutexTokio;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::io::Read;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -33,6 +38,8 @@ pub async fn http_server_handle(
     #[cfg(not(unix))]
     let socket_fd = 0;
     #[cfg(unix)]
+    use any_base::io::async_stream::Stream;
+    #[cfg(unix)]
     let socket_fd = client_buf_stream.raw_fd();
 
     let HttpServerStreamTestConfig {
@@ -45,10 +52,10 @@ pub async fn http_server_handle(
         file_name,
     } = {
         let scc = scc.get();
-        use crate::config::http_server_stream_test;
-        let http_server_stream_test = http_server_stream_test::currs_conf(scc.http_server_confs());
-        log::info!("config:{:?}", http_server_stream_test.config);
-        http_server_stream_test.config.clone()
+        use crate::config::net_server_stream_test;
+        let net_server_stream_test = net_server_stream_test::currs_conf(scc.net_server_confs());
+        log::info!("config:{:?}", net_server_stream_test.config);
+        net_server_stream_test.config.clone()
     };
 
     log::info!("accept socket_fd:{}", socket_fd);
@@ -77,10 +84,6 @@ pub async fn http_server_handle(
             }
         }
 
-        let file_name = format!(
-            "/root/Desktop/fdisk/nginx/nginx-1.18.0/nginx/html/{}",
-            file_name
-        );
         let file = std::fs::File::open(&file_name)
             .map_err(|e| anyhow!("err:file.open => file_name:{}, e:{}", file_name, e))?;
 
@@ -95,7 +98,16 @@ pub async fn http_server_handle(
             .metadata()
             .map_err(|e| anyhow!("err:file.metadata => file_name:{}, e:{}", file_name, e))?
             .len();
+        let file_uniq = FileUniq::new(&file)?;
         let file = ArcMutex::new(file);
+        let file_ext = FileExt {
+            async_lock: ArcMutexTokio::new(()),
+            file,
+            fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
+            file_path: ArcString::new(file_name.to_string()),
+            file_len,
+        };
+        let file_ext = Arc::new(file_ext);
 
         let mut header = Vec::new();
         header.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
@@ -111,7 +123,7 @@ pub async fn http_server_handle(
         client_buf_stream.write_all(&header).await?;
         //log::info!("rsp header:{}", String::from_utf8(header)?);
 
-        if is_open_sendfile && socket_fd > 0 && file_fd > 0 {
+        if is_open_sendfile && socket_fd > 0 && file_ext.is_sendfile() {
             #[cfg(unix)]
             if !is_set_tcp_nopush && _tcp_nopush {
                 is_set_tcp_nopush = true;
@@ -126,14 +138,16 @@ pub async fn http_server_handle(
                 client_buf_stream.flush().await?;
             }
 
-            let mut buf_file = MsgReadBufFile::new(file.clone(), file_fd, 0, file_len);
+            let mut buf_file = MsgReadBufFile::new(file_ext, 0, file_len);
             loop {
                 if !buf_file.has_remaining() {
                     break;
                 }
-                let (_, file_fd, seek, size) = buf_file.get2(sendfile_max_write_size);
-                let n = client_buf_stream.sendfile(file_fd, seek, size).await?;
-                //log::info!("size:{}, n:{}", size, n);
+                let (file_ext, seek, size) = buf_file.get2(sendfile_max_write_size);
+                let n = client_buf_stream
+                    .sendfile(file_ext.fix.file_fd, seek, size)
+                    .await?;
+                log::info!("file_fd:{}, seek:{}, size:{}, n:{}", file_fd, seek, size, n);
                 if n == 0 && sendfile_sleep_mil_time > 0 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(sendfile_sleep_mil_time))
                         .await;
@@ -146,12 +160,11 @@ pub async fn http_server_handle(
 
         #[cfg(unix)]
         if _is_directio {
-            use any_base::util::directio_on;
-            directio_on(file_fd)?;
+            file_ext.directio_on()?;
         }
 
         loop {
-            let file = file.clone();
+            let file = file_ext.file.clone();
             let data: Result<(usize, Vec<u8>)> = tokio::task::spawn_blocking(move || {
                 let mut buffer = vec![0u8; buffer_len];
                 let size = file

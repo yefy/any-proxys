@@ -3,6 +3,7 @@
 use crate::config::config_toml::TcpConfig as Config;
 use crate::stream::stream_flow::StreamFlowErr;
 use crate::stream::stream_flow::StreamFlowInfo;
+//use any_base::file_ext::FileExt;
 use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -10,6 +11,8 @@ use std::cmp::min;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "anyio-file")]
+use std::time::Instant;
 
 pub struct SendFile {
     info: ArcMutex<StreamFlowInfo>,
@@ -36,7 +39,18 @@ impl SendFile {
         );
 
         let ret: isize = tokio::task::spawn_blocking(move || {
+            #[cfg(feature = "anyio-file")]
+            let start_time = Instant::now();
             let wn = unsafe { libc::sendfile(socket_fd, file_fd, &mut offset, count) };
+            #[cfg(feature = "anyio-file")]
+            if start_time.elapsed().as_millis() > 100 {
+                log::info!(
+                    "sendfile file:{} => seek:{}, size:{}",
+                    start_time.elapsed().as_millis(),
+                    offset,
+                    count
+                );
+            }
             wn
         })
         .await?;
@@ -141,11 +155,12 @@ pub async fn sendfile(
     let mut offset: libc::off_t = seek as libc::off_t;
     let count: libc::size_t = size as libc::size_t;
     log::trace!(
-        "libc::sendfile socket_fd:{}, file_fd:{}, offset:{}, count:{}",
+        "libc::sendfile socket_fd:{}, file_fd:{}, offset:{}, count:{}, len:{}",
         socket_fd,
         file_fd,
         offset,
-        count
+        count,
+        offset + count as libc::off_t,
     );
 
     let ret: isize = tokio::task::spawn_blocking(move || {
@@ -172,7 +187,7 @@ pub async fn sendfile(
                         .await;
                     }
                     kind = io::ErrorKind::WouldBlock;
-                    return Err(anyhow!("err:sendfile WouldBlock"));
+                    return Err(anyhow!("err:sendfile EAGAIN"));
                 } else if c_err == libc::EINPROGRESS {
                     if config.sendfile_eagain_sleep_mil_time > 0 {
                         tokio::time::sleep(tokio::time::Duration::from_millis(
@@ -181,7 +196,16 @@ pub async fn sendfile(
                         .await;
                     }
                     kind = io::ErrorKind::WouldBlock;
-                    return Err(anyhow!("err:sendfile WouldBlock"));
+                    return Err(anyhow!("err:sendfile EINPROGRESS"));
+                } else if c_err == libc::SIGCHLD {
+                    if config.sendfile_eagain_sleep_mil_time > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                            config.sendfile_eagain_sleep_mil_time,
+                        ))
+                        .await;
+                    }
+                    kind = io::ErrorKind::WouldBlock;
+                    return Err(anyhow!("err:sendfile SIGCHLD"));
                 } else if c_err == libc::ECONNRESET {
                     kind = io::ErrorKind::ConnectionReset;
                     return Err(anyhow!("err:sendfile close"));
@@ -193,7 +217,7 @@ pub async fn sendfile(
                         .await;
                     }
                     kind = io::ErrorKind::WouldBlock;
-                    return Err(anyhow!("err:sendfile WouldBlock"));
+                    return Err(anyhow!("err:sendfile c_err == 0"));
                 }
 
                 kind = io::ErrorKind::AddrNotAvailable;

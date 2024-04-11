@@ -1,4 +1,5 @@
 use crate::proxy::stream_info::StreamInfo;
+use crate::util::util::host_and_port;
 use crate::util::var::VarAnyData;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 type VarFunc = fn(stream_info: &StreamInfo) -> Option<VarAnyData>;
+type VarHttpFunc = fn(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData>;
 
 lazy_static! {
     pub static ref TIMEOUT_EXIT: ArcString = "timeout_exit".into();
@@ -47,9 +49,41 @@ lazy_static! {
         map.insert("client_bytes_received", client_bytes_received);
         map.insert("upstream_bytes_sent", upstream_bytes_sent);
         map.insert("upstream_bytes_received", upstream_bytes_received);
+
+        map.insert(
+            "http_header_client_bytes_sent",
+            http_header_client_bytes_sent,
+        );
+        map.insert(
+            "http_header_client_bytes_received",
+            http_header_client_bytes_received,
+        );
+        map.insert(
+            "http_header_upstream_bytes_sent",
+            http_header_upstream_bytes_sent,
+        );
+        map.insert(
+            "http_header_upstream_bytes_received",
+            http_header_upstream_bytes_received,
+        );
+
+        map.insert("http_body_client_bytes_sent", http_body_client_bytes_sent);
+        map.insert(
+            "http_body_client_bytes_received",
+            http_body_client_bytes_received,
+        );
+        map.insert(
+            "http_body_upstream_bytes_sent",
+            http_body_upstream_bytes_sent,
+        );
+        map.insert(
+            "http_body_upstream_bytes_received",
+            http_body_upstream_bytes_received,
+        );
+
         map.insert("is_open_ebpf", is_open_ebpf);
         map.insert("open_sendfile", open_sendfile);
-        map.insert("upstream_dispatch", upstream_dispatch);
+        map.insert("upstream_balancer", upstream_balancer);
         map.insert("is_proxy_protocol_hello", is_proxy_protocol_hello);
         map.insert("buffer_cache", buffer_cache);
         map.insert("upstream_curr_stream_size", upstream_curr_stream_size);
@@ -63,11 +97,52 @@ lazy_static! {
         map.insert("upstream_protocol_hello_size", upstream_protocol_hello_size);
         map.insert("client_protocol_hello_size", client_protocol_hello_size);
         map.insert("stream_stream_info", stream_stream_info);
+        map.insert("http_local_cache_req_count", http_local_cache_req_count);
+        map.insert("http_cache_status", http_cache_status);
+        map.insert("http_cache_file_status", http_cache_file_status);
+        map.insert("http_is_upstream", http_is_upstream);
+        map.insert("http_is_cache", http_is_cache);
+        map.insert(
+            "http_last_slice_upstream_index",
+            http_last_slice_upstream_index,
+        );
+        map.insert("http_max_upstream_count", http_max_upstream_count);
+        map
+    };
+    pub static ref HTTP_REQUEST_FLAG: &'static str = "http_request_";
+    pub static ref HTTP_UPS_REQUEST_FLAG: &'static str = "http_ups_request_";
+    pub static ref HTTP_RESPONSE_FLAG: &'static str = "http_response_";
+    pub static ref HTTP_VAR_MAP: HashMap<&'static str, VarHttpFunc> = {
+        let mut map: HashMap<&'static str, VarHttpFunc> = HashMap::new();
+        map.insert("http_request", http_request);
+        map.insert("http_ups_request", http_ups_request);
+        map.insert("http_response", http_response);
         map
     };
 }
 
 pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<VarAnyData>> {
+    if var_name.len() > HTTP_REQUEST_FLAG.len() {
+        if &var_name[0..HTTP_REQUEST_FLAG.len()] == *HTTP_REQUEST_FLAG {
+            let var_name = &var_name[HTTP_REQUEST_FLAG.len()..];
+            return Ok(http_request(var_name, stream_info));
+        }
+    }
+
+    if var_name.len() > HTTP_UPS_REQUEST_FLAG.len() {
+        if &var_name[0..HTTP_UPS_REQUEST_FLAG.len()] == *HTTP_UPS_REQUEST_FLAG {
+            let var_name = &var_name[HTTP_UPS_REQUEST_FLAG.len()..];
+            return Ok(http_ups_request(var_name, stream_info));
+        }
+    }
+
+    if var_name.len() > HTTP_RESPONSE_FLAG.len() {
+        if &var_name[0..HTTP_RESPONSE_FLAG.len()] == *HTTP_RESPONSE_FLAG {
+            let var_name = &var_name[HTTP_RESPONSE_FLAG.len()..];
+            return Ok(http_response(var_name, stream_info));
+        }
+    }
+
     let value = VAR_MAP.get(var_name.trim());
     match value {
         None => return Err(anyhow!("err=>var not found => var_name:{}", var_name)),
@@ -109,9 +184,17 @@ pub fn remote_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
 
 pub fn local_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.client_protocol77.is_none() {
-        Some(VarAnyData::Str(
-            stream_info.server_stream_info.protocol7.to_string(),
-        ))
+        if stream_info.client_protocol7.is_some() {
+            Some(VarAnyData::Str(format!(
+                "{}_{}",
+                stream_info.server_stream_info.protocol7.to_string(),
+                stream_info.client_protocol7.as_ref().unwrap().to_string(),
+            )))
+        } else {
+            Some(VarAnyData::Str(
+                stream_info.server_stream_info.protocol7.to_string(),
+            ))
+        }
     } else {
         if stream_info.client_protocol7.is_some() {
             Some(VarAnyData::Str(format!(
@@ -208,48 +291,54 @@ pub fn request_id(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::ArcString(protocol_hello.request_id.clone()))
+    Some(VarAnyData::ArcString(
+        stream_info.protocol_hello.request_id.clone(),
+    ))
 }
 
 pub fn versions(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::ArcString(protocol_hello.version.clone()))
+    Some(VarAnyData::ArcString(
+        stream_info.protocol_hello.version.clone(),
+    ))
 }
 
 pub fn client_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::SocketAddr(protocol_hello.client_addr))
+    Some(VarAnyData::SocketAddr(
+        stream_info.protocol_hello.client_addr,
+    ))
 }
 
 pub fn client_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::Str(protocol_hello.client_addr.ip().to_string()))
+    Some(VarAnyData::Str(
+        stream_info.protocol_hello.client_addr.ip().to_string(),
+    ))
 }
 
 pub fn client_port(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::U16(protocol_hello.client_addr.port()))
+    Some(VarAnyData::U16(
+        stream_info.protocol_hello.client_addr.port(),
+    ))
 }
 
 pub fn domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    let protocol_hello = stream_info.protocol_hello.get();
-    Some(VarAnyData::ArcString(protocol_hello.domain.clone()))
+    Some(VarAnyData::ArcString(
+        stream_info.protocol_hello.domain.clone(),
+    ))
 }
 
 pub fn status(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -339,24 +428,96 @@ pub fn stream_work_times(stream_info: &StreamInfo) -> Option<VarAnyData> {
 }
 
 pub fn client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    let mut n = stream_info.client_stream_flow_info.get().write;
+    if stream_info.http_r.is_some() {
+        n += stream_info.http_r.ctx.get().r_out.head_size as i64;
+    }
+
+    Some(VarAnyData::I64(n))
+}
+
+pub fn client_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    let mut n = stream_info.client_stream_flow_info.get().read;
+    if stream_info.http_r.is_some() {
+        n += stream_info.http_r.ctx.get().r_in.head_size as i64;
+    }
+
+    Some(VarAnyData::I64(n))
+}
+
+pub fn upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    let mut n = stream_info.upstream_stream_flow_info.get().write;
+    if stream_info.http_r.is_some() {
+        n += stream_info.http_r.ctx.get().r_in.head_upstream_size as i64;
+    }
+
+    Some(VarAnyData::I64(n))
+}
+
+pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    let mut n = stream_info.upstream_stream_flow_info.get().read;
+    if stream_info.http_r.is_some() {
+        n += stream_info.http_r.ctx.get().r_out.head_upstream_size as i64;
+    }
+
+    Some(VarAnyData::I64(n))
+}
+
+pub fn http_header_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::Usize(
+        stream_info.http_r.ctx.get().r_out.head_size,
+    ))
+}
+
+pub fn http_header_client_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::Usize(
+        stream_info.http_r.ctx.get().r_in.head_size,
+    ))
+}
+
+pub fn http_header_upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::Usize(
+        stream_info.http_r.ctx.get().r_in.head_upstream_size,
+    ))
+}
+
+pub fn http_header_upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::Usize(
+        stream_info.http_r.ctx.get().r_out.head_upstream_size,
+    ))
+}
+
+pub fn http_body_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(
         stream_info.client_stream_flow_info.get().write,
     ))
 }
 
-pub fn client_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_body_client_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(
         stream_info.client_stream_flow_info.get().read,
     ))
 }
 
-pub fn upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_body_upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(
         stream_info.upstream_stream_flow_info.get().write,
     ))
 }
 
-pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_body_upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(
         stream_info.upstream_stream_flow_info.get().read,
     ))
@@ -376,9 +537,11 @@ pub fn open_sendfile(stream_info: &StreamInfo) -> Option<VarAnyData> {
     return None;
 }
 
-pub fn upstream_dispatch(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    if stream_info.ups_dispatch.is_some() {
-        return Some(VarAnyData::Str(stream_info.ups_dispatch.clone().unwrap()));
+pub fn upstream_balancer(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.ups_balancer.is_some() {
+        return Some(VarAnyData::ArcString(
+            stream_info.ups_balancer.clone().unwrap(),
+        ));
     }
     return None;
 }
@@ -487,7 +650,7 @@ pub fn client_protocol_hello_size(stream_info: &StreamInfo) -> Option<VarAnyData
 
 pub fn stream_stream_info(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let ssc_upload = if stream_info.ssc_upload.is_some() {
-        let ssc_upload = stream_info.ssc_upload.get();
+        let ssc_upload = &stream_info.ssc_upload;
         format!(
             "ssc_upload:{:?}, max_stream_cache_size:{}, max_tmp_file_size:{}",
             &*ssc_upload.ssd.get(),
@@ -499,7 +662,7 @@ pub fn stream_stream_info(stream_info: &StreamInfo) -> Option<VarAnyData> {
     };
 
     let ssc_download = if stream_info.ssc_download.is_some() {
-        let ssc_download = stream_info.ssc_download.get();
+        let ssc_download = &stream_info.ssc_download;
         format!(
             "ssc_download:{:?}, max_stream_cache_size:{}, max_tmp_file_size:{}",
             &*ssc_download.ssd.get(),
@@ -510,6 +673,197 @@ pub fn stream_stream_info(stream_info: &StreamInfo) -> Option<VarAnyData> {
         String::new()
     };
 
-    let data = format!("{:?}, {:?}", ssc_upload, ssc_download);
+    let data = format!("{:?}___{:?}", ssc_upload, ssc_download);
     return Some(VarAnyData::Str(data));
+}
+
+pub fn http_local_cache_req_count(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    return Some(VarAnyData::Usize(
+        stream_info.http_r.local_cache_req_count.clone(),
+    ));
+}
+
+pub fn http_cache_status(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    return Some(VarAnyData::Str(format!(
+        "{:?}_{:?}",
+        http_r_ctx.r_in.main.http_cache_status, http_r_ctx.r_in.http_cache_status
+    )));
+}
+
+pub fn http_cache_file_status(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+
+    if stream_info.http_r.http_cache_file.is_none() {
+        return None;
+    }
+    let http_cache_file_ctx = &*stream_info.http_r.http_cache_file.ctx_thread.get();
+    if http_cache_file_ctx.cache_file_status.is_none() {
+        return None;
+    }
+    return Some(VarAnyData::Str(format!(
+        "{:?}",
+        http_cache_file_ctx.cache_file_status
+    )));
+}
+
+pub fn http_is_upstream(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    return Some(VarAnyData::Bool(http_r_ctx.is_upstream));
+}
+
+pub fn http_is_cache(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    if http_r_ctx.r_out_main.is_none() {
+        return None;
+    }
+    let r_out_main = http_r_ctx.r_out_main.as_ref().unwrap();
+    return Some(VarAnyData::Bool(r_out_main.is_cache));
+}
+
+pub fn http_last_slice_upstream_index(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    return Some(VarAnyData::I32(http_r_ctx.last_slice_upstream_index));
+}
+
+pub fn http_max_upstream_count(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    return Some(VarAnyData::I64(http_r_ctx.max_upstream_count));
+}
+
+pub fn http_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+
+    if name == "method" {
+        return Some(VarAnyData::Str(http_r_ctx.r_in.method.to_string()));
+    } else if name == "url" {
+        return Some(VarAnyData::Str(http_r_ctx.r_in.uri.to_string()));
+    } else if name == "uri" {
+        let uri = http_r_ctx
+            .r_in
+            .uri
+            .path_and_query()
+            .map(|x| x.as_str())
+            .unwrap_or("/")
+            .to_string();
+        return Some(VarAnyData::Str(uri));
+    } else if name == "version" {
+        return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_in.version)));
+    } else if name == "host" {
+        let host = http_r_ctx.r_in.uri.host().unwrap().to_string();
+        return Some(VarAnyData::Str(host));
+    } else if name == "scheme" {
+        let scheme = http_r_ctx.r_in.uri.scheme_str().unwrap().to_string();
+        return Some(VarAnyData::Str(scheme));
+    } else if name == "domain" {
+        let host = http_r_ctx.r_in.uri.host().unwrap();
+        let (domain, _) = host_and_port(host);
+        return Some(VarAnyData::Str(domain.to_string()));
+    } else if name == "port" {
+        let host = http_r_ctx.r_in.uri.host().unwrap();
+        let (_, port) = host_and_port(host);
+        return Some(VarAnyData::Str(port.to_string()));
+    }
+
+    let value = http_r_ctx.r_in.headers.get(name).cloned();
+    if value.is_none() {
+        return None;
+    }
+    let value = value.unwrap();
+    return Some(VarAnyData::HeaderValue(value));
+}
+
+pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+
+    if name == "method" {
+        return Some(VarAnyData::Str(http_r_ctx.r_in.method_upstream.to_string()));
+    } else if name == "url" {
+        return Some(VarAnyData::Str(http_r_ctx.r_in.uri_upstream.to_string()));
+    } else if name == "uri" {
+        let uri = http_r_ctx
+            .r_in
+            .uri_upstream
+            .path_and_query()
+            .map(|x| x.as_str())
+            .unwrap_or("/")
+            .to_string();
+        return Some(VarAnyData::Str(uri));
+    } else if name == "version" {
+        return Some(VarAnyData::Str(format!(
+            "{:?}",
+            http_r_ctx.r_in.version_upstream
+        )));
+    } else if name == "host" {
+        let host = http_r_ctx.r_in.uri_upstream.host().unwrap().to_string();
+        return Some(VarAnyData::Str(host));
+    } else if name == "scheme" {
+        let scheme = http_r_ctx
+            .r_in
+            .uri_upstream
+            .scheme_str()
+            .unwrap()
+            .to_string();
+        return Some(VarAnyData::Str(scheme));
+    } else if name == "domain" {
+        let host = http_r_ctx.r_in.uri_upstream.host().unwrap();
+        let (domain, _) = host_and_port(host);
+        return Some(VarAnyData::Str(domain.to_string()));
+    } else if name == "port" {
+        let host = http_r_ctx.r_in.uri_upstream.host().unwrap();
+        let (_, port) = host_and_port(host);
+        return Some(VarAnyData::Str(port.to_string()));
+    }
+
+    let value = http_r_ctx.r_in.headers_upstream.get(name).cloned();
+    if value.is_none() {
+        return None;
+    }
+    let value = value.unwrap();
+    return Some(VarAnyData::HeaderValue(value));
+}
+
+pub fn http_response(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    if name == "status" {
+        return Some(VarAnyData::Str(http_r_ctx.r_out.status.to_string()));
+    } else if name == "version" {
+        return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_out.version)));
+    }
+
+    let value = http_r_ctx.r_out.headers.get(name).cloned();
+    if value.is_none() {
+        return None;
+    }
+    let value = value.unwrap();
+    return Some(VarAnyData::HeaderValue(value));
 }

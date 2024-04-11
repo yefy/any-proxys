@@ -1,4 +1,4 @@
-use crate::config::http_core_plugin::PluginHandleStream;
+use crate::config::net_core_plugin::PluginHandleStream;
 use crate::proxy::stream_stream_buf::{
     StreamStreamBuffer, StreamStreamBytes, StreamStreamCacheRead,
 };

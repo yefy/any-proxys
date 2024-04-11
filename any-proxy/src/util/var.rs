@@ -4,6 +4,7 @@
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
+use http::HeaderValue;
 use std::fmt::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ pub enum VarAnyData {
     ArcStr(Arc<String>),
     ArcString(ArcString),
     Str(String),
+    Bool(bool),
     I8(i8),
     I16(i16),
     I32(i32),
@@ -26,6 +28,7 @@ pub enum VarAnyData {
     F64(f64),
     SocketAddr(SocketAddr),
     U128(u128),
+    HeaderValue(HeaderValue),
 }
 
 impl VarAnyData {
@@ -34,6 +37,13 @@ impl VarAnyData {
             Self::ArcStr(data) => return data.len(),
             Self::ArcString(data) => return data.len(),
             Self::Str(data) => return data.len(),
+            Self::Bool(data) => {
+                if *data {
+                    return "true".len();
+                } else {
+                    return "false".len();
+                }
+            }
             Self::I8(data) => {
                 let mut n = 0;
                 let mut d = *data as i32;
@@ -181,6 +191,13 @@ impl VarAnyData {
                     }
                 }
             }
+            Self::HeaderValue(data) => {
+                let data = data.to_str();
+                if data.is_err() {
+                    return 10;
+                }
+                data.unwrap().len()
+            }
         }
     }
 
@@ -196,6 +213,14 @@ impl VarAnyData {
             }
             Self::Str(data) => {
                 write!(buf, "{}", &data)?;
+                Ok(())
+            }
+            Self::Bool(data) => {
+                if *data {
+                    write!(buf, "{}", "true")?;
+                } else {
+                    write!(buf, "{}", "false")?;
+                }
                 Ok(())
             }
             Self::I8(data) => {
@@ -257,6 +282,107 @@ impl VarAnyData {
                 write!(buf, "{}", &data)?;
                 Ok(())
             }
+            Self::HeaderValue(data) => {
+                let data = data.to_str();
+                if data.is_ok() {
+                    write!(buf, "{}", data.unwrap())?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn to_string(&self) -> Result<String> {
+        let len = self.len();
+        let mut string = String::with_capacity(len);
+        self.write(&mut string)?;
+        Ok(string)
+    }
+
+    pub fn to_str(&self) -> Result<&str> {
+        match &self {
+            Self::ArcStr(data) => Ok(data.as_ref()),
+            Self::ArcString(data) => Ok(data.as_str()),
+            Self::Str(data) => Ok(&data),
+            Self::Bool(_data) => Ok(""),
+            Self::I8(_data) => Ok(""),
+            Self::I16(_data) => Ok(""),
+            Self::I32(_data) => Ok(""),
+            Self::I64(_data) => Ok(""),
+            Self::Isize(_data) => Ok(""),
+            Self::U8(_data) => Ok(""),
+            Self::U16(_data) => Ok(""),
+            Self::U32(_data) => Ok(""),
+            Self::U64(_data) => Ok(""),
+            Self::Usize(_data) => Ok(""),
+            Self::F32(_data) => Ok(""),
+            Self::F64(_data) => Ok(""),
+            Self::SocketAddr(_data) => Ok(""),
+            Self::U128(_data) => Ok(""),
+            Self::HeaderValue(data) => {
+                let data = data.to_str()?;
+                Ok(data)
+            }
+        }
+    }
+
+    pub fn to_number(&self) -> Result<i128> {
+        match &self {
+            Self::ArcStr(_data) => Ok(0),
+            Self::ArcString(_data) => Ok(0),
+            Self::Str(_data) => Ok(0),
+            Self::Bool(data) => {
+                if *data {
+                    Ok(1)
+                } else {
+                    Ok(0)
+                }
+            }
+            Self::I8(data) => Ok(*data as i128),
+            Self::I16(data) => Ok(*data as i128),
+            Self::I32(data) => Ok(*data as i128),
+            Self::I64(data) => Ok(*data as i128),
+            Self::Isize(data) => Ok(*data as i128),
+            Self::U8(data) => Ok(*data as i128),
+            Self::U16(data) => Ok(*data as i128),
+            Self::U32(data) => Ok(*data as i128),
+            Self::U64(data) => Ok(*data as i128),
+            Self::Usize(data) => Ok(*data as i128),
+            Self::F32(data) => Ok(*data as i128),
+            Self::F64(data) => Ok(*data as i128),
+            Self::SocketAddr(_data) => Ok(0),
+            Self::U128(data) => Ok(*data as i128),
+            Self::HeaderValue(_data) => Ok(0),
+        }
+    }
+
+    pub fn to_float(&self) -> Result<f64> {
+        match &self {
+            Self::ArcStr(_data) => Ok(0.0),
+            Self::ArcString(_data) => Ok(0.0),
+            Self::Str(_data) => Ok(0.0),
+            Self::Bool(data) => {
+                if *data {
+                    Ok(1.0)
+                } else {
+                    Ok(0.0)
+                }
+            }
+            Self::I8(data) => Ok(*data as f64),
+            Self::I16(data) => Ok(*data as f64),
+            Self::I32(data) => Ok(*data as f64),
+            Self::I64(data) => Ok(*data as f64),
+            Self::Isize(data) => Ok(*data as f64),
+            Self::U8(data) => Ok(*data as f64),
+            Self::U16(data) => Ok(*data as f64),
+            Self::U32(data) => Ok(*data as f64),
+            Self::U64(data) => Ok(*data as f64),
+            Self::Usize(data) => Ok(*data as f64),
+            Self::F32(data) => Ok(*data as f64),
+            Self::F64(data) => Ok(*data as f64),
+            Self::SocketAddr(_data) => Ok(0.0),
+            Self::U128(data) => Ok(*data as f64),
+            Self::HeaderValue(_data) => Ok(0.0),
         }
     }
 }
@@ -304,6 +430,7 @@ pub struct Var {
     pub context: Arc<VarContext>,
     pub datas: Vec<VarData>,
     pub max_len: usize,
+    pub is_var: bool,
 }
 
 impl Var {
@@ -317,10 +444,12 @@ impl Var {
         let mut vars = vars_str;
         let var_start = "${";
         let var_end = "}";
+        let mut is_var = true;
 
         loop {
             let var_start_index = vars.find(var_start);
             if var_start_index.is_none() {
+                is_var = false;
                 let item = Arc::new(VarItem {
                     is_var: false,
                     data: vars.to_string(),
@@ -379,6 +508,7 @@ impl Var {
             }),
             datas,
             max_len: 128,
+            is_var,
         })
     }
 
@@ -387,6 +517,7 @@ impl Var {
             context: var_parse.context.clone(),
             datas: var_parse.datas.to_vec(),
             max_len: var_parse.max_len,
+            is_var: var_parse.is_var,
         })
     }
 

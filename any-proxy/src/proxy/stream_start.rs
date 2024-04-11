@@ -21,7 +21,6 @@ use tokio::sync::broadcast;
 pub async fn do_start(
     mut start_stream: impl proxy::Stream,
     stream_info: Share<StreamInfo>,
-    stream: stream_flow::StreamFlow,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
 ) -> Result<()> {
     let start_time = Instant::now();
@@ -32,7 +31,7 @@ pub async fn do_start(
     let ret: Option<Result<()>> = async {
         tokio::select! {
             biased;
-            _ret = start_stream.do_start(stream_info.clone(), stream) => {
+            _ret = start_stream.do_start(stream_info.clone()) => {
                 let _ret = _ret.map_err(|e| anyhow!("err:do_start => request_id:{}, e:{}",
                     stream_info.get().request_id, e));
                 return Some(_ret);
@@ -101,7 +100,8 @@ pub async fn do_start(
     if debug_is_open_print {
         let stream_info = stream_info.get();
         log::info!(
-            "{}---{:?}:do_start end",
+            "session_id:{}, request_id:{}---{:?}:do_start end",
+            stream_info.session_id,
             stream_info.request_id,
             stream_info.server_stream_info.local_addr,
         );
@@ -114,9 +114,11 @@ pub async fn do_start(
     if scc.is_some() {
         let plugin_handle_logs = {
             let scc = scc.get();
-            use crate::config::http_core_plugin;
-            let http_core_plugin_conf = http_core_plugin::currs_conf(scc.http_main_confs());
-            http_core_plugin_conf.plugin_handle_logs.clone()
+            use crate::config::net_core_plugin;
+            //___wait___
+            //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+            let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+            net_core_plugin_conf.plugin_handle_logs.clone()
         };
 
         for plugin_handle_log in &*plugin_handle_logs.get().await {
@@ -125,7 +127,16 @@ pub async fn do_start(
     }
 
     if ret.is_some() {
-        log::debug!("ret:{:?}", ret.as_ref().unwrap());
+        let ret = ret.as_ref().unwrap();
+        if let Err(e) = ret {
+            let stream_info = stream_info.get();
+            log::debug!(
+                "session_id:{}, request_id:{}, err:{}",
+                stream_info.session_id,
+                stream_info.request_id,
+                e
+            );
+        }
     }
 
     //延迟服务器关闭, 让客户端接收完缓冲区, 在进行socket关闭
@@ -142,7 +153,15 @@ pub async fn do_start(
 
     if ret.is_some() {
         let ret = ret.unwrap();
-        let _ = ret?;
+        if let Err(e) = ret {
+            let stream_info = stream_info.get();
+            return Err(anyhow!(
+                "session_id:{}, request_id:{}, err:{}",
+                stream_info.session_id,
+                stream_info.request_id,
+                e
+            ));
+        }
     }
 
     Ok(())
@@ -161,19 +180,21 @@ pub async fn stream_info_parse(
     let mut client_stream_flow_info = client_stream_flow_info.get_mut();
     let mut upstream_stream_flow_info = upstream_stream_flow_info.get_mut();
     if stream_info.ssc_upload.is_some() {
-        let ssc = stream_info.ssc_download.get();
-        let ssd = ssc.ssd.get();
-        if ssd.total_read_size == 0 && ssd.total_write_size == 0 {
-            is_error = true;
-        }
-        if ssd.stream_cache_size > ssc.cs.max_stream_cache_size {
-            is_error = true;
-        }
-        if ssd.tmp_file_size > ssc.cs.max_tmp_file_size {
-            is_error = true;
+        if stream_info.ssc_download.is_some() {
+            let ssc = &stream_info.ssc_download;
+            let ssd = ssc.ssd.get();
+            // if ssd.total_read_size == 0 && ssd.total_write_size == 0 {
+            //     is_error = true;
+            // }
+            if ssd.stream_cache_size > ssc.cs.max_stream_cache_size {
+                is_error = true;
+            }
+            if ssd.tmp_file_size > ssc.cs.max_tmp_file_size {
+                is_error = true;
+            }
         }
 
-        let ssc = stream_info.ssc_upload.get();
+        let ssc = &stream_info.ssc_upload;
         let ssd = ssc.ssd.get();
         if ssd.stream_cache_size > ssc.cs.max_stream_cache_size {
             is_error = true;
@@ -200,6 +221,12 @@ pub async fn stream_info_parse(
     }
 
     if stream_info.err_status != ErrStatus::Ok {
+        is_error = true;
+    }
+
+    if client_stream_flow_info.err == StreamFlowErr::Init
+        && upstream_stream_flow_info.err == StreamFlowErr::Init
+    {
         is_error = true;
     }
 

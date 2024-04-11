@@ -157,10 +157,11 @@ impl PortServer {
                             tunnel_publish,
                             tunnel2_publish,
                             port_config_listen,
+                            stream,
                         )
                         .map_err(|e| anyhow!("err:PortStream::new => e:{}", e))?;
                         port_stream
-                            .start(stream)
+                            .start()
                             .await
                             .map_err(|e| anyhow!("err:port_stream.start => e:{}", e))?;
                         Ok(())

@@ -53,7 +53,7 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
-        typ: conf::MODULE_TYPE_HTTP,
+        typ: conf::MODULE_TYPE_NET,
         create_server: None,
     });
 }
@@ -149,35 +149,35 @@ async fn domain_listen_tcp(
     use crate::config::common_core;
     use crate::config::config_toml;
     use crate::config::domain_core;
-    use crate::config::http_core;
-    use crate::config::http_server_core;
-    use crate::config::httpserver;
+    use crate::config::net_core;
+    use crate::config::net_server;
+    use crate::config::net_server_core;
     use crate::proxy::domain_config::DomainConfigContext;
     use crate::proxy::StreamConfigContext;
     use crate::util;
-    let httpserver_conf = httpserver::curr_conf(conf_arg.curr_conf());
-    let http_core_conf = http_core::curr_conf(conf_arg.curr_conf());
-    let http_server_core_conf = http_server_core::curr_conf_mut(conf_arg.curr_conf());
+    let net_server_conf = net_server::curr_conf(conf_arg.curr_conf());
+    let net_core_conf = net_core::curr_conf(conf_arg.curr_conf());
+    let net_server_core_conf = net_server_core::curr_conf_mut(conf_arg.curr_conf());
 
     let common_core_any_conf = common_core::main_any_conf(&ms).await;
     let domain_core_conf = domain_core::main_conf_mut(&ms).await;
 
-    if http_core_conf.domain.is_empty() {
+    if net_core_conf.domain.is_empty() {
         return Err(anyhow!("domain is nil"));
     }
 
-    if http_server_core_conf.is_port_listen.is_some() {
-        if http_server_core_conf.is_port_listen == Some(true) {
+    if net_server_core_conf.is_port_listen.is_some() {
+        if net_server_core_conf.is_port_listen == Some(true) {
             return Err(anyhow!("err:not domain listen"));
         }
     } else {
-        http_server_core_conf.is_port_listen = Some(false);
+        net_server_core_conf.is_port_listen = Some(false);
     }
 
     let scc = ShareRw::new(StreamConfigContext::new(
         ms.clone(),
-        httpserver_conf.http_confs.clone(),
-        httpserver_conf.server_confs.clone(),
+        net_server_conf.net_confs.clone(),
+        net_server_conf.server_confs.clone(),
         conf_arg.curr_conf().clone(),
         common_core_any_conf,
     ));
@@ -232,7 +232,7 @@ async fn domain_listen_tcp(
 
 pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()> {
     use crate::config::domain_core;
-    use crate::config::http_core;
+    use crate::config::net_core;
     use crate::proxy::domain_config::DomainConfigListen;
     use crate::stream::server::Server;
     use crate::util;
@@ -252,15 +252,15 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     let mut index = 0;
     for domain_config_context in value.domain_config_contexts.iter() {
         let scc = domain_config_context.scc.get();
-        let http_core_conf = http_core::currs_conf(scc.http_server_confs());
+        let net_core_conf = net_core::currs_conf(scc.net_server_confs());
         index += 1;
-        index_map.insert(index, (http_core_conf.domain.clone(), index));
+        index_map.insert(index, (net_core_conf.domain.clone(), index));
         domain_config_context_map.insert(index, domain_config_context.clone());
 
         let mut index_map_test = HashMap::new();
-        index_map_test.insert(index, (http_core_conf.domain.clone(), index));
+        index_map_test.insert(index, (net_core_conf.domain.clone(), index));
         util::domain_index::DomainIndex::new(&index_map_test)
-            .map_err(|e| anyhow!("err:domain => domain:{:?}, e:{}", http_core_conf.domain, e))?;
+            .map_err(|e| anyhow!("err:domain => domain:{:?}, e:{}", net_core_conf.domain, e))?;
     }
     let domain_index = Arc::new(
         util::domain_index::DomainIndex::new(&index_map)
@@ -269,9 +269,9 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
 
     let tcp_config = {
         let scc = value.domain_config_contexts[0].scc.get();
-        let http_core_conf0 = http_core::currs_conf(scc.http_server_confs());
+        let net_core_conf0 = net_core::currs_conf(scc.net_server_confs());
         upstream_tcp_conf
-            .config(&http_core_conf0.tcp_config_name)
+            .config(&net_core_conf0.tcp_config_name)
             .unwrap()
     };
     let listen_server: Arc<Box<dyn Server>> = Arc::new(Box::new(tcp_server::Server::new(
@@ -281,11 +281,11 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     )?));
 
     let plugin_handle_protocol = {
-        use crate::config::http_server_core_plugin;
+        use crate::config::net_server_core_plugin;
         let scc = value.domain_config_contexts[0].scc.get();
-        let http_server_core_plugin_conf0 =
-            http_server_core_plugin::currs_conf(scc.http_server_confs());
-        http_server_core_plugin_conf0.plugin_handle_protocol.clone()
+        let net_server_core_plugin_conf0 =
+            net_server_core_plugin::currs_conf(scc.net_server_confs());
+        net_server_core_plugin_conf0.plugin_handle_protocol.clone()
     };
 
     domain_core_conf.domain_config_listen_map.insert(

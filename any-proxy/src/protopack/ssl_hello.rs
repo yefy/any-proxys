@@ -8,7 +8,7 @@ pub async fn read_domain<R: AsyncRead + Unpin>(
     buf_reader: &mut BufReader<R>,
 ) -> Result<Option<String>> {
     buf_reader.start();
-    let domain = read_do_domain(buf_reader).await;
+    let domain = do_read_domain(buf_reader).await;
     if !buf_reader.rollback() {
         return Err(anyhow!("err:rollback"));
     }
@@ -19,7 +19,7 @@ pub async fn read_domain<R: AsyncRead + Unpin>(
     }
 }
 
-async fn read_do_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<String> {
+async fn do_read_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<String> {
     let mut slice = [0u8; 4096];
     let content_type = buf_reader
         .read_u8()

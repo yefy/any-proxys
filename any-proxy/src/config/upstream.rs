@@ -170,22 +170,22 @@ async fn merge_old_main_confs(
     if main_index < 0 {
         panic!("main_index:{}", main_index)
     }
-    let old_http_confs = if old_main_conf.is_some() {
+    let old_net_confs = if old_main_conf.is_some() {
         let old_main_confs = old_main_conf
             .as_ref()
             .unwrap()
             .get_mut::<Vec<typ::ArcUnsafeAny>>();
-        let old_http_main_conf = old_main_confs[main_index as usize].clone();
-        let old_http_confs = old_http_main_conf
+        let old_net_main_conf = old_main_confs[main_index as usize].clone();
+        let old_net_confs = old_net_main_conf
             .get_mut::<Vec<typ::ArcUnsafeAny>>()
             .clone();
-        Some(old_http_confs)
+        Some(old_net_confs)
     } else {
         None
     };
     let main_confs = main_conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
-    let http_main_conf = main_confs[main_index as usize].clone();
-    let http_confs = http_main_conf.get_mut::<Vec<typ::ArcUnsafeAny>>().clone();
+    let net_main_conf = main_confs[main_index as usize].clone();
+    let net_confs = net_main_conf.get_mut::<Vec<typ::ArcUnsafeAny>>().clone();
 
     for module in ms.get_modules() {
         let (typ, ctx_index, func, name, main_index) = {
@@ -201,9 +201,9 @@ async fn merge_old_main_confs(
         if typ & conf::MODULE_TYPE_UPSTREAM == 0 {
             continue;
         }
-        let old_http_conf = if old_http_confs.is_some() {
-            let old_http_confs = old_http_confs.as_ref().unwrap();
-            Some(old_http_confs[ctx_index as usize].clone())
+        let old_net_conf = if old_net_confs.is_some() {
+            let old_net_confs = old_net_confs.as_ref().unwrap();
+            Some(old_net_confs[ctx_index as usize].clone())
         } else {
             None
         };
@@ -217,10 +217,10 @@ async fn merge_old_main_confs(
         (func.merge_old_conf)(
             old_ms.clone(),
             old_main_conf.clone(),
-            old_http_conf,
+            old_net_conf,
             ms.clone(),
             main_conf.clone(),
-            http_confs[ctx_index as usize].clone(),
+            net_confs[ctx_index as usize].clone(),
         )
         .await?;
     }

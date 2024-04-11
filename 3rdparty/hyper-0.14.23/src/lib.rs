@@ -98,6 +98,10 @@ cfg_feature! {
     #[cfg(any(feature = "http1", feature = "http2"))]
     #[doc(no_inline)]
     pub use crate::client::Client;
+    pub use crate::client::AnyProxyRawHeaders;
+    pub use crate::client::AnyProxyHyperBuf;
+    pub use crate::client::AnyProxyHyperHttpHeaderExt;
+    pub use crate::client::AnyProxyRawHttpHeaderExt;
 }
 
 cfg_feature! {

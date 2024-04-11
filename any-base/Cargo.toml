@@ -24,7 +24,7 @@ debug = false
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常
-lto = true
+lto = false
 codegen-units = 1
 incremental = false
 rpath = false
@@ -41,6 +41,7 @@ default = ["anyspawn-parking-lot"]
 anyspawn-count = []
 anyspawn-parking-lot = []
 anyspawn-std-sync = []
+anylock-time = []
 
 [dependencies]
 anyhow = {path = "../3rdparty/anyhow"}
@@ -68,3 +69,6 @@ core_affinity = "0.7.6"
 futures-core = "0.3.26"
 async-recursion = "1.0.5"
 parking_lot = "0.12.1"
+
+[target."cfg(windows)".dependencies.winapi]
+version = "0.3.9"

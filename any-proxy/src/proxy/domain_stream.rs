@@ -7,8 +7,10 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 use crate::proxy::domain_context::DomainContext;
 use crate::proxy::util as proxy_util;
+use crate::proxy::util::run_plugin_handle_access;
 use crate::proxy::ServerArg;
 use crate::stream::server::ServerStreamInfo;
+use crate::util::util::host_and_port;
 use crate::{protopack, Protocol7};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::module::module::Modules;
@@ -20,6 +22,7 @@ use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct DomainStream {
@@ -30,6 +33,7 @@ pub struct DomainStream {
     tunnel2_publish: Option<tunnel2_server::Publish>,
     domain_config_listen: Arc<domain_config::DomainConfigListen>,
     domain_context: Arc<DomainContext>,
+    client_stream: Option<StreamFlow>,
 }
 
 impl DomainStream {
@@ -41,6 +45,7 @@ impl DomainStream {
         tunnel2_publish: Option<tunnel2_server::Publish>,
         domain_config_listen: Arc<domain_config::DomainConfigListen>,
         domain_context: Arc<DomainContext>,
+        client_stream: StreamFlow,
     ) -> Result<DomainStream> {
         Ok(DomainStream {
             ms,
@@ -50,35 +55,42 @@ impl DomainStream {
             tunnel2_publish,
             domain_config_listen,
             domain_context,
+            client_stream: Some(client_stream),
         })
     }
 
-    pub async fn start(self, mut stream: StreamFlow) -> Result<()> {
+    pub async fn start(self) -> Result<()> {
         log::trace!("domain stream start");
-        use crate::config::http_core;
+        use crate::config::net_core;
         let ms = self.ms.clone();
-        let http_core_conf = http_core::main_conf_mut(&ms).await;
+        let net_core_conf = net_core::main_conf_mut(&ms).await;
+        use crate::config::common_core;
+        let common_core_conf = common_core::main_conf_mut(&ms).await;
+        let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
 
         let stream_info = StreamInfo::new(
             self.server_stream_info.clone(),
-            http_core_conf.debug_is_open_stream_work_times,
+            net_core_conf.debug_is_open_stream_work_times,
             Some(self.executors.clone()),
-            http_core_conf.debug_print_access_log_time,
-            http_core_conf.debug_print_stream_flow_time,
-            http_core_conf.stream_so_singer_time,
-            http_core_conf.debug_is_open_print,
+            net_core_conf.debug_print_access_log_time,
+            net_core_conf.debug_print_stream_flow_time,
+            net_core_conf.stream_so_singer_time,
+            net_core_conf.debug_is_open_print,
+            session_id,
         );
         let stream_info = Share::new(stream_info);
-        stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
         let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
 
-        stream_start::do_start(self, stream_info, stream, shutdown_thread_rx).await
+        stream_start::do_start(self, stream_info, shutdown_thread_rx).await
     }
 }
 
 #[async_trait]
 impl proxy::Stream for DomainStream {
-    async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()> {
+    async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
+        let mut stream = self.client_stream.take().unwrap();
+        stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
+
         let client_buf_reader = any_base::io_rb::buf_reader::BufReader::new(stream);
         stream_info.get_mut().add_work_time1("tunnel_stream");
         let client_buf_reader = TunnelStream::tunnel_stream(
@@ -128,7 +140,13 @@ impl proxy::Stream for DomainStream {
 
         let client_buf_reader_hello = client_buf_reader.clone();
         let client_buf_reader_domain = client_buf_reader.clone();
+        let client_buf_reader_http_v1 = client_buf_reader.clone();
         let server_stream_info = self.server_stream_info.clone();
+        use crate::config::net_core;
+        let domain_from_http_v1 = net_core::main_conf(&self.ms)
+            .await
+            .domain_from_http_v1
+            .clone();
 
         stream_info.get_mut().add_work_time1("parse_proxy_domain");
         let stream_info_ = stream_info.clone();
@@ -153,16 +171,40 @@ impl proxy::Stream for DomainStream {
                         ArcString::new(domain)
                     }
                     None => {
-                        if server_stream_info.domain.is_none() {
-                            return Err(anyhow!("err:domain null"));
+                        let domain = if domain_from_http_v1.is_open {
+                            use crate::protopack::http_parse_v1;
+                            let host = http_parse_v1::read_host(
+                                &mut *client_buf_reader_http_v1.get_mut().await,
+                                &domain_from_http_v1.check_methods,
+                            )
+                            .await?;
+                            if host.is_some() {
+                                let host = host.unwrap();
+                                let (domain, _) = host_and_port(&host);
+                                Some(domain.to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        if domain.is_some() {
+                            ArcString::new(domain.unwrap())
+                        } else {
+                            if server_stream_info.domain.is_none() {
+                                return Err(anyhow!("err:domain null"));
+                            }
+                            server_stream_info.domain.clone().unwrap()
                         }
-                        server_stream_info.domain.clone().unwrap()
                     }
                 };
                 Ok(domain)
             },
         )
         .await?;
+
+        run_plugin_handle_access(scc.clone(), stream_info.clone()).await?;
 
         stream_info.get_mut().add_work_time1("connect_and_stream");
         let client_buf_reader = unsafe { client_buf_reader.take().await };

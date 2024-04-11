@@ -67,6 +67,11 @@ impl StreamFlowInfo {
         }
     }
 
+    pub fn reset_err(&mut self) {
+        self.err = StreamFlowErr::Init;
+        self.err_time_millis = 0;
+    }
+
     pub fn is_close(&self) -> bool {
         if self.err == StreamFlowErr::WriteClose
             || self.err == StreamFlowErr::ReadClose
@@ -153,7 +158,7 @@ impl StreamFlow {
         rw: RW,
         w_err_to_close: Option<Vec<String>>,
     ) -> StreamFlow {
-        let stream = super::stream::Stream::new(rw);
+        let stream = super::stream_tokio::Stream::new(rw);
         let (r, w) = crate::io::split::split(stream);
         StreamFlow {
             read_timeout: tokio::time::Duration::from_secs(std::u64::MAX),

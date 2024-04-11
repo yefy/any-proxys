@@ -7,9 +7,7 @@ use any_base::typ::{Share, ShareRw};
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
-use chrono::Local;
 use std::future::Future;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub async fn parse_proxy_domain<S, SF, D, DF>(
@@ -49,19 +47,17 @@ where
                 arg.stream_info.get_mut().ssl_domain = Some(domain.clone());
                 arg.stream_info.get_mut().remote_domain = Some(domain.clone());
                 arg.stream_info.get_mut().local_domain = Some(domain.clone());
-                use crate::config::common_core;
-                let common_core_conf = common_core::main_conf_mut(&arg.ms).await;
+                let session_id = arg.stream_info.get().session_id;
 
                 let server_stream_info = arg.stream_info.get().server_stream_info.clone();
                 AnyproxyHello {
                     version: ANYPROXY_VERSION.into(),
                     request_id: format!(
-                        "{:?}_{}_{}_{}_{}",
-                        server_stream_info.local_addr,
+                        "{}_{}_{}_{}",
+                        session_id,
+                        server_stream_info.local_addr.clone().unwrap(),
                         server_stream_info.remote_addr,
                         unsafe { libc::getpid() },
-                        common_core_conf.session_id.fetch_add(1, Ordering::Relaxed),
-                        Local::now().timestamp_millis()
                     )
                     .into(),
                     client_addr: server_stream_info.remote_addr.clone(),
@@ -78,7 +74,7 @@ where
 
         arg.domain_config_listen
             .domain_index
-            .index(&stream_info.protocol_hello.get().domain)
+            .index(&stream_info.protocol_hello.domain)
             .map_err(|e| anyhow!("err:domain_index.index => e:{}", e))?
     };
     let domain_config_context = arg
@@ -95,14 +91,13 @@ where
     {
         let mut stream_info = arg.stream_info.get_mut();
         let scc_ = scc.get();
-        let http_core_conf = scc_.http_core_conf();
+        let net_core_conf = scc_.net_core_conf();
         stream_info.scc = scc.clone();
-        stream_info.debug_is_open_print = http_core_conf.debug_is_open_print;
-        stream_info.debug_is_open_stream_work_times =
-            http_core_conf.debug_is_open_stream_work_times;
-        stream_info.debug_print_access_log_time = http_core_conf.debug_print_access_log_time;
-        stream_info.debug_print_stream_flow_time = http_core_conf.debug_print_stream_flow_time;
-        stream_info.stream_so_singer_time = http_core_conf.stream_so_singer_time;
+        stream_info.debug_is_open_print = net_core_conf.debug_is_open_print;
+        stream_info.debug_is_open_stream_work_times = net_core_conf.debug_is_open_stream_work_times;
+        stream_info.debug_print_access_log_time = net_core_conf.debug_print_access_log_time;
+        stream_info.debug_print_stream_flow_time = net_core_conf.debug_print_stream_flow_time;
+        stream_info.stream_so_singer_time = net_core_conf.stream_so_singer_time;
     }
     Ok(scc)
 }
@@ -123,17 +118,18 @@ pub async fn upsteam_connect_info(
             return Err(anyhow!("err:client_ip"));
         }
     };
-    let scc = scc.get();
     stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
-    let (ups_dispatch, connect_info) = {
-        use crate::config::http_server_core;
-        let http_server_core_conf = http_server_core::currs_conf(scc.http_server_confs());
-        http_server_core_conf
-            .upstream_data
-            .get_mut()
-            .balancer_and_connect(&client_ip)?
+    let (ups_balancer, connect_info) = {
+        use crate::config::net_server_core;
+        let upstream_data = {
+            let scc = scc.get();
+            let net_server_core_conf = net_server_core::currs_conf(scc.net_server_confs());
+            net_server_core_conf.upstream_data.clone()
+        };
+        let ret = upstream_data.get_mut().balancer_and_connect(&client_ip)?;
+        ret
     };
-    stream_info.get_mut().ups_dispatch = Some(ups_dispatch);
+    stream_info.get_mut().ups_balancer = Some(ups_balancer);
     if connect_info.is_none() {
         return Err(anyhow!("err: connect_func nil"));
     }
@@ -215,7 +211,7 @@ pub async fn get_proxy_hello(
         stream_info.err_status = ErrStatus::Ok;
         let scc = scc.get();
         let is_proxy_protocol_hello = if is_proxy_protocol_hello.is_none() {
-            scc.http_core_conf().is_proxy_protocol_hello
+            scc.net_core_conf().is_proxy_protocol_hello
         } else {
             is_proxy_protocol_hello.unwrap()
         };
@@ -224,9 +220,39 @@ pub async fn get_proxy_hello(
     };
 
     if is_proxy_protocol_hello {
-        let hello = { stream_info.get().protocol_hello.get().clone() };
+        let hello = { stream_info.get().protocol_hello.clone().unwrap() };
         Some(hello)
     } else {
         None
     }
+}
+
+pub async fn run_plugin_handle_access(
+    scc: ShareRw<StreamConfigContext>,
+    stream_info: Share<StreamInfo>,
+) -> Result<()> {
+    let plugin_handle_access = {
+        let scc = scc.get();
+        use crate::config::net_core_plugin;
+        //___wait___
+        //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+        let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+        net_core_plugin_conf.plugin_handle_access.clone()
+    };
+
+    for plugin_handle_access in &*plugin_handle_access.get().await {
+        let err = (plugin_handle_access)(stream_info.clone()).await?;
+        match err {
+            crate::Error::Ok => {}
+            crate::Error::Break => {}
+            crate::Error::Finish => {
+                break;
+            }
+            crate::Error::Error => {
+                return Err(anyhow::anyhow!("err:plugin_handle_access"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }

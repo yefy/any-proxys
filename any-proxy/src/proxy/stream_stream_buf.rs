@@ -1,14 +1,14 @@
+use any_base::file_ext::FileExt;
 use any_base::io::async_write_msg::BufFile;
 use any_base::io::async_write_msg::{MsgWriteBuf, MsgWriteBufFile};
-use any_base::typ::ArcMutex;
 use any_base::util::StreamReadMsg;
 use bytes::Buf;
 use bytes::{Bytes, BytesMut};
 use std::cmp::min;
 use std::collections::{LinkedList, VecDeque};
-use std::fs::File;
 use std::io::IoSlice;
 use std::mem::swap;
+use std::sync::Arc;
 
 pub trait StreamStreamBuf {
     type Obj;
@@ -35,15 +35,16 @@ pub trait StreamStreamBuf {
 
 #[derive(Clone)]
 pub struct StreamStreamFile {
-    pub fr: ArcMutex<File>,
-    pub file_fd: i32,
+    pub file_ext: Arc<FileExt>,
     pub seek: u64,
     pub size: usize,
+    pub notify_tx: Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
 }
 
 impl std::fmt::Display for StreamStreamFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "file_fd: {}", self.file_fd)?;
+        write!(f, "file_fd: {}", self.file_ext.fix.file_fd)?;
+        write!(f, "file_uniq: {}", self.file_ext.fix.file_uniq.get_uniq())?;
         write!(f, "seek: {}", self.seek)?;
         write!(f, "size: {}", self.size)
     }
@@ -52,7 +53,8 @@ impl std::fmt::Display for StreamStreamFile {
 impl std::fmt::Debug for StreamStreamFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamStreamFile")
-            .field("file_fd", &self.file_fd)
+            .field("file_fd", &self.file_ext.fix.file_fd)
+            .field("file_uniq", &self.file_ext.fix.file_uniq.get_uniq())
             .field("seek", &self.seek)
             .field("size", &self.size)
             .finish()
@@ -60,27 +62,39 @@ impl std::fmt::Debug for StreamStreamFile {
 }
 
 impl StreamStreamFile {
-    pub fn new(fr: ArcMutex<File>, file_fd: i32, seek: u64, size: usize) -> StreamStreamFile {
+    pub fn new(file_ext: Arc<FileExt>, seek: u64, size: usize) -> StreamStreamFile {
         StreamStreamFile {
-            fr,
-            file_fd,
+            file_ext,
             seek,
             size,
+            notify_tx: Some(Vec::new()),
         }
     }
 
     pub fn from_file(buf_file: MsgWriteBufFile) -> StreamStreamFile {
-        let (fr, file_fd, seek, size, _) = buf_file.split();
+        let (file_ext, seek, size, _, notify_tx) = buf_file.split();
         StreamStreamFile {
-            fr,
-            file_fd,
+            file_ext,
             seek,
             size,
+            notify_tx,
         }
     }
 
-    pub fn copy(&self) -> (ArcMutex<File>, i32, u64, usize) {
-        return (self.fr.clone(), self.file_fd, self.seek, self.size);
+    pub fn to_msg_write_buf(
+        &mut self,
+    ) -> (
+        Arc<FileExt>,
+        u64,
+        usize,
+        Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
+    ) {
+        return (
+            self.file_ext.clone(),
+            self.seek,
+            self.size,
+            self.notify_tx.take(),
+        );
     }
 }
 
@@ -109,6 +123,15 @@ impl BufFile for StreamStreamFile {
 
         self.seek += cnt as u64;
         self.size -= cnt;
+
+        if self.size == 0 {
+            let notify_tx = self.notify_tx.take();
+            if notify_tx.is_some() {
+                for tx in notify_tx.unwrap() {
+                    let _ = tx.send(());
+                }
+            }
+        }
     }
 }
 
@@ -844,15 +867,15 @@ impl StreamStreamCacheWrite {
         }
     }
 
-    pub fn msg_write_buf(&mut self) -> MsgWriteBuf {
-        match &mut self.data {
-            StreamStreamWrite::Bytes(data) => MsgWriteBuf::from_bytes(data.chunk_bytes_all()),
-            StreamStreamWrite::File(data) => {
-                let (fr, file_fd, seek, size) = data.copy();
-                MsgWriteBuf::from_file(fr, file_fd, seek, size)
-            }
-        }
-    }
+    // pub fn msg_write_buf(&mut self) -> MsgWriteBuf {
+    //     match &mut self.data {
+    //         StreamStreamWrite::Bytes(data) => MsgWriteBuf::from_bytes(data.chunk_bytes_all()),
+    //         StreamStreamWrite::File(data) => {
+    //             let (fr, file_fd, seek, size) = data.copy();
+    //             MsgWriteBuf::from_file(fr, file_fd, seek, size)
+    //         }
+    //     }
+    // }
 }
 
 impl BufFile for StreamStreamCacheWrite {
@@ -1181,9 +1204,20 @@ impl StreamStreamCacheWriteDeque {
             let a = self.datas.back_mut();
             if a.is_some() {
                 let a = a.unwrap().file_mut().unwrap();
-                let b = data.file().unwrap();
-                if a.file_fd == b.file_fd && a.seek + a.size as u64 == b.seek {
+                let b = data.file_mut().unwrap();
+                if a.file_ext.is_uniq_and_fd_eq(&b.file_ext.fix) && a.seek + a.size as u64 == b.seek
+                {
                     a.size += b.size;
+                    if a.notify_tx.is_none() {
+                        a.notify_tx = b.notify_tx.take();
+                    } else {
+                        if b.notify_tx.is_some() {
+                            a.notify_tx
+                                .as_mut()
+                                .unwrap()
+                                .extend(b.notify_tx.take().unwrap());
+                        }
+                    }
                     return None;
                 }
             }
@@ -1207,8 +1241,8 @@ impl StreamStreamCacheWriteDeque {
 
     pub fn msg_write_buf(&mut self) -> MsgWriteBuf {
         if self.is_file() {
-            let (fr, file_fd, seek, size) = self.file().unwrap().copy();
-            return MsgWriteBuf::from_file(fr, file_fd, seek, size);
+            let (fr, seek, size, notify_tx) = self.file().unwrap().to_msg_write_buf();
+            return MsgWriteBuf::from_file(fr, seek, size, notify_tx);
         }
 
         return MsgWriteBuf::from_bytes(self.chunk_bytes_all());

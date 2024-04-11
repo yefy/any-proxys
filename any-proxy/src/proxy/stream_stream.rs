@@ -151,9 +151,9 @@ impl StreamStream {
         let mut timeout = tokio::time::Duration::from_millis(u64::max_value());
         let wait_timeout = {
             let ssc = scc.get();
-            let http_core_conf = ssc.http_core_conf();
-            let client_timeout_mil_time_ebpf = http_core_conf.client_timeout_mil_time_ebpf;
-            let upstream_timeout_mil_time_ebpf = http_core_conf.upstream_timeout_mil_time_ebpf;
+            let net_core_conf = ssc.net_core_conf();
+            let client_timeout_mil_time_ebpf = net_core_conf.client_timeout_mil_time_ebpf;
+            let upstream_timeout_mil_time_ebpf = net_core_conf.upstream_timeout_mil_time_ebpf;
             if is_client {
                 tokio::time::Duration::from_millis(client_timeout_mil_time_ebpf)
             } else {
@@ -257,8 +257,8 @@ impl StreamStream {
     ) -> (bool, bool) {
         let mut stream_info = stream_info.get_mut();
         let scc = scc.get();
-        let http_core_conf = scc.http_core_conf();
-        if http_core_conf.is_open_sendfile {
+        let net_core_conf = scc.net_core_conf();
+        if net_core_conf.is_open_sendfile {
             let is_client_sendfile = if client_stream_fd > 0 {
                 stream_info.open_sendfile = Some("sendfile_upload".to_string());
                 true
@@ -290,7 +290,7 @@ impl StreamStream {
         mut _upstream_stream: StreamFlow,
     ) -> Result<()> {
         #[cfg(feature = "anyproxy-ebpf")]
-        if scc.get().http_core_conf().is_open_ebpf {
+        if scc.get().net_core_conf().is_open_ebpf {
             let client_stream_fd = client_stream.raw_fd();
             let upstream_stream_fd = _upstream_stream.raw_fd();
 
@@ -303,7 +303,13 @@ impl StreamStream {
                 let sock_map_data = {
                     let mut stream_info = stream_info.get_mut();
                     let upstream_connect_info = stream_info.upstream_connect_info.clone();
-                    let upstream_connect_info = upstream_connect_info.get();
+                    let (remote_addr, local_addr) = {
+                        let upstream_connect_info = upstream_connect_info.get();
+                        (
+                            upstream_connect_info.remote_addr.clone(),
+                            upstream_connect_info.local_addr.clone(),
+                        )
+                    };
 
                     stream_info.is_discard_timeout = true;
                     stream_info.add_work_time1("ebpf");
@@ -314,8 +320,8 @@ impl StreamStream {
                         stream_info.server_stream_info.remote_addr,
                         stream_info.server_stream_info.local_addr.clone().unwrap(),
                         upstream_stream_fd,
-                        upstream_connect_info.remote_addr.clone(),
-                        upstream_connect_info.local_addr.clone(),
+                        remote_addr,
+                        local_addr,
                     )
                 };
 
@@ -367,7 +373,7 @@ impl StreamStream {
         );
 
         stream_info.get_mut().add_work_time1("stream_to_stream");
-        let close_type = scc.get().http_core_conf().close_type;
+        let close_type = scc.get().net_core_conf().close_type;
         let ret = StreamStream::stream_to_stream(
             scc.clone(),
             stream_info.clone(),
@@ -413,13 +419,14 @@ impl StreamStream {
 
         let (client_read, client_write) = client.split();
         let (upstream_read, upstream_write) = upstream.split();
-        let download = scc.get().http_core_conf().download.clone();
+        let download = scc.get().net_core_conf().download.clone();
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
             ssd: ArcRwLock::new(StreamStreamData {
                 stream_cache_size: download.stream_cache_size,
                 tmp_file_size: download.tmp_file_size,
+                tmp_file_curr_reopen_size: 0,
                 limit_rate_after: download.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
@@ -440,13 +447,14 @@ impl StreamStream {
             other_close_wait: upload_close.clone(),
         });
 
-        let upload = scc.get().http_core_conf().upload.clone();
+        let upload = scc.get().net_core_conf().upload.clone();
         let ssc_upload = Arc::new(StreamStreamContext {
             cs: upload.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(upload.max_limit_rate as i64)),
             ssd: ArcRwLock::new(StreamStreamData {
                 stream_cache_size: upload.stream_cache_size,
                 tmp_file_size: upload.tmp_file_size,
+                tmp_file_curr_reopen_size: 0,
                 limit_rate_after: upload.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
@@ -509,7 +517,8 @@ impl StreamStream {
         scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
-        is_client_sendfile: bool,
+        is_sendfile: bool,
+        is_download: bool,
     ) -> Result<()> {
         let wait_group = awaitgroup::WaitGroup::new();
         let client_worker_inner = wait_group.worker().add();
@@ -520,13 +529,18 @@ impl StreamStream {
         let download_close = FutureWait::new();
 
         let (client_read, client_write) = client.split();
-        let download = scc.get().http_core_conf().download.clone();
+        let download = if is_download {
+            scc.get().net_core_conf().download.clone()
+        } else {
+            scc.get().net_core_conf().upload.clone()
+        };
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
             ssd: ArcRwLock::new(StreamStreamData {
                 stream_cache_size: download.stream_cache_size,
                 tmp_file_size: download.tmp_file_size,
+                tmp_file_curr_reopen_size: 0,
                 limit_rate_after: download.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
@@ -536,7 +550,7 @@ impl StreamStream {
             delay_state: ArcRwLock::new(DelayState::Init),
             delay_wait: FutureWait::new(),
             delay_ok: Arc::new(AtomicBool::new(false)),
-            is_sendfile: is_client_sendfile,
+            is_sendfile,
             is_client: false,
             close_type: StreamCloseType::Fast,
             wait_group: wait_group.clone(),
@@ -549,7 +563,11 @@ impl StreamStream {
 
         {
             let mut stream_info = stream_info.get_mut();
-            stream_info.ssc_download.set(ssc_download.clone());
+            if is_download {
+                stream_info.ssc_download.set(ssc_download.clone());
+            } else {
+                stream_info.ssc_upload.set(ssc_download.clone());
+            }
         }
 
         stream_info
@@ -586,13 +604,14 @@ impl StreamStream {
 
         let (client_read, client_write) = client.split();
         let (upstream_read, upstream_write) = upstream.split();
-        let download = scc.get().http_core_conf().download.clone();
+        let download = scc.get().net_core_conf().download.clone();
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
             ssd: ArcRwLock::new(StreamStreamData {
                 stream_cache_size: download.stream_cache_size,
                 tmp_file_size: download.tmp_file_size,
+                tmp_file_curr_reopen_size: 0,
                 limit_rate_after: download.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
@@ -613,13 +632,14 @@ impl StreamStream {
             other_close_wait: upload_close.clone(),
         });
 
-        let upload = scc.get().http_core_conf().upload.clone();
+        let upload = scc.get().net_core_conf().upload.clone();
         let ssc_upload = Arc::new(StreamStreamContext {
             cs: upload.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(upload.max_limit_rate as i64)),
             ssd: ArcRwLock::new(StreamStreamData {
                 stream_cache_size: upload.stream_cache_size,
                 tmp_file_size: upload.tmp_file_size,
+                tmp_file_curr_reopen_size: 0,
                 limit_rate_after: upload.limit_rate_after,
                 total_read_size: 0,
                 total_write_size: 0,
@@ -658,13 +678,11 @@ impl StreamStream {
         )
         .await
         .map_err(|e| anyhow!("err:client => e:{}", e));
-        match ret {
-            Err(e) => {
-                if !stream_info.get().client_stream_flow_info.get().is_close() {
-                    return Err(e);
-                }
+
+        if let Err(e) = ret {
+            if !stream_info.get().client_stream_flow_info.get().is_close() {
+                return Err(e);
             }
-            Ok(()) => {}
         }
 
         stream_info
@@ -773,9 +791,12 @@ impl StreamStream {
             { (w.raw_fd(), w.is_write_msg(), w.is_write_vectored()) };
 
         let plugin_handle_stream = ssc.cs.plugin_handle_stream.clone();
-        use crate::config::http_core;
-        let ctx_index_len = http_core::module().get().ctx_index_len as usize;
+        use crate::config::net_core;
+        let ctx_index_len = net_core::module().get().ctx_index_len as usize;
         let plugins: Vec<Option<ArcUnsafeAny>> = vec![None; ctx_index_len];
+        let session_id = stream_info.get().session_id;
+        use crate::util::default_config::PAGE_SIZE;
+        let page_size = PAGE_SIZE.load(Ordering::Relaxed);
         let sss = Arc::new(StreamStreamShare {
             sss_ctx: ShareRw::new(StreamStreamShareContext {
                 write_buffer_deque: Some(StreamStreamCacheWriteDeque::new(
@@ -800,6 +821,8 @@ impl StreamStream {
             _w_raw_fd,
             is_write_msg,
             is_write_vectored,
+            _session_id: session_id,
+            page_size,
         });
 
         let plugin_handle_stream = if let &StreamCloseType::WaitEmpty = &ssc.close_type {
@@ -807,9 +830,9 @@ impl StreamStream {
                 .get_mut()
                 .add_work_time2(ssc.is_client, "WaitEmpty");
             let ms = scc.get().ms.clone();
-            use crate::config::http_core_plugin;
-            let http_core_plugin_conf = http_core_plugin::main_conf(&ms).await;
-            http_core_plugin_conf.plugin_handle_stream_cache.clone()
+            use crate::config::net_core_plugin;
+            let net_core_plugin_conf = net_core_plugin::main_conf(&ms).await;
+            net_core_plugin_conf.plugin_handle_stream_cache.clone()
         } else {
             stream_info
                 .get_mut()

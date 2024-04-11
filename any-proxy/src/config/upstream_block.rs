@@ -9,6 +9,7 @@ use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
 use any_base::typ::Share;
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 
 pub struct Conf {
     pub name: String,
-    pub balancer: String,
+    pub balancer: ArcString,
     pub plugin_handle_balancer: Option<PluginHandleBalancer>,
     pub ups_dynamic_domains: Vec<Share<UpstreamDynamicDomainData>>,
     pub ups_heartbeats: Vec<Share<UpstreamHeartbeatData>>,
@@ -30,7 +31,7 @@ impl Conf {
     pub fn new() -> Self {
         Conf {
             name: "".to_string(),
-            balancer: "".to_string(),
+            balancer: ArcString::default(),
             plugin_handle_balancer: None,
             ups_dynamic_domains: Vec::new(),
             ups_heartbeats: Vec::new(),
@@ -47,7 +48,7 @@ impl Conf {
         heartbeat: Arc<Box<dyn upstream_core::HeartbeatI>>,
     ) -> Result<()> {
         use crate::config::upstream_core_plugin;
-        let ups_heartbeat = if self.balancer == upstream_core_plugin::FAIR {
+        let ups_heartbeat = if self.balancer.as_str() == upstream_core_plugin::FAIR {
             use crate::config::config_toml::default_heartbeat_fail;
             use crate::config::config_toml::default_heartbeat_interval;
             use crate::config::config_toml::default_heartbeat_timeout;
@@ -60,7 +61,7 @@ impl Conf {
             None
         };
 
-        let is_weight = if self.balancer == upstream_core_plugin::WEIGHT {
+        let is_weight = if self.balancer.as_str() == upstream_core_plugin::WEIGHT {
             true
         } else {
             false
@@ -256,14 +257,14 @@ async fn balancer(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    c.balancer = unsafe { conf_arg.value.take::<String>() };
+    c.balancer = ArcString::new(conf_arg.value.get_mut::<String>().clone());
     log::trace!("c.dispatch:{:?}", c.balancer);
     use crate::config::upstream_core_plugin;
     let upstream_core_plugin_conf = upstream_core_plugin::main_conf_mut(&ms).await;
 
     let plugin_handle_balancer = upstream_core_plugin_conf
         .plugin_handle_balancers
-        .get(&c.balancer)
+        .get(c.balancer.as_str())
         .cloned();
     if plugin_handle_balancer.is_none() {
         return Err(anyhow!("balancer:{} invalid", c.balancer));

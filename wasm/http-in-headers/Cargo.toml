@@ -1,0 +1,25 @@
+[package]
+name = "wasm-server"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bitflags = "2.4.2"
+wit-bindgen-rt = "0.21.0"
+wit-bindgen = "0.21.0"
+toml = "0.5.10"
+serde = { version = "1.0", features = ["derive"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[package.metadata.component]
+package = "component:server"
+
+[package.metadata.component.dependencies]
+
+#[package.metadata.component.target.dependencies]
+#"component:http-stream-request" = { path = "../wit" }
+#"component:http-in-headers" = { path = "../wit" }

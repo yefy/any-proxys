@@ -438,3 +438,76 @@ impl<'de> Deserialize<'de> for ArcString {
         Ok(ArcString::new(s))
     }
 }
+
+pub fn bytes_index(data: &Bytes, pattern: &[u8]) -> Option<usize> {
+    data.windows(pattern.len())
+        .position(|window| window == pattern)
+}
+
+pub fn bytes_split(data: &Bytes, pattern: &[u8]) -> Vec<Bytes> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while let Some(mut pos) = bytes_index(&data.slice(start..), pattern) {
+        pos += start; // Adjust position to global index
+        chunks.push(data.slice(start..pos));
+        start = pos + pattern.len(); // Skip pattern
+    }
+
+    if start < data.len() {
+        chunks.push(data.slice(start..));
+    }
+
+    return chunks;
+}
+
+pub fn bytes_split_once(data: &Bytes, pattern: &[u8]) -> Option<(Bytes, Bytes)> {
+    let index = bytes_index(data, pattern);
+    if index.is_none() {
+        return None;
+    }
+    let index = index.unwrap();
+    return Some((data.slice(0..index), data.slice((index + pattern.len())..)));
+}
+
+pub fn buf_index(data: &[u8], pattern: &[u8]) -> Option<usize> {
+    data.windows(pattern.len())
+        .position(|window| window == pattern)
+}
+
+pub fn buf_split<'a>(data: &'a [u8], pattern: &[u8]) -> Vec<&'a [u8]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while let Some(mut pos) = buf_index(&data[start..], pattern) {
+        pos += start; // Adjust position to global index
+        chunks.push(&data[start..pos]);
+        start = pos + pattern.len(); // Skip pattern
+    }
+
+    if start < data.len() {
+        chunks.push(&data[start..]);
+    }
+
+    return chunks;
+}
+
+pub fn buf_split_once<'a>(data: &'a [u8], pattern: &[u8]) -> Option<(&'a [u8], &'a [u8])> {
+    let index = buf_index(data, pattern);
+    if index.is_none() {
+        return None;
+    }
+    let index = index.unwrap();
+    return Some((&data[0..index], &data[(index + pattern.len())..]));
+}
+
+#[derive(Clone)]
+pub struct HttpHeaderExt {
+    //pub file_ext: ArcRwLock<HashMap<i32, ArcRwLock<FileExt>>>,
+}
+
+impl HttpHeaderExt {
+    pub fn new() -> Self {
+        HttpHeaderExt {}
+    }
+}

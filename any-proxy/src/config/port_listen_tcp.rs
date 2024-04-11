@@ -51,7 +51,7 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
-        typ: conf::MODULE_TYPE_HTTP,
+        typ: conf::MODULE_TYPE_NET,
         create_server: None,
     });
 }
@@ -145,9 +145,9 @@ async fn port_listen_tcp(
     log::trace!("port_listen_tcp tcp_listen:{:?}", tcp_listen);
 
     use crate::config::common_core;
-    use crate::config::http_core;
-    use crate::config::http_server_core;
-    use crate::config::httpserver;
+    use crate::config::net_core;
+    use crate::config::net_server;
+    use crate::config::net_server_core;
     use crate::config::port_core;
     use crate::config::socket_tcp;
     use crate::proxy::port_config::PortConfigContext;
@@ -155,27 +155,27 @@ async fn port_listen_tcp(
     use crate::proxy::StreamConfigContext;
     use crate::stream::server;
     use crate::util;
-    let httpserver_conf = httpserver::curr_conf(conf_arg.curr_conf());
-    let http_core_conf = http_core::curr_conf(conf_arg.curr_conf());
-    let http_server_core_conf = http_server_core::curr_conf_mut(conf_arg.curr_conf());
+    let net_server_conf = net_server::curr_conf(conf_arg.curr_conf());
+    let net_core_conf = net_core::curr_conf(conf_arg.curr_conf());
+    let net_server_core_conf = net_server_core::curr_conf_mut(conf_arg.curr_conf());
 
     let common_core_conf = common_core::main_conf(&ms).await;
     let common_core_any_conf = common_core::main_any_conf(&ms).await;
     let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
     let port_core_conf = port_core::main_conf_mut(&ms).await;
 
-    if http_server_core_conf.is_port_listen.is_some() {
-        if http_server_core_conf.is_port_listen == Some(false) {
+    if net_server_core_conf.is_port_listen.is_some() {
+        if net_server_core_conf.is_port_listen == Some(false) {
             return Err(anyhow!("err:not port listen"));
         }
     } else {
-        http_server_core_conf.is_port_listen = Some(true);
+        net_server_core_conf.is_port_listen = Some(true);
     }
 
     let scc = ShareRw::new(StreamConfigContext::new(
         ms.clone(),
-        httpserver_conf.http_confs.clone(),
-        httpserver_conf.server_confs.clone(),
+        net_server_conf.net_confs.clone(),
+        net_server_conf.server_confs.clone(),
         conf_arg.curr_conf().clone(),
         common_core_any_conf,
     ));
@@ -190,11 +190,11 @@ async fn port_listen_tcp(
         if port_core_conf.port_config_listen_map.get(&key).is_some() {
             return Err(anyhow!("err:addr is exist => addr:{}", addr));
         }
-        let tcp_config = upstream_tcp_conf.config(&http_core_conf.tcp_config_name);
+        let tcp_config = upstream_tcp_conf.config(&net_core_conf.tcp_config_name);
         if tcp_config.is_none() {
             return Err(anyhow!(
                 "err:tcp_config_name nil => tcp_config_name:{}",
-                http_core_conf.tcp_config_name
+                net_core_conf.tcp_config_name
             ));
         }
         let listen_server: Arc<Box<dyn server::Server>> =

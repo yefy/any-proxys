@@ -2,9 +2,7 @@ use crate::io::is_write_msg::{is_write_msg, IsWriteMsg};
 use crate::io::sendfile::{sendfile, Sendfile};
 use crate::io::writable::{writable, Writable};
 use crate::io::write_msg::{write_msg, WriteMsg};
-use crate::typ::ArcMutex;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::fs::File;
 use std::io::{self};
 use std::ops::DerefMut;
 use std::pin::Pin;
@@ -80,8 +78,13 @@ impl MsgWriteBuf {
         Self::from_bytes(Bytes::from(data))
     }
 
-    pub fn from_file(fr: ArcMutex<File>, file_fd: i32, seek: u64, size: usize) -> Self {
-        MsgWriteBuf::File(MsgWriteBufFile::new(fr, file_fd, seek, size))
+    pub fn from_file(
+        file_ext: Arc<FileExt>,
+        seek: u64,
+        size: usize,
+        notify_tx: Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
+    ) -> Self {
+        MsgWriteBuf::File(MsgWriteBufFile::new(file_ext, seek, size, notify_tx))
     }
 
     pub fn to_bytes(self) -> Option<Bytes> {
@@ -129,8 +132,10 @@ impl Buf for MsgWriteBuf {
         }
     }
 }
+use crate::file_ext::FileExt;
 use std::cmp::min;
 use std::fmt;
+use std::sync::Arc;
 
 impl fmt::Debug for MsgWriteBuf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -155,25 +160,22 @@ impl fmt::Display for MsgWriteBuf {
 
 #[derive(Clone)]
 pub struct MsgReadBufFile {
-    fr: ArcMutex<File>,
-    file_fd: i32,
-    seek: u64,
-    size: u64,
+    pub file_ext: Arc<FileExt>,
+    pub seek: u64,
+    pub size: u64,
 }
 
 impl MsgReadBufFile {
     pub fn default() -> MsgReadBufFile {
         MsgReadBufFile {
-            fr: ArcMutex::default(),
-            file_fd: 0,
+            file_ext: FileExt::default_arc(),
             seek: 0,
             size: 0,
         }
     }
-    pub fn new(fr: ArcMutex<File>, file_fd: i32, seek: u64, size: u64) -> MsgReadBufFile {
+    pub fn new(file_ext: Arc<FileExt>, seek: u64, size: u64) -> MsgReadBufFile {
         MsgReadBufFile {
-            fr,
-            file_fd,
+            file_ext,
             seek,
             size,
         }
@@ -184,7 +186,7 @@ impl MsgReadBufFile {
         let size = size as usize;
         (
             size,
-            MsgWriteBufFile::new(self.fr.clone(), self.file_fd, self.seek, size),
+            MsgWriteBufFile::new(self.file_ext.clone(), self.seek, size, Some(Vec::new())),
         )
     }
 
@@ -193,33 +195,33 @@ impl MsgReadBufFile {
         (size, MsgWriteBuf::File(file))
     }
 
-    pub fn get(&self) -> (ArcMutex<File>, i32, u64, usize) {
+    pub fn get(&self) -> (Arc<FileExt>, u64, usize) {
         let size = min(self.size, usize::max_value() as u64);
-        (self.fr.clone(), self.file_fd, self.seek, size as usize)
+        (self.file_ext.clone(), self.seek, size as usize)
     }
 
-    pub fn to_msg_write_buf_file2(&self, size: usize) -> (usize, MsgWriteBufFile) {
+    // pub fn to_msg_write_buf_file2(&self, size: usize) -> (usize, MsgWriteBufFile) {
+    //     let size = if size <= 0 { usize::max_value() } else { size };
+    //
+    //     let size = min(self.size, size as u64);
+    //     let size = size as usize;
+    //     (
+    //         size,
+    //         MsgWriteBufFile::new(self.file_ext.clone(), self.file_fd, self.seek, size),
+    //     )
+    // }
+
+    // pub fn to_msg_write_buf2(&self, size: usize) -> (usize, MsgWriteBuf) {
+    //     let size = if size <= 0 { usize::max_value() } else { size };
+    //     let (size, file) = self.to_msg_write_buf_file2(size);
+    //     (size, MsgWriteBuf::File(file))
+    // }
+
+    pub fn get2(&self, size: usize) -> (Arc<FileExt>, u64, usize) {
         let size = if size <= 0 { usize::max_value() } else { size };
 
         let size = min(self.size, size as u64);
-        let size = size as usize;
-        (
-            size,
-            MsgWriteBufFile::new(self.fr.clone(), self.file_fd, self.seek, size),
-        )
-    }
-
-    pub fn to_msg_write_buf2(&self, size: usize) -> (usize, MsgWriteBuf) {
-        let size = if size <= 0 { usize::max_value() } else { size };
-        let (size, file) = self.to_msg_write_buf_file2(size);
-        (size, MsgWriteBuf::File(file))
-    }
-
-    pub fn get2(&self, size: usize) -> (ArcMutex<File>, i32, u64, usize) {
-        let size = if size <= 0 { usize::max_value() } else { size };
-
-        let size = min(self.size, size as u64);
-        (self.fr.clone(), self.file_fd, self.seek, size as usize)
+        (self.file_ext.clone(), self.seek, size as usize)
     }
 
     pub fn remaining(&self) -> u64 {
@@ -249,8 +251,7 @@ impl MsgReadBufFile {
         let size = value.get_u64();
 
         Some(MsgReadBufFile {
-            fr: ArcMutex::default(),
-            file_fd,
+            file_ext: FileExt::new_fd_arc(file_fd),
             seek,
             size,
         })
@@ -263,43 +264,50 @@ impl MsgReadBufFile {
 
 #[derive(Clone)]
 pub struct MsgWriteBufFile {
-    pub fr: ArcMutex<File>,
-    pub file_fd: i32,
+    pub file_ext: Arc<FileExt>,
     pub seek: u64,
     pub size: usize,
     pub data: Bytes,
+    pub notify_tx: Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
 }
 
 impl MsgWriteBufFile {
-    pub fn new(fr: ArcMutex<File>, file_fd: i32, seek: u64, size: usize) -> MsgWriteBufFile {
+    pub fn new(
+        file_ext: Arc<FileExt>,
+        seek: u64,
+        size: usize,
+        notify_tx: Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
+    ) -> MsgWriteBufFile {
         MsgWriteBufFile {
-            fr,
-            file_fd,
+            file_ext: file_ext.clone(),
             seek,
             size,
-            data: Self::data_to_bytes(file_fd, seek, size),
+            data: Self::data_to_bytes(file_ext.fix.file_fd, seek, size),
+            notify_tx,
         }
     }
 
-    pub fn new_data(
-        fr: ArcMutex<File>,
-        file_fd: i32,
-        seek: u64,
-        size: usize,
-        data: Option<Bytes>,
-    ) -> MsgWriteBufFile {
-        if data.is_none() {
-            return MsgWriteBufFile::new(fr, file_fd, seek, size);
-        }
-        let data = data.unwrap();
-        MsgWriteBufFile {
-            fr,
-            file_fd,
-            seek,
-            size,
-            data,
-        }
-    }
+    // pub fn new_data(
+    //     file_ext: Arc<FileExt>,
+    //     file_fd: i32,
+    //     seek: u64,
+    //     size: usize,
+    //     data: Option<Bytes>,
+    //     notify_tx: Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
+    // ) -> MsgWriteBufFile {
+    //     if data.is_none() {
+    //         return MsgWriteBufFile::new(file_ext, file_fd, seek, size);
+    //     }
+    //     let data = data.unwrap();
+    //     MsgWriteBufFile {
+    //         file_ext,
+    //         file_fd,
+    //         seek,
+    //         size,
+    //         data,
+    //         notify_tx,
+    //     }
+    // }
 
     pub fn data_to_bytes(file_fd: i32, seek: u64, size: usize) -> Bytes {
         let mut buf = BytesMut::with_capacity(SENDFILE_DATA_LEN);
@@ -310,15 +318,23 @@ impl MsgWriteBufFile {
         buf.freeze()
     }
 
-    pub fn split(self) -> (ArcMutex<File>, i32, u64, usize, Bytes) {
+    pub fn split(
+        self,
+    ) -> (
+        Arc<FileExt>,
+        u64,
+        usize,
+        Bytes,
+        Option<Vec<tokio::sync::mpsc::UnboundedSender<()>>>,
+    ) {
         let MsgWriteBufFile {
-            fr,
-            file_fd,
+            file_ext,
             seek,
             size,
             data,
+            notify_tx,
         } = self;
-        return (fr, file_fd, seek, size, data);
+        return (file_ext, seek, size, data, notify_tx);
     }
 }
 
@@ -362,6 +378,14 @@ impl Buf for MsgWriteBufFile {
 
         self.seek += cnt as u64;
         self.size -= cnt;
+        if self.size == 0 {
+            let notify_tx = self.notify_tx.take();
+            if notify_tx.is_some() {
+                for tx in notify_tx.unwrap() {
+                    let _ = tx.send(());
+                }
+            }
+        }
     }
 
     fn copy_to_bytes(&mut self, _len: usize) -> Bytes {

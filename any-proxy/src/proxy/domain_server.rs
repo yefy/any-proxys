@@ -165,10 +165,11 @@ impl DomainServer {
                             tunnel2_publish,
                             domain_config_listen,
                             domain_context,
+                            stream,
                         )
                         .map_err(|e| anyhow!("err:DomainStream::new => e:{}", e))?;
                         domain_stream
-                            .start(stream)
+                            .start()
                             .await
                             .map_err(|e| anyhow!("err:domain_stream.start => e:{}", e))?;
                         Ok(())

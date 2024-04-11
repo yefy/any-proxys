@@ -1,18 +1,11 @@
 use super::http_stream::HttpStream;
-use super::stream_write;
 use crate::proxy::http_proxy::http_connection;
-use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::{ServerArg, StreamConfigContext};
-use any_base::io::async_write_msg::{AsyncWriteMsgExt, MsgReadBufFile};
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::stream_msg_read;
-use any_base::typ::{ArcMutex, ShareRw};
-use anyhow::anyhow;
+use any_base::typ::ShareRw;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
-use hyper::http::header::HeaderValue;
-use hyper::http::{Request, Response, StatusCode, Version};
+use hyper::http::{Request, Response};
 use hyper::Body;
 
 pub async fn http_server_handle(
@@ -23,8 +16,8 @@ pub async fn http_server_handle(
         any_base::io::buf_writer::BufWriter::new(client_buf_reader),
     );
 
-    http_connection(arg, client_buf_stream, |arg, http_arg, scc, req| {
-        Box::pin(http_server_run_handle(arg, http_arg, scc, req))
+    http_connection(arg, client_buf_stream, |arg, http_arg, scc, request| {
+        Box::pin(http_server_run_handle(arg, http_arg, scc, request))
     })
     .await
 }
@@ -33,15 +26,26 @@ pub async fn http_server_run_handle(
     arg: ServerArg,
     http_arg: ServerArg,
     scc: ShareRw<StreamConfigContext>,
-    req: Request<Body>,
+    request: Request<Body>,
 ) -> Result<Response<Body>> {
-    HttpStaticServer::new(arg, http_arg, req, scc).run().await
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    http_arg.executors.clone()._start(
+        #[cfg(feature = "anyspawn-count")]
+        Some(format!("{}:{}", file!(), line!())),
+        move |_| async move {
+            HttpStream::new(arg, http_arg, scc, request, tx)
+                .start()
+                .await
+        },
+    );
+    Ok(rx.await?)
 }
 
+/*
 pub struct HttpStaticServer {
     _arg: ServerArg,
     http_arg: ServerArg,
-    req: Request<Body>,
+    request: Request<Body>,
     scc: ShareRw<StreamConfigContext>,
 }
 
@@ -49,20 +53,20 @@ impl HttpStaticServer {
     pub fn new(
         _arg: ServerArg,
         http_arg: ServerArg,
-        req: Request<Body>,
+        request: Request<Body>,
         scc: ShareRw<StreamConfigContext>,
     ) -> HttpStaticServer {
         HttpStaticServer {
             _arg,
             http_arg,
-            req,
+            request,
             scc,
         }
     }
 
     pub async fn run(&mut self) -> Result<Response<Body>> {
         let status = StatusCode::NOT_FOUND;
-        let method = self.req.method();
+        let method = self.request.method();
         let ret = match method {
             &http::Method::GET => self.do_run().await,
             &http::Method::HEAD => self.do_run().await,
@@ -79,16 +83,16 @@ impl HttpStaticServer {
 
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
         self.http_arg.stream_info.get_mut().err_status = ErrStatus::Ok;
-        let version = self.req.version();
-        log::trace!("self.req.version:{:?}", version);
-        log::trace!("self.req:{:?}", self.req);
+        let version = self.request.version();
+        log::trace!("self.request.version:{:?}", version);
+        log::trace!("self.request:{:?}", self.request);
         let is_client_sendfile = match version {
             Version::HTTP_2 => false,
             Version::HTTP_3 => false,
             _ => true,
         };
 
-        let is_head = self.req.method() == &http::Method::HEAD;
+        let is_head = self.request.method() == &http::Method::HEAD;
 
         let socket_fd = {
             let stream_info = self.http_arg.stream_info.get();
@@ -97,14 +101,14 @@ impl HttpStaticServer {
 
         let (is_open_sendfile, _directio, file_name) = {
             let scc = self.scc.get();
-            let http_core_conf = scc.http_core_conf();
-            let is_open_sendfile = http_core_conf.is_open_sendfile;
-            let _directio = http_core_conf.directio;
+            let net_core_conf = scc.net_core_conf();
+            let is_open_sendfile = net_core_conf.is_open_sendfile;
+            let _directio = net_core_conf.directio;
 
-            use crate::config::http_server_static;
-            let http_server_static_conf = http_server_static::currs_conf(scc.http_server_confs());
+            use crate::config::net_server_static_http;
+            let http_server_static_conf = net_server_static_http::currs_conf(scc.net_server_confs());
             let mut seq = "";
-            let mut name = self.req.uri().path();
+            let mut name = self.request.uri().path();
 
             log::trace!("name:{}", name);
             if name.len() <= 0 || name == "/" {
@@ -144,7 +148,7 @@ impl HttpStaticServer {
         let mut range2 = file_len - 1;
 
         let range_ret: Result<()> = async {
-            let range = self.req.headers().get("Range");
+            let range = self.request.headers().get("Range");
             if range.is_none() {
                 return Ok(());
             }
@@ -224,7 +228,7 @@ impl HttpStaticServer {
         .await;
 
         #[cfg(unix)]
-        if _directio > 0 && _directio >= file_len {
+        if _directio > 0 && file_len >= _directio {
             use any_base::util::directio_on;
             directio_on(file_fd)?;
         }
@@ -232,75 +236,75 @@ impl HttpStaticServer {
         let file = ArcMutex::new(file);
 
         let (res_sender, res_body) = Body::channel();
-        let mut res = if range_ret.is_err() || is_head {
+        let mut response = if range_ret.is_err() || is_head {
             Response::new(Body::default())
         } else {
             Response::new(res_body)
         };
-        res.headers_mut().insert(
+        response.headers_mut().insert(
             "Content-Length",
             HeaderValue::from_bytes(content_length.to_string().as_bytes())?,
         );
-        res.headers_mut().insert(
+        response.headers_mut().insert(
             "Server",
             HeaderValue::from_bytes("any-proxy/v2.0.0".as_bytes())?,
         );
-        res.headers_mut().insert(
+        response.headers_mut().insert(
             "Content-Type",
             HeaderValue::from_bytes("text/plain".as_bytes())?,
         );
-        res.headers_mut().insert(
+        response.headers_mut().insert(
             "Connection",
             HeaderValue::from_bytes("keep-alive".as_bytes())?,
         );
 
-        if *self.req.version_mut() == Version::HTTP_2 {
-            res.headers_mut().remove("connection");
+        if *self.request.version_mut() == Version::HTTP_2 {
+            response.headers_mut().remove("connection");
         }
 
-        if *self.req.version_mut() == Version::HTTP_10 {
-            res.headers_mut().insert(
+        if *self.request.version_mut() == Version::HTTP_10 {
+            response.headers_mut().insert(
                 "Connection",
                 HeaderValue::from_bytes("keep-alive".as_bytes())?,
             );
         }
 
-        *res.version_mut() = *self.req.version_mut();
+        *response.version_mut() = *self.request.version_mut();
 
         if range_ret.is_err() {
-            res.headers_mut().insert(
+            response.headers_mut().insert(
                 "Content-Range",
-                HeaderValue::from_bytes(format!("bytes */{}", file_len).as_bytes())?,
+                HeaderValue::from_bytes(format!("bytes \*\/{}", file_len).as_bytes())?,
             );
-            *res.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-            return Ok(res);
+            *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+            return Ok(response);
         }
 
-        res.headers_mut().insert(
+        response.headers_mut().insert(
             "Last-Modified",
             HeaderValue::from_bytes(last_modified.as_bytes())?,
         );
 
-        res.headers_mut()
+        response.headers_mut()
             .insert("ETag", HeaderValue::from_bytes(e_tag.as_bytes())?);
         if is_range {
-            res.headers_mut().insert(
+            response.headers_mut().insert(
                 "Content-Range",
                 HeaderValue::from_bytes(
                     format!("bytes {}-{}/{}", range1, range2, file_len).as_bytes(),
                 )?,
             );
-            *res.status_mut() = StatusCode::PARTIAL_CONTENT;
+            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
         } else {
-            res.headers_mut().insert(
+            response.headers_mut().insert(
                 "Accept-Ranges",
                 HeaderValue::from_bytes("bytes".as_bytes())?,
             );
-            *res.status_mut() = StatusCode::OK;
+            *response.status_mut() = StatusCode::OK;
         }
 
         if is_head {
-            return Ok(res);
+            return Ok(response);
         }
 
         let http_arg = self.http_arg.clone();
@@ -310,7 +314,7 @@ impl HttpStaticServer {
             #[cfg(feature = "anyspawn-count")]
             Some(format!("{}:{}", file!(), line!())),
             move |_| async move {
-                let (mut stream_tx, stream_rx) = stream_msg_read::Stream::bounded(100);
+                let (mut stream_tx, stream_rx) = stream_channel_read::Stream::bounded(100);
                 let stream_write = stream_write::Stream::new(res_sender);
                 let client_stream = StreamFlow::new2(stream_rx, stream_write, None);
                 let is_sendfile =
@@ -338,6 +342,7 @@ impl HttpStaticServer {
             },
         );
 
-        Ok(res)
+        Ok(response)
     }
 }
+*/

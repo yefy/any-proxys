@@ -71,6 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn do_main() -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("BUILD_VERSION: {}", default_config::BUILD_VERSION.as_str());
+    log::info!("HTTP_VERSION: {}", default_config::HTTP_VERSION.as_str());
     log::info!("pwd:{:?}", std::env::current_dir()?);
     let page_size = page_size::get();
     default_config::PAGE_SIZE.store(page_size, Ordering::Relaxed);
@@ -151,3 +153,100 @@ fn thread_panic(panic_info: &std::panic::PanicInfo) {
 
     std::process::exit(1);
 }
+
+/*
+use std::collections::HashMap;
+use std::path::Path;
+use anyhow::bail;
+use std::fs;
+use wit_bindgen_core::{Files, WorldGenerator};
+use wit_parser::{Resolve, UnresolvedPackage};
+
+fn build_wit_guest_code() {
+    // loop wit directory, find .wit files , check same name as .rs file, if not, generate it
+    //let wit_dir = Path::new("../wasm/http-filter-headers/wit");
+    let wit_dir = Path::new(
+        "C:/Users/yefy/Desktop/yefy/develop/git-project/any-proxys/wasm/http-filter-headers/wit",
+    );
+    let wit_files = wit_dir.read_dir().unwrap();
+    for wit_file in wit_files {
+        let wit_file_path = wit_file.unwrap().path();
+        if !wit_file_path.is_file() {
+            continue;
+        }
+        if wit_file_path.extension().unwrap() != "wit" {
+            continue;
+        }
+        println!(
+            "wit_file_path:{}",
+            wit_file_path.as_os_str().to_str().unwrap()
+        );
+        let outputs = generate_world_guest(wit_file_path.to_str().unwrap(), None).unwrap();
+        outputs.iter().for_each(|(path, content)| {
+            let target_rs = wit_dir.join(path);
+            std::fs::write(target_rs, content).unwrap();
+        });
+    }
+}
+
+/// parse wit file and return world id
+pub fn generate_world_guest(s: &str, world: Option<String>) -> Result<HashMap<String, String>> {
+    // parse exported world in wit file
+    let path = Path::new(s);
+    if !path.is_file() {
+        panic!("wit file `{}` does not exist", path.display());
+    }
+
+    let mut resolve = Resolve::default();
+    println!("path:{:?}", path);
+    let package = UnresolvedPackage::parse_file(path).map_err(|e| anyhow!("e:{}", e))?;
+    let pkg = resolve.push(package).map_err(|e| anyhow!("e:{}", e))?;
+    let package = resolve.packages.get(pkg).unwrap();
+
+    let world = match &world {
+        Some(world) => {
+            let mut parts = world.splitn(2, '.');
+            let doc = parts.next().unwrap();
+            let world = parts.next().unwrap();
+            package
+                .worlds
+                .get(world)
+                .ok_or_else(|| anyhow!("no world named `{name}` in document"))?
+        }
+        None => {
+            let mut world = package.worlds.iter();
+            let (_, world) = world
+                .next()
+                .ok_or_else(|| anyhow!("no documents found in package"))?;
+            world
+        }
+    };
+
+    //get guest genrator
+    let mut generator = gen_guest_code_builder().map_err(|e| anyhow!("e:{}", e))?;
+
+    // generate file
+    let mut files = Files::default();
+    generator
+        .generate(&resolve, *world, &mut files)
+        .map_err(|e| anyhow!("e:{}", e))?;
+
+    let mut output_maps = HashMap::new();
+    for (name, contents) in files.iter() {
+        output_maps.insert(
+            name.to_string(),
+            String::from_utf8_lossy(contents).to_string(),
+        );
+    }
+    Ok(output_maps)
+}
+
+fn gen_guest_code_builder() -> Result<Box<dyn WorldGenerator>> {
+    let opts = wit_bindgen_rust::Opts {
+        rustfmt: true,
+        ..Default::default()
+    };
+    let builder = opts.build();
+    Ok(builder)
+}
+ */

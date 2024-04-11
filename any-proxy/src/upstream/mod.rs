@@ -36,6 +36,7 @@ pub struct UpstreamHeartbeatData {
 }
 use crate::config::upstream_core;
 use any_base::typ::Share;
+use any_base::util::ArcString;
 
 pub struct UpstreamDynamicDomainData {
     ///vector中第几个域名的索引
@@ -77,7 +78,7 @@ impl UpstreamData {
         &mut self,
         ip: &str,
     ) -> Result<(
-        String,
+        ArcString,
         Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)>,
     )> {
         let plugin_handle_balancer = self.ups_config.plugin_handle_balancer.as_ref().unwrap();

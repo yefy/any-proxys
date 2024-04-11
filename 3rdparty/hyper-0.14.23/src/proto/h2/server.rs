@@ -491,7 +491,7 @@ where
                             }
                             let send_stream = reply!(me, res, false);
                             connect_parts.pending.fulfill(Upgraded::new(
-                                any_base::stream::Stream::new(H2Upgraded {
+                                any_base::stream_tokio::Stream::new(H2Upgraded {
                                     ping: connect_parts.ping,
                                     recv_stream: connect_parts.recv_stream,
                                     send_stream: unsafe { UpgradedSendStream::new(send_stream) },

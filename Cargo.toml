@@ -2,6 +2,18 @@
 resolver = "1"
 members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
 default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
+exclude = [
+    ".git",
+    ".idea",
+    "wasm",
+    "wasm/http-in-headers",
+    "wasm/http-filter-headers-pre",
+    "wasm/http-filter-headers",
+    "wasm/wit",
+    "any-proxy/examples/anyproxy",
+    "any-proxy/examples",
+    "any-proxy/tests",
+]
 
 [profile.dev]
 debug = true
@@ -21,7 +33,7 @@ debug = false
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常
-lto = true
+lto = false
 codegen-units = 1
 incremental = false
 rpath = false

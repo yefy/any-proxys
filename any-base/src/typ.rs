@@ -99,6 +99,9 @@ impl<T> ArcMutexTokio<T> {
         }
     }
 
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.d)
+    }
     pub async fn set_nil(&self) {
         *self.d.lock().await = None;
     }
@@ -221,6 +224,9 @@ impl ArcMutexAnyTokio {
         }
     }
 
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.d)
+    }
     pub async fn set_nil(&self) {
         *self.d.lock().await = None;
     }
@@ -323,6 +329,9 @@ impl<T> ArcRwLockTokio<T> {
             d: Arc::new(tokio::sync::RwLock::new(Some(d))),
         }
     }
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.d)
+    }
     pub async fn set_nil(&self) {
         *self.d.write().await = None;
     }
@@ -374,6 +383,9 @@ impl ArcUnsafeAny {
             d: Arc::new(UnsafeCell::new(Some(d))),
         }
     }
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.d)
+    }
     pub async fn set_nil(&self) {
         let data = unsafe { &mut *self.d.get() };
         *data = None;
@@ -414,17 +426,17 @@ impl ArcUnsafeAny {
     }
 }
 
-pub struct ValueAny {
+pub struct OptionAny {
     d: Option<Box<dyn std::any::Any>>,
 }
 
-impl ValueAny {
+impl OptionAny {
     pub fn default() -> Self {
-        ValueAny { d: None }
+        OptionAny { d: None }
     }
 
     pub fn new(d: Box<dyn std::any::Any>) -> Self {
-        ValueAny { d: Some(d) }
+        OptionAny { d: Some(d) }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -449,16 +461,38 @@ impl ValueAny {
     }
 }
 
-pub struct ValueOption<T> {
+pub struct OptionExt<T> {
     d: Option<T>,
 }
 
-impl<T> ValueOption<T> {
+impl<T> Clone for OptionExt<T>
+where
+    T: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        match &self.d {
+            Some(x) => OptionExt::new(x.clone()),
+            None => OptionExt::default(),
+        }
+    }
+}
+
+impl<T> From<Option<T>> for OptionExt<T> {
+    fn from(data: Option<T>) -> OptionExt<T> {
+        OptionExt::new_option(data)
+    }
+}
+
+impl<T> OptionExt<T> {
     pub fn default() -> Self {
-        ValueOption { d: None }
+        OptionExt { d: None }
     }
     pub fn new(d: T) -> Self {
-        ValueOption { d: Some(d) }
+        OptionExt { d: Some(d) }
+    }
+    pub fn new_option(d: Option<T>) -> Self {
+        OptionExt { d }
     }
     pub fn set_nil(&mut self) {
         self.d = None;
@@ -475,15 +509,37 @@ impl<T> ValueOption<T> {
         self.d = Some(d);
     }
 
-    pub fn get(&self) -> &T {
-        self.d.as_ref().unwrap()
+    // pub fn get(&self) -> &T {
+    //     self.d.as_ref().unwrap()
+    // }
+    //
+    // pub fn get_mut(&mut self) -> &mut T {
+    //     self.d.as_mut().unwrap()
+    // }
+
+    pub fn unwrap(self) -> T {
+        match self.d {
+            Some(val) => val,
+            None => panic!("called `Option::unwrap()` on a `None` value"),
+        }
     }
 
-    pub fn get_mut(&mut self) -> &mut T {
-        self.d.as_mut().unwrap()
-    }
     pub unsafe fn take(&mut self) -> T {
         self.d.take().unwrap()
+    }
+}
+
+impl<T> std::ops::Deref for OptionExt<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.d.as_ref().unwrap()
+    }
+}
+
+impl<T> std::ops::DerefMut for OptionExt<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.d.as_mut().unwrap()
     }
 }
 

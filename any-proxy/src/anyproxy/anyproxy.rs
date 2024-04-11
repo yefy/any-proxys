@@ -221,7 +221,7 @@ impl Anyproxy {
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
 
         let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-        let mut ms = module::Modules::new(None);
+        let mut ms = module::Modules::new(None, false);
         ms.parse_module_config(&file_name, None)
             .await
             .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
@@ -283,7 +283,7 @@ impl Anyproxy {
                     continue;
                 }
                 AnyproxyState::Reinit => {
-                    #[cfg(windows)]
+                    #[cfg(not(unix))]
                     {
                         log::error!("err:window not support Reinit");
                         continue;
@@ -393,7 +393,7 @@ impl Anyproxy {
             "stop" => AnyproxyState::Stop,
             "reload" => AnyproxyState::Reload,
             "reinit" => {
-                #[cfg(windows)]
+                #[cfg(not(unix))]
                 {
                     log::error!("err:window not support signal:{}", sig);
                     return AnyproxyState::Skip;
@@ -419,7 +419,7 @@ impl Anyproxy {
             "stop" => true,
             "reload" => true,
             "reinit" => {
-                #[cfg(windows)]
+                #[cfg(not(unix))]
                 {
                     log::error!("err:window not support signal:{}", sig);
                     return Err(anyhow!("err:window not support signal:{}", sig));

@@ -1,6 +1,5 @@
 use crate::proxy::stream_info::StreamInfo;
 use crate::util::var;
-use any_base::stream_flow::StreamFlow;
 use any_base::typ::Share;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -9,7 +8,7 @@ use std::sync::Arc;
 
 #[async_trait]
 pub trait Stream: Send + Sync {
-    async fn do_start(&mut self, stream_info: Share<StreamInfo>, stream: StreamFlow) -> Result<()>;
+    async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()>;
 }
 
 pub struct AccessContext {

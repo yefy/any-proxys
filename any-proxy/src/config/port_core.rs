@@ -50,7 +50,7 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
-        typ: conf::MODULE_TYPE_HTTP,
+        typ: conf::MODULE_TYPE_NET,
         create_server: Some(create_server),
     });
 }

@@ -94,7 +94,7 @@ where
         }
     }
 
-    T::parse(bytes, ctx)
+   T::parse(bytes, ctx)
 }
 
 pub(super) fn encode_headers<T>(
@@ -316,6 +316,8 @@ impl Http1Transaction for Server {
         if let Some(header_case_map) = header_case_map {
             extensions.insert(header_case_map);
         }
+
+        extensions.insert(crate::AnyProxyRawHeaders(crate::AnyProxyHyperBuf(slice.clone())));
 
         #[cfg(feature = "ffi")]
         if let Some(header_order) = header_order {
@@ -1067,6 +1069,8 @@ impl Http1Transaction for Client {
                 let reason = unsafe { crate::ext::ReasonPhrase::from_bytes_unchecked(reason) };
                 extensions.insert(reason);
             }
+
+            extensions.insert(crate::AnyProxyRawHeaders(crate::AnyProxyHyperBuf(slice.clone())));
 
             #[cfg(feature = "ffi")]
             if ctx.raw_headers {

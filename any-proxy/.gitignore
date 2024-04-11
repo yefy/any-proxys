@@ -29,6 +29,7 @@ perf.*
 # python
 venv/
 logs
+tmp
 
 *.pid
 *.log
