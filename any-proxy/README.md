@@ -6,18 +6,19 @@
 支持http文件缓存代理服务、负载均衡，适用于构建高效、脚本热更新、灵活的网络代理和加速服务。
 ```
 # 特点
-跨平台（Linux、Window、MacOS等）协程框架
+```
+跨平台（Linux、Window、MacOS等）协程框架  
 Linux reuseport多线程无锁并发  
 没有reuseport平台支持多线程有锁并发  
 高度模块化和插件化框架，能快速添加新协议监听和回源（包括tcp、quic、ssl、srt、kcp、http、websocket等）   
 WebAssembly热升级脚本插件开发   
 支持动态添加模块，启动阶段配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承、配置内容合并和继承(代码参考any-proxys/any-proxy/src/config)        
-可以快速基于tcp、quic、ssl、http、websocket添加插件开发业务
+可以快速基于tcp、quic、ssl、http、websocket添加插件开发业务  
 支持tcp、quic、ssl、any-tunnel四层代理协议相互转换加速  
-支持http、https、http2.0、https2.0、websocket、websockets七层协议配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据
+支持http、https、http2.0、https2.0、websocket、websockets七层协议配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据  
 支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
 高性能、cpu占用低（和nginx相媲美的性能）    
-内存安全、内存占用低、没有泄漏风险
+内存安全、内存占用低、没有泄漏风险  
 功能非常强大的配置文件解析，见[文档](https://github.com/yefy/any-proxys/blob/main/any-proxy/doc/%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E7%BB%93%E6%9E%84.md)   
 配置文件热加载  
 linux reuseport环境支持程序热升级    
@@ -25,8 +26,9 @@ linux reuseport环境支持程序热升级
 支持非常详细的access_log、err_log、跨服务器链路日志、详细统计信息     
 纯端口代理模式、域名代理模式  
 支持负载均衡、心跳检查、动态域名解析  
-支持linux零拷贝技术sendfile和directio读取文件
-支持预制变量和函数数据，可以由配置文件和webassembly脚本使用
+支持linux零拷贝技术sendfile和directio读取文件  
+支持预制变量和函数数据，可以由配置文件和webassembly脚本使用  
+```
 # 功能模块
 ## 四层反向代理服务
 ```
@@ -83,6 +85,7 @@ linux reuseport环境支持程序热升级
 # any-tunnel doc
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
 # 已经支持
+```
 domain代理支持http_v1协议解析获取域名  
 http文件缓存代理服务  
 WebAssembly热升级脚本插件  
@@ -134,7 +137,10 @@ sni域名解析
 支持openssl ssl和rustls ssl  
 支持any-tunnel包括socket多链接加速，socket流缓存，解决tcp三次握手， ssl多次握手等问题  
 支持tcp、quic配置设置  
-支持配置主线程、线程池个数
+支持配置主线程、线程池个数  
+```
 # 未来支持
+```
 srt、kcp协议  
 支持多跳回源  
+```
