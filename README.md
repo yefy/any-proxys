@@ -17,7 +17,7 @@ WebAssembly热升级脚本插件开发
 支持http、https、http2.0、https2.0、websocket、websockets七层协议配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据
 支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
 高性能、cpu占用低（和nginx相媲美的性能）    
-内存安全、内存占用低、没有泄漏风险
+内存安全、内存占用低、没有泄漏风险  
 功能非常强大的配置文件解析，见[文档](https://github.com/yefy/any-proxys/blob/main/any-proxy/doc/%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E7%BB%93%E6%9E%84.md)   
 配置文件热加载  
 linux reuseport环境支持程序热升级    
