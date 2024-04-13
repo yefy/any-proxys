@@ -217,7 +217,7 @@ impl UpstreamServer {
                 ups_data.is_sort_heartbeats_active = true;
                 ups_data.ups_heartbeats_active.clear();
                 for (_, v) in ups_data.ups_heartbeats.iter().enumerate() {
-                    if !v.get().disable {
+                    if v.get().disable {
                         continue;
                     }
                     ups_data.ups_heartbeats_active.push(v.clone());
