@@ -1,12 +1,11 @@
 use super::StreamConfigContext;
 use crate::stream::server;
-use any_base::typ::ShareRw;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::sync::Arc;
 
 pub struct PortConfigContext {
-    pub scc: ShareRw<StreamConfigContext>,
+    pub scc: Arc<StreamConfigContext>,
 }
 
 #[derive(Clone)]

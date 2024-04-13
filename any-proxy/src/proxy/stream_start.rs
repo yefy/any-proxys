@@ -112,16 +112,12 @@ pub async fn do_start(
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
 
     if scc.is_some() {
-        let plugin_handle_logs = {
-            let scc = scc.get();
-            use crate::config::net_core_plugin;
-            //___wait___
-            //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
-            let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
-            net_core_plugin_conf.plugin_handle_logs.clone()
-        };
+        use crate::config::net_core_plugin;
+        //___wait___
+        //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+        let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
 
-        for plugin_handle_log in &*plugin_handle_logs.get().await {
+        for plugin_handle_log in &*net_core_plugin_conf.plugin_handle_logs.get().await {
             (plugin_handle_log)(stream_info.clone()).await?;
         }
     }

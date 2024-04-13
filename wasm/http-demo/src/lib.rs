@@ -2,8 +2,7 @@
 mod bindings;
 mod macros;
 
-//use crate::bindings::component::server::wasm_std;
-use crate::bindings::component::server::wasm_std::Error;
+use crate::bindings::component::server::wasm_std;
 use crate::bindings::exports::component::server::wasm_service;
 
 use serde::{Deserialize, Serialize};
@@ -16,7 +15,7 @@ pub struct WasmConf {
 
 struct Component;
 impl wasm_service::Guest for Component {
-    fn run(config: String) -> Result<Error, String> {
+    fn run(config: String) -> Result<wasm_std::Error, String> {
         let wasm_conf: WasmConf = toml::from_str(&config).map_err(|e| e.to_string())?;
         info!("wasm_conf:{:?}", wasm_conf);
 
@@ -41,7 +40,7 @@ impl wasm_service::Guest for Component {
         //         String::from_utf8(response.body.clone().unwrap()).map_err(|e| e.to_string())?
         //     );
         // }
-        Ok(Error::Ok)
+        Ok(wasm_std::Error::Ok)
     }
 }
 

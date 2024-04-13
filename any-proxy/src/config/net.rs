@@ -143,13 +143,14 @@ async fn init_conf(
     return Ok(());
 }
 
-async fn create_main_confs(ms: module::Modules) -> Result<ArcUnsafeAny> {
+async fn create_main_confs(mut ms: module::Modules) -> Result<ArcUnsafeAny> {
     let ctx_index_len = { M.get().ctx_index_len };
     if ctx_index_len <= 0 {
         panic!("ctx_index_len:{}", ctx_index_len)
     }
     let mut net_confs: Vec<typ::ArcUnsafeAny> = Vec::with_capacity(ctx_index_len as usize);
 
+    ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_MAIN);
     for module in module::get_modules().get().get_modules() {
         let (typ, func) = {
             let module_ = &*module.get();
@@ -164,7 +165,7 @@ async fn create_main_confs(ms: module::Modules) -> Result<ArcUnsafeAny> {
     Ok(typ::ArcUnsafeAny::new(Box::new(net_confs)))
 }
 
-async fn merge_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+async fn merge_confs(mut ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
     let net_confs = {
         let main_index = M.get().main_index;
         if main_index < 0 {
@@ -176,6 +177,7 @@ async fn merge_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()>
         net_confs
     };
 
+    ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_MAIN);
     for module in ms.get_modules() {
         if module.get().typ & conf::MODULE_TYPE_NET == 0 {
             continue;
@@ -209,6 +211,7 @@ async fn merge_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()>
                 server_conf.sub_confs.clone(),
             )
         };
+        ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_SERVER);
         for module in ms.get_modules() {
             if module.get().typ & conf::MODULE_TYPE_NET == 0 {
                 continue;
@@ -223,6 +226,7 @@ async fn merge_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()>
 
             (merge_conf)(ms.clone(), Some(net_conf), server_conf).await?;
         }
+        ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_LOCAL);
         for local_conf in sub_confs {
             let (server_confs, local_confs) = {
                 let local_conf = local_conf.get_mut::<net_local::Conf>();
@@ -357,7 +361,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
 }
 
 async fn net(
-    ms: module::Modules,
+    mut ms: module::Modules,
     mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,

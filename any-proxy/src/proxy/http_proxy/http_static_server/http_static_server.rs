@@ -3,10 +3,10 @@ use crate::proxy::http_proxy::http_connection;
 use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ShareRw;
 use anyhow::Result;
 use hyper::http::{Request, Response};
 use hyper::Body;
+use std::sync::Arc;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -25,10 +25,10 @@ pub async fn http_server_handle(
 pub async fn http_server_run_handle(
     arg: ServerArg,
     http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (tx, rx) = async_channel::bounded(10);
     http_arg.executors.clone()._start(
         #[cfg(feature = "anyspawn-count")]
         Some(format!("{}:{}", file!(), line!())),
@@ -38,7 +38,7 @@ pub async fn http_server_run_handle(
                 .await
         },
     );
-    Ok(rx.await?)
+    Ok(rx.recv().await?)
 }
 
 /*
@@ -46,7 +46,7 @@ pub struct HttpStaticServer {
     _arg: ServerArg,
     http_arg: ServerArg,
     request: Request<Body>,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
 }
 
 impl HttpStaticServer {
@@ -54,7 +54,7 @@ impl HttpStaticServer {
         _arg: ServerArg,
         http_arg: ServerArg,
         request: Request<Body>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
     ) -> HttpStaticServer {
         HttpStaticServer {
             _arg,

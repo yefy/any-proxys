@@ -1,0 +1,34 @@
+interface wasm-log {
+    enum level {
+        /// The "error" level.
+        ///
+        /// Designates very serious errors.
+        // This way these line up with the discriminants for LevelFilter below
+        // This works because Rust treats field-less enums the same way as C does:
+        // https://doc.rust-lang.org/reference/items/enumerations.html#custom-discriminant-values-for-field-less-enumerations
+        error,
+        /// The "warn" level.
+        ///
+        /// Designates hazardous situations.
+        warn,
+        /// The "info" level.
+        ///
+        /// Designates useful information.
+        info,
+        /// The "debug" level.
+        ///
+        /// Designates lower priority information.
+        debug,
+        /// The "trace" level.
+        ///
+        /// Designates very low priority, often extremely verbose, information.
+        trace,
+    }
+
+    log-enabled: func(level: level) -> bool;
+    log-error: func(str: string) -> result<_, string>;
+    log-warn: func(str: string) -> result<_, string>;
+    log-info: func(str: string) -> result<_, string>;
+    log-debug: func(str: string) -> result<_, string>;
+    log-trace: func(str: string) -> result<_, string>;
+}

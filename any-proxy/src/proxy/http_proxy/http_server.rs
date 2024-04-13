@@ -6,9 +6,9 @@ use anyhow::Result;
 //use hyper::body::HttpBody;
 use crate::proxy::http_proxy::http_stream::HttpStream;
 use any_base::io::buf_reader::BufReader;
-use any_base::typ::ShareRw;
 use hyper::http::{Request, Response};
 use hyper::Body;
+use std::sync::Arc;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -27,20 +27,17 @@ pub async fn http_server_handle(
 pub async fn http_server_run_handle(
     arg: ServerArg,
     http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    _scc: Arc<StreamConfigContext>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (tx, rx) = async_channel::bounded(10);
     http_arg.executors.clone()._start(
         #[cfg(feature = "anyspawn-count")]
         Some(format!("{}:{}", file!(), line!())),
-        move |_| async move {
-            HttpStream::new(arg, http_arg, scc, request, tx)
-                .start()
-                .await
-        },
+        move |_| async move { HttpStream::new(arg, http_arg, request, tx).start().await },
     );
     Ok(rx
+        .recv()
         .await
         .map_err(|e| anyhow::anyhow!("err:http_server_run_handle Response<Body> => err:{}", e))?)
 }
@@ -57,7 +54,7 @@ impl HttpServer {
 
     pub async fn run(
         &mut self,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         request: Request<Body>,
     ) -> Result<Response<Body>> {
         let ret = self.do_run(scc, request).await;
@@ -72,7 +69,7 @@ impl HttpServer {
 
     pub async fn do_run(
         &mut self,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         mut request: Request<Body>,
     ) -> Result<Response<Body>> {
         log::trace!("client request = {:#?}", request);

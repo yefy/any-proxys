@@ -1,4 +1,6 @@
-use crate::proxy::http_proxy::http_filter::http_filter_headers_pre::{run_wasm_plugin, WasmHost};
+use crate::wasm::run_wasm_plugin;
+use crate::wasm::WasmHost;
+
 use crate::proxy::stream_info::StreamInfo;
 use crate::{config as conf, WasmPluginConfs};
 use any_base::module::module;
@@ -191,30 +193,23 @@ pub async fn do_wasm_access(stream_info: Share<StreamInfo>) -> Result<crate::Err
     if stream_info.get().scc.is_none() {
         return Ok(crate::Error::Ok);
     }
-    log::trace!(
-        "session_id:{}, wasm_access_log",
-        stream_info.get().session_id
-    );
+    let scc = stream_info.get().scc.clone().unwrap();
+    log::trace!("session_id:{}, wasm_access", stream_info.get().session_id);
     use crate::config::net_access;
     use crate::config::net_core_wasm;
-    let (ms, net_curr_conf) = {
-        let stream_info = stream_info.get();
-        let scc = stream_info.scc.get();
-        (scc.ms(), scc.net_curr_conf())
-    };
-    let conf = net_access::curr_conf(&net_curr_conf);
+    let conf = net_access::curr_conf(scc.net_curr_conf());
 
     if conf.wasm_plugin_confs.is_none() {
         return Ok(crate::Error::Ok);
     }
     let wasm_plugin_confs = conf.wasm_plugin_confs.as_ref().unwrap();
-    let net_core_wasm_conf = net_core_wasm::main_conf(&ms).await;
+    let net_core_wasm_conf = net_core_wasm::main_conf(scc.ms()).await;
     for wasm_plugin_conf in &wasm_plugin_confs.wasm {
         let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
         let plugin = WasmHost::new(stream_info.clone());
         let ret = run_wasm_plugin(&wasm_plugin_conf.wasm_config, plugin, &wasm_plugin).await;
         if let Err(e) = &ret {
-            log::error!("wasm_access_log:{}", e);
+            log::error!("wasm_access:{}", e);
             continue;
         }
         match ret.unwrap() {
@@ -227,6 +222,9 @@ pub async fn do_wasm_access(stream_info: Share<StreamInfo>) -> Result<crate::Err
             }
             crate::Error::Error => {
                 return Err(anyhow::anyhow!("err:do_wasm_access"));
+            }
+            crate::Error::Return => {
+                return Ok(crate::Error::Return);
             }
             _ => {}
         }

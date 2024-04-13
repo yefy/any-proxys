@@ -22,7 +22,7 @@ lazy_static! {
         name: "proxy_pass_tcp".to_string(),
         set: |ms, conf_arg, cmd, conf| Box::pin(proxy_pass_tcp(ms, conf_arg, cmd, conf)),
         typ: module::CMD_TYPE_DATA,
-        conf_typ: conf::CMD_CONF_TYPE_SERVER,
+        conf_typ: conf::CMD_CONF_TYPE_LOCAL,
     },]);
 }
 
@@ -105,10 +105,12 @@ async fn merge_conf(
     parent_conf: Option<typ::ArcUnsafeAny>,
     child_conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
-    if parent_conf.is_some() {
-        let mut _parent_conf = parent_conf.unwrap().get_mut::<Conf>();
-    }
     let mut _child_conf = child_conf.get_mut::<Conf>();
+    if parent_conf.is_some() {
+        let parent_conf = parent_conf.unwrap();
+        let _parent_conf = parent_conf.get_mut::<Conf>();
+    }
+
     return Ok(());
 }
 

@@ -41,89 +41,94 @@ pub async fn http_filter_header(r: Arc<HttpStreamRequest>) -> Result<()> {
 }
 
 pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
-    let r_ctx = &mut *r.ctx.get_mut();
-    if r_ctx.r_in.version == Version::HTTP_10 {
-        r_ctx.r_out.headers.insert(
-            "Connection",
-            HeaderValue::from_bytes("keep-alive".as_bytes())?,
-        );
-    }
+    let (response, client_write) = {
+        let r_ctx = &mut *r.ctx.get_mut();
+        if r_ctx.r_in.version == Version::HTTP_10 {
+            r_ctx.r_out.headers.insert(
+                "Connection",
+                HeaderValue::from_bytes("keep-alive".as_bytes())?,
+            );
+        }
 
-    let cache_file_status = if r.http_cache_file.is_some() {
-        r.http_cache_file.ctx_thread.get().cache_file_status.clone()
-    } else {
-        None
-    };
+        let cache_file_status = if r.http_cache_file.is_some() {
+            r.http_cache_file.ctx_thread.get().cache_file_status.clone()
+        } else {
+            None
+        };
 
-    if r_ctx.r_in.main.http_cache_status.is_none() {
-        r_ctx.r_in.main.http_cache_status = Some(r_ctx.r_in.http_cache_status.clone());
-        r_ctx.r_in.main.cache_file_status = cache_file_status.clone();
-        r_ctx.r_in.main.is_slice = r_ctx.r_in.is_slice;
-    }
+        if r_ctx.r_in.main.http_cache_status.is_none() {
+            r_ctx.r_in.main.http_cache_status = Some(r_ctx.r_in.http_cache_status.clone());
+            r_ctx.r_in.main.cache_file_status = cache_file_status.clone();
+            r_ctx.r_in.main.is_slice = r_ctx.r_in.is_slice;
+        }
 
-    log::debug!(target: "ext", "r.session_id:{}-{}, http_cache_status:{:?}---{:?}, \
+        log::debug!(target: "ext", "r.session_id:{}-{}, http_cache_status:{:?}---{:?}, \
     cache_file_status:{:?}, is_upstream:{}, last_slice_upstream_index:{}, max_upstream_count:{}",
-                r.session_id, r.local_cache_req_count,
-                r_ctx.r_in.main.http_cache_status, r_ctx.r_in.http_cache_status,
-                cache_file_status,
-                r_ctx.is_upstream, r_ctx.last_slice_upstream_index,r_ctx.max_upstream_count);
+                    r.session_id, r.local_cache_req_count,
+                    r_ctx.r_in.main.http_cache_status, r_ctx.r_in.http_cache_status,
+                    cache_file_status,
+                    r_ctx.is_upstream, r_ctx.last_slice_upstream_index, r_ctx.max_upstream_count);
 
-    if r_ctx.r_out_main.is_some() {
-        let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-        let r_out_main = r_ctx.r_out_main.as_ref().unwrap();
-        let res_info_main = r_out_main.response_info.as_ref().unwrap();
-        if res_info_main.last_modified != response_info.last_modified
-            || res_info_main.last_modified_time != response_info.last_modified_time
-            || res_info_main.e_tag != response_info.e_tag
-        {
-            return Err(anyhow!("r_ctx.r_out_main.is_some !="));
+        if r_ctx.r_out_main.is_some() {
+            let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
+            let r_out_main = r_ctx.r_out_main.as_ref().unwrap();
+            let res_info_main = r_out_main.response_info.as_ref().unwrap();
+            if res_info_main.last_modified != response_info.last_modified
+                || res_info_main.last_modified_time != response_info.last_modified_time
+                || res_info_main.e_tag != response_info.e_tag
+            {
+                return Err(anyhow!("r_ctx.r_out_main.is_some !="));
+            }
+
+            if !r_ctx.is_out_status_ok() {
+                return Err(anyhow!("r_ctx.r_out_main.is_some !r_ctx.is_out_status_ok"));
+            }
+
+            log::trace!(target: "ext", "r.session_id:{}-{}, disable header",
+                        r.session_id, r.local_cache_req_count);
+            return Ok(());
         }
 
-        if !r_ctx.is_out_status_ok() {
-            return Err(anyhow!("r_ctx.r_out_main.is_some !r_ctx.is_out_status_ok"));
+        r_ctx.r_out_main = Some(r_ctx.r_out.clone());
+
+        let (client_write, _res_body) = Body::channel();
+        let mut response = Response::builder().body(_res_body)?;
+        *response.version_mut() = r_ctx.r_out.version;
+        *response.status_mut() = r_ctx.r_out.status;
+        *response.headers_mut() = r_ctx.r_out.headers.clone();
+        let head = r_ctx.r_out.head.clone();
+        if head.is_some() {
+            let head = head.unwrap();
+            response
+                .extensions_mut()
+                .insert(AnyProxyRawHeaders(AnyProxyHyperBuf(head.clone())));
         }
-
-        log::trace!(target: "ext", "r.session_id:{}-{}, disable header",
-                    r.session_id, r.local_cache_req_count);
-        return Ok(());
-    }
-
-    r_ctx.r_out_main = Some(r_ctx.r_out.clone());
-
-    let (client_write, _res_body) = Body::channel();
-    let mut response = Response::builder().body(_res_body)?;
-    *response.version_mut() = r_ctx.r_out.version;
-    *response.status_mut() = r_ctx.r_out.status;
-    *response.headers_mut() = r_ctx.r_out.headers.clone();
-    let head = r_ctx.r_out.head.clone();
-    if head.is_some() {
-        let head = head.unwrap();
         response
             .extensions_mut()
-            .insert(AnyProxyRawHeaders(AnyProxyHyperBuf(head.clone())));
-    }
-    response
-        .extensions_mut()
-        .insert(hyper::AnyProxyRawHttpHeaderExt(
-            hyper::AnyProxyHyperHttpHeaderExt(HttpHeaderExt::new()),
-        ));
+            .insert(hyper::AnyProxyRawHttpHeaderExt(
+                hyper::AnyProxyHyperHttpHeaderExt(HttpHeaderExt::new()),
+            ));
 
-    if !r_ctx.is_out_status_ok() {
-        response.headers_mut().remove(http::header::CONTENT_RANGE);
-        response.headers_mut().remove(http::header::CONTENT_LENGTH);
-        return Ok(());
-    }
+        if !r_ctx.is_out_status_ok() {
+            response.headers_mut().remove(http::header::CONTENT_RANGE);
+            response.headers_mut().remove(http::header::CONTENT_LENGTH);
+            return Ok(());
+        }
 
-    r_ctx.r_out.head_size = http_headers_size(None, Some(response.status()), response.headers());
+        r_ctx.r_out.head_size =
+            http_headers_size(None, Some(response.status()), response.headers());
+        (response, client_write)
+    };
 
-    let response_tx = r_ctx.response_tx.take().unwrap();
     log::debug!(target: "ext3", "r.session_id:{}-{}, to client response:{:#?}",
                 r.session_id, r.local_cache_req_count, response);
 
-    if let Err(_) = response_tx.send(response) {
+    let header_response = r.ctx.get().header_response.clone();
+    if let Err(_) = header_response.send_header(response).await {
         return Err(anyhow!("response_tx.send"));
     }
 
+    let r_ctx = &mut *r.ctx.get_mut();
     if !r_ctx.is_out_status_ok() {
         log::trace!(target: "ext", "r.session_id:{}-{}, header !r_ctx.is_out_status_ok() disable create body stream",
                     r.session_id, r.local_cache_req_count);

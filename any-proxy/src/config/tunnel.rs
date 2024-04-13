@@ -139,13 +139,14 @@ async fn init_conf(
     return Ok(());
 }
 
-async fn create_main_confs(ms: module::Modules) -> Result<ArcUnsafeAny> {
+async fn create_main_confs(mut ms: module::Modules) -> Result<ArcUnsafeAny> {
     let ctx_index_len = { M.get().ctx_index_len };
     if ctx_index_len <= 0 {
         panic!("ctx_index_len:{}", ctx_index_len)
     }
     let mut upstream_confs: Vec<typ::ArcUnsafeAny> = Vec::with_capacity(ctx_index_len as usize);
 
+    ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_MAIN);
     for module in module::get_modules().get().get_modules() {
         let (typ, func) = {
             let module_ = &*module.get();
@@ -271,7 +272,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
 }
 
 async fn tunnel(
-    ms: module::Modules,
+    mut ms: module::Modules,
     mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,

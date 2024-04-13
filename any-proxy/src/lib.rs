@@ -172,8 +172,10 @@ pub enum Error {
     Break,
     //结束所有循环
     Finish,
-    //退出请求
+    //错误退出请求
     Error,
+    //退出请求
+    Return,
     Ext1,
     Ext2,
     Ext3,

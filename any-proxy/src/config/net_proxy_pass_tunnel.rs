@@ -25,13 +25,13 @@ lazy_static! {
             name: "proxy_pass_tunnel_tcp".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(proxy_pass_tunnel_tcp(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
             name: "proxy_pass_tunnel_ssl".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(proxy_pass_tunnel_ssl(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
             name: "proxy_pass_tunnel_quic".to_string(),
@@ -39,7 +39,7 @@ lazy_static! {
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
     ]);
 }

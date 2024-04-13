@@ -4,7 +4,7 @@ use crate::proxy::domain_config::DomainConfigListenMerge;
 use crate::quic;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcMutex, ArcUnsafeAny, ShareRw};
+use any_base::typ::{ArcMutex, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -24,7 +24,9 @@ lazy_static! {
         name: "domain_listen_ssl".to_string(),
         set: |ms, conf_arg, cmd, conf| Box::pin(domain_listen_ssl(ms, conf_arg, cmd, conf)),
         typ: module::CMD_TYPE_DATA,
-        conf_typ: conf::CMD_CONF_TYPE_MAIN | conf::CMD_CONF_TYPE_SERVER,
+        //___wait___
+        //conf_typ: conf::CMD_CONF_TYPE_MAIN | conf::CMD_CONF_TYPE_SERVER,
+        conf_typ:  conf::CMD_CONF_TYPE_SERVER,
     },]);
 }
 
@@ -175,7 +177,7 @@ async fn domain_listen_ssl(
         net_server_core_conf.is_port_listen = Some(false);
     }
 
-    let scc = ShareRw::new(StreamConfigContext::new(
+    let scc = Arc::new(StreamConfigContext::new(
         ms.clone(),
         net_server_conf.net_confs.clone(),
         net_server_conf.server_confs.clone(),
@@ -260,7 +262,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     let mut index_map = HashMap::new();
     let mut index = 0;
     for domain_config_context in value.domain_config_contexts.iter() {
-        let scc = domain_config_context.scc.get();
+        let scc = domain_config_context.scc.clone();
         let net_core_conf = net_core::currs_conf(scc.net_server_confs());
 
         index += 1;
@@ -279,7 +281,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     let sni = quic::util::sni(&value.listens)?;
 
     let tcp_config = {
-        let scc = value.domain_config_contexts[0].scc.get();
+        let scc = value.domain_config_contexts[0].scc.clone();
         let net_core_conf0 = net_core::currs_conf(scc.net_server_confs());
         upstream_tcp_conf
             .config(&net_core_conf0.tcp_config_name)
@@ -294,7 +296,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
 
     let plugin_handle_protocol = {
         use crate::config::net_server_core_plugin;
-        let scc = value.domain_config_contexts[0].scc.get();
+        let scc = value.domain_config_contexts[0].scc.clone();
         let net_server_core_plugin_conf0 =
             net_server_core_plugin::currs_conf(scc.net_server_confs());
         net_server_core_plugin_conf0.plugin_handle_protocol.clone()

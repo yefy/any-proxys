@@ -3,12 +3,11 @@ mod bindings;
 mod macros;
 
 use crate::bindings::component::server::wasm_std;
-use crate::bindings::component::server::wasm_std::Error;
 use crate::bindings::exports::component::server::wasm_service;
 
 struct Component;
 impl wasm_service::Guest for Component {
-    fn run(_config: String) -> Result<Error, String> {
+    fn run(_config: String) -> Result<wasm_std::Error, String> {
         let version = wasm_std::anyproxy_version()?;
         wasm_std::out_add_headers(&vec![("server".to_string(), version)])?;
         wasm_std::out_del_headers(&vec!["expires".to_string(), "cache-control".to_string()])?;
@@ -20,7 +19,7 @@ impl wasm_service::Guest for Component {
         //     wasm_std::out_add_header("content-length", &format!("{}", content_length))?;
         // }
 
-        Ok(Error::Ok)
+        Ok(wasm_std::Error::Ok)
     }
 }
 

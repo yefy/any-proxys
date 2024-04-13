@@ -7,7 +7,7 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 use crate::protopack;
 use crate::proxy::port_config::PortConfigListen;
-use crate::proxy::util::run_plugin_handle_access;
+use crate::proxy::util::{run_plugin_handle_access, run_plugin_handle_serverless};
 use crate::stream::server::ServerStreamInfo;
 use any_base::executor_local_spawn::ExecutorsLocal;
 #[cfg(feature = "anyproxy-ebpf")]
@@ -64,7 +64,7 @@ impl PortStream {
                 let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
                 session_id
             };
-            let scc = self.port_config_listen.port_config_context.scc.get();
+            let scc = self.port_config_listen.port_config_context.scc.clone();
             let net_core_conf = scc.net_core_conf();
             StreamInfo::new(
                 self.server_stream_info.clone(),
@@ -90,13 +90,11 @@ impl proxy::Stream for PortStream {
         _client_stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
 
         let scc = self.port_config_listen.port_config_context.scc.clone();
-        stream_info.get_mut().scc = scc.clone();
-
-        run_plugin_handle_access(scc.clone(), stream_info.clone()).await?;
+        stream_info.get_mut().scc = Some(scc.clone()).into();
 
         #[cfg(feature = "anyproxy-ebpf")]
-        let _client_stream = if scc.get().net_core_conf().is_port_direct_ebpf
-            && scc.get().net_core_conf().is_open_ebpf
+        let _client_stream = if scc.net_core_conf().is_port_direct_ebpf
+            && scc.net_core_conf().is_open_ebpf
             && _client_stream.raw_fd() > 0
         {
             stream_info.get_mut().add_work_time1("connect_and_ebpf");
@@ -148,7 +146,7 @@ impl proxy::Stream for PortStream {
             stream_info.get_mut().ssl_domain = self.server_stream_info.domain.clone();
             stream_info.get_mut().remote_domain = self.server_stream_info.domain.clone();
             //优先使用本地配置值
-            stream_info.get_mut().local_domain = Some(scc.get().net_core_conf().domain.clone());
+            stream_info.get_mut().local_domain = Some(scc.net_core_conf().domain.clone());
             let hello = protopack::anyproxy::read_hello(&mut client_buf_reader)
                 .await
                 .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
@@ -168,7 +166,7 @@ impl proxy::Stream for PortStream {
                     hello
                 }
                 None => {
-                    let session_id = scc.get().common_core_conf().session_id.clone();
+                    let session_id = scc.common_core_conf().session_id.clone();
                     let stream_info = stream_info.get();
                     if stream_info.local_domain.is_none() {
                         return Err(anyhow!("err:not hello and local_domain.is_none()"));
@@ -206,10 +204,22 @@ impl proxy::Stream for PortStream {
             );
         }
 
-        stream_info.get_mut().add_work_time1("connect_and_stream");
+        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+            return Ok(());
+        }
+
+        let client_buf_reader =
+            run_plugin_handle_serverless(scc.clone(), stream_info.clone(), client_buf_reader)
+                .await?;
+        if client_buf_reader.is_none() {
+            return Ok(());
+        }
+        let client_buf_reader = client_buf_reader.unwrap();
+
         let (_client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
 
-        StreamStream::connect_and_stream(scc, stream_info, client_buffer, _client_stream).await
+        stream_info.get_mut().add_work_time1("connect_and_stream");
+        StreamStream::connect_and_stream(stream_info, client_buffer, _client_stream).await
     }
 }

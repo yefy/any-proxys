@@ -1,8 +1,10 @@
 use crate::proxy::http_proxy::http_stream_request::HttpRange;
+use crate::proxy::stream_info::StreamInfo;
+use any_base::typ::Share;
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
-use http::header::{HeaderName, HeaderValue};
+use http::header::{HeaderName, HeaderValue, HOST};
 use http::{HeaderMap, Method, Response, StatusCode, Uri, Version};
 use hyper::http::Request;
 use hyper::{AnyProxyHyperBuf, AnyProxyRawHeaders, Body};
@@ -647,11 +649,38 @@ pub fn http_headers_size(
     size
 }
 
-pub fn copy_request_parts(request: &Request<Body>) -> HttpParts {
-    HttpParts {
+pub fn copy_request_parts(
+    stream_info: Share<StreamInfo>,
+    request: &Request<Body>,
+) -> Result<HttpParts> {
+    let scheme = if stream_info.get().server_stream_info.is_tls {
+        "https"
+    } else {
+        "http"
+    };
+
+    let req_host = request.headers().get(HOST).cloned();
+    if req_host.is_none() {
+        return Err(anyhow!("host nil"));
+    }
+    let req_host = req_host.unwrap();
+    let req_host = req_host.to_str().unwrap();
+
+    let uri = format!(
+        "{}://{}{}",
+        scheme,
+        req_host,
+        request
+            .uri()
+            .path_and_query()
+            .map(|x| x.as_str())
+            .unwrap_or("/")
+    );
+    let uri: http::Uri = uri.parse()?;
+    Ok(HttpParts {
         method: request.method().clone(),
-        uri: request.uri().clone(),
+        uri,
         version: request.version().clone(),
         headers: request.headers().clone(),
-    }
+    })
 }

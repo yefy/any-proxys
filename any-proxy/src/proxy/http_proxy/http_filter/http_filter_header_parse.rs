@@ -60,8 +60,7 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
         }
 
         let expires = {
-            let scc = r.scc.get();
-            let net_core_conf = scc.net_core_conf();
+            let net_core_conf = r.scc.net_core_conf();
             net_core_conf.expires
         };
 

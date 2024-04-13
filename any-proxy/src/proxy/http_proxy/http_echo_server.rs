@@ -3,11 +3,11 @@ use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ShareRw;
 use anyhow::Result;
 use hyper::http::header::HeaderValue;
 use hyper::http::{Request, Response, StatusCode, Version};
 use hyper::Body;
+use std::sync::Arc;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -25,7 +25,7 @@ pub async fn http_server_handle(
 pub async fn http_server_run_handle(
     arg: ServerArg,
     _http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
     HttpEchoServer::new(arg.executors.clone(), request, scc)
@@ -36,14 +36,14 @@ pub async fn http_server_run_handle(
 pub struct HttpEchoServer {
     _executors: ExecutorsLocal,
     request: Request<Body>,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
 }
 
 impl HttpEchoServer {
     pub fn new(
         executors: ExecutorsLocal,
         request: Request<Body>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
     ) -> HttpEchoServer {
         HttpEchoServer {
             _executors: executors,
@@ -64,9 +64,9 @@ impl HttpEchoServer {
     }
 
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
-        let scc = self.scc.get();
+        let scc = self.scc.clone();
         use crate::config::net_server_echo_http;
-        let http_server_echo_conf = net_server_echo_http::currs_conf(scc.net_server_confs());
+        let http_server_echo_conf = net_server_echo_http::curr_conf(scc.net_curr_conf());
 
         let mut response = Response::new(http_server_echo_conf.body.clone().into());
         response.headers_mut().insert(

@@ -1,0 +1,15 @@
+interface wasm-tcp {
+    enum socket-type {
+        tcp,
+        ssl,
+        quic,
+    }
+
+    socket-connect: func(typ: socket-type, addr: string, ssl-domain: option<string>) -> result<u64, string>;
+    socket-read: func(fd: u64, size: u64) -> result<string, string>;
+    socket-read-exact: func(fd: u64, size: u64) -> result<string, string>;
+    socket-write: func(fd: u64, data: string) -> result<u64, string>;
+    socket-write-all: func(fd: u64, data: string) -> result<u64, string>;
+    socket-flush: func(fd: u64) -> result<_, string>;
+    socket-close: func(fd: u64) -> result<_, string>;
+}

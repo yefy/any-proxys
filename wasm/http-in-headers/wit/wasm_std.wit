@@ -1,4 +1,5 @@
 interface wasm-std {
+    use wasm-http.{response, request};
     enum error {
         //继续进行
         ok,
@@ -6,89 +7,26 @@ interface wasm-std {
         break,
         //结束所有循环
         finish,
-        //退出请求
+        //错误退出请求
         error,
+        //退出请求
+        return,
         ext1,
         ext2,
         ext3,
     }
-     /// The HTTP status code.
-    type http-status = u16;
-
-    /// The HTTP body.
-    type body = list<u8>;
-
-    /// The HTTP headers represented as a list of (name, value) pairs.
-    type headers = list<tuple<string, string>>;
-
-    /// The HTTP parameter queries, represented as a list of (name, value) pairs.
-    type params = list<tuple<string, string>>;
-
-    /// The HTTP URI of the current request.
-    type uri = string;
-
-    /// The HTTP method.
-    enum method {
-        get,
-        post,
-        put,
-        delete,
-        patch,
-        head,
-        options,
-    }
-
-    /// An HTTP request.
-    record request {
-        method: method,
-        uri: uri,
-        headers: headers,
-        params: params,
-        body: option<body>,
-    }
-
-    /// An HTTP response.
-    record response {
-        status: http-status,
-        headers: option<headers>,
-        body: option<body>,
-    }
-
-    enum level {
-        /// The "error" level.
-        ///
-        /// Designates very serious errors.
-        // This way these line up with the discriminants for LevelFilter below
-        // This works because Rust treats field-less enums the same way as C does:
-        // https://doc.rust-lang.org/reference/items/enumerations.html#custom-discriminant-values-for-field-less-enumerations
-        error,
-        /// The "warn" level.
-        ///
-        /// Designates hazardous situations.
-        warn,
-        /// The "info" level.
-        ///
-        /// Designates useful information.
-        info,
-        /// The "debug" level.
-        ///
-        /// Designates lower priority information.
-        debug,
-        /// The "trace" level.
-        ///
-        /// Designates very low priority, often extremely verbose, information.
-        trace,
-    }
-
-    handle-http: func(req: request) -> result<response, string>;
 
     anyproxy-version: func() -> result<string, string>;
+    variable: func(key: string) -> result<option<string>, string>;
+
     in-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     in-add-header: func(key: string, value: string) -> result<_, string>;
     in-del-headers: func(headers: list<string>) -> result<_, string>;
     in-del-header: func(key: string) -> result<_, string>;
     in-is-header: func(key: string) -> result<bool, string>;
     in-get-header: func(key: string) -> result<option<string>, string>;
+    in-get-request: func() -> result<request, string>;
+    in-body-read-exact: func() -> result<string, string>;
 
     out-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     out-add-header: func(key: string, value: string) -> result<_, string>;
@@ -96,70 +34,5 @@ interface wasm-std {
     out-del-header: func(key: string) -> result<_, string>;
     out-is-header: func(key: string) -> result<bool, string>;
     out-get-header: func(key: string) -> result<option<string>, string>;
-
-    log-enabled: func(level: level) -> bool;
-    log-error: func(str: string) -> result<_, string>;
-    log-warn: func(str: string) -> result<_, string>;
-    log-info: func(str: string) -> result<_, string>;
-    log-debug: func(str: string) -> result<_, string>;
-    log-trace: func(str: string) -> result<_, string>;
-
-    variable: func(key: string) -> result<option<string>, string>;
-
-    set-bool: func(key: string, value: bool) -> result<_, string>;
-    set-s8: func(key: string, value: s8) -> result<_, string>;
-    set-s16: func(key: string, value: s16) -> result<_, string>;
-    set-s32: func(key: string, value: s32) -> result<_, string>;
-    set-s64: func(key: string, value: s64) -> result<_, string>;
-    set-u8: func(key: string, value: u8) -> result<_, string>;
-    set-u16: func(key: string, value: u16) -> result<_, string>;
-    set-u32: func(key: string, value: u32) -> result<_, string>;
-    set-u64: func(key: string, value: u64) -> result<_, string>;
-    set-f32: func(key: string, value: f32) -> result<_, string>;
-    set-f64: func(key: string, value: f64) -> result<_, string>;
-    set-char: func(key: string, value: char) -> result<_, string>;
-    set-string: func(key: string, value: string) -> result<_, string>;
-
-    hset-bool: func(key: string, field: string, value: bool) -> result<_, string>;
-    hset-s8: func(key: string, field: string, value: s8) -> result<_, string>;
-    hset-s16: func(key: string, field: string, value: s16) -> result<_, string>;
-    hset-s32: func(key: string, field: string, value: s32) -> result<_, string>;
-    hset-s64: func(key: string, field: string, value: s64) -> result<_, string>;
-    hset-u8: func(key: string, field: string, value: u8) -> result<_, string>;
-    hset-u16: func(key: string, field: string, value: u16) -> result<_, string>;
-    hset-u32: func(key: string, field: string, value: u32) -> result<_, string>;
-    hset-u64: func(key: string, field: string, value: u64) -> result<_, string>;
-    hset-f32: func(key: string, field: string, value: f32) -> result<_, string>;
-    hset-f64: func(key: string, field: string, value: f64) -> result<_, string>;
-    hset-char: func(key: string, field: string, value: char) -> result<_, string>;
-    hset-string: func(key: string, field: string, value: string) -> result<_, string>;
-
-
-    get-bool: func(key: string) -> result<option<bool>, string>;
-    get-s8: func(key: string) -> result<option<s8>, string>;
-    get-s16: func(key: string) -> result<option<s16>, string>;
-    get-s32: func(key: string) -> result<option<s32>, string>;
-    get-s64: func(key: string) -> result<option<s64>, string>;
-    get-u8: func(key: string) -> result<option<u8>, string>;
-    get-u16: func(key: string) -> result<option<u16>, string>;
-    get-u32: func(key: string) -> result<option<u32>, string>;
-    get-u64: func(key: string) -> result<option<u64>, string>;
-    get-f32: func(key: string) -> result<option<f32>, string>;
-    get-f64: func(key: string) -> result<option<f64>, string>;
-    get-char: func(key: string) -> result<option<char>, string>;
-    get-string: func(key: string) -> result<option<string>, string>;
-
-    hget-bool: func(key: string, field: string) -> result<option<bool>, string>;
-    hget-s8: func(key: string, field: string) -> result<option<s8>, string>;
-    hget-s16: func(key: string, field: string) -> result<option<s16>, string>;
-    hget-s32: func(key: string, field: string) -> result<option<s32>, string>;
-    hget-s64: func(key: string, field: string) -> result<option<s64>, string>;
-    hget-u8: func(key: string, field: string) -> result<option<u8>, string>;
-    hget-u16: func(key: string, field: string) -> result<option<u16>, string>;
-    hget-u32: func(key: string, field: string) -> result<option<u32>, string>;
-    hget-u64: func(key: string, field: string) -> result<option<u64>, string>;
-    hget-f32: func(key: string, field: string) -> result<option<f32>, string>;
-    hget-f64: func(key: string, field: string) -> result<option<f64>, string>;
-    hget-char: func(key: string, field: string) -> result<option<char>, string>;
-    hget-string: func(key: string, field: string) -> result<option<string>, string>;
+    out-set-response: func(res: response) -> result<_, string>;
 }

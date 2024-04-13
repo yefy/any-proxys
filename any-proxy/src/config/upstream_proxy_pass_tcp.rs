@@ -6,7 +6,7 @@ use crate::tcp::connect as tcp_connect;
 use crate::upstream::UpstreamHeartbeatData;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
+use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -163,7 +163,6 @@ async fn proxy_pass_tcp(
 }
 
 use crate::config::upstream_core;
-use any_base::typ::Share;
 use module::Modules;
 use std::net::SocketAddr;
 
@@ -189,7 +188,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
         host: String,
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
-    ) -> Result<Share<UpstreamHeartbeatData>> {
+    ) -> Result<ShareRw<UpstreamHeartbeatData>> {
         use crate::config::socket_tcp;
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
         let tcp_config_name = &self.tcp.tcp_config_name;
@@ -241,6 +240,6 @@ impl upstream_core::HeartbeatI for Heartbeat {
             current_weight: 0,
         };
 
-        Ok(Share::new(ups_heartbeat))
+        Ok(ShareRw::new(ups_heartbeat))
     }
 }

@@ -26,6 +26,11 @@ impl Upstream {
 #[async_trait]
 impl module::Server for Upstream {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
+        //___wait___
+        // if ms.is_work_thread() {
+        //     return Ok(());
+        // }
+
         use crate::config::upstream_core;
         let upstream_core_conf = upstream_core::main_conf_mut(&ms).await;
         for (_, ups_data) in upstream_core_conf.ups_data_map.iter() {

@@ -7,8 +7,7 @@ use crate::upstream::{UpstreamDynamicDomainData, UpstreamHeartbeatData};
 use crate::util;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
-use any_base::typ::Share;
+use any_base::typ::{ArcUnsafeAny, ShareRw};
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -20,11 +19,11 @@ pub struct Conf {
     pub name: String,
     pub balancer: ArcString,
     pub plugin_handle_balancer: Option<PluginHandleBalancer>,
-    pub ups_dynamic_domains: Vec<Share<UpstreamDynamicDomainData>>,
-    pub ups_heartbeats: Vec<Share<UpstreamHeartbeatData>>,
-    pub ups_heartbeats_active: Vec<Share<UpstreamHeartbeatData>>,
+    pub ups_dynamic_domains: Vec<ShareRw<UpstreamDynamicDomainData>>,
+    pub ups_heartbeats: Vec<ShareRw<UpstreamHeartbeatData>>,
+    pub ups_heartbeats_active: Vec<ShareRw<UpstreamHeartbeatData>>,
     pub ups_heartbeats_index: usize,
-    pub ups_heartbeats_map: HashMap<usize, Share<UpstreamHeartbeatData>>,
+    pub ups_heartbeats_map: HashMap<usize, ShareRw<UpstreamHeartbeatData>>,
 }
 
 impl Conf {
@@ -85,7 +84,7 @@ impl Conf {
             is_weight,
         };
         self.ups_dynamic_domains
-            .push(Share::new(ups_dynamic_domain));
+            .push(ShareRw::new(ups_dynamic_domain));
 
         for addr in addrs.iter() {
             let ups_heartbeat = heartbeat

@@ -66,10 +66,24 @@ linux reuseport环境支持程序热升级
 ## WebAssembly热升级脚本插件开发
 ```
 支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-支持WebAssembly共享存储
-支持WebAssembly与主服务交互包括预制的变量读取、异步io请求、日志打印、http请求
-支持读取和修改主服务http头数据
-可以在主服务任何地方添加钩子，包括防盗链校验、ip限制，数据解析、模块开发等等功能开发
+支持reload热升级
+支持wasm_http异步http网络库
+支持wasm_log日志
+支持wasm_store全局共享存储
+支持wasm_tcp异步tcp网络库
+支持wasm_std库与主服务交互，包括预制的变量读取、http数据修改
+支持阶段嵌入脚本开发：
+    四层协议TCP、QUIC、SSL、any-tunnel有三个阶段：
+        wasm_access阶段可以开发i防盗链校验、ip限制、防攻击开发
+        wasm_serverless阶段可以解析协议做业务开发
+        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+    http协议有六个阶段：
+        wasm_access阶段可以开发i防盗链校验、ip限制、防攻击开发
+        wasm_serverless阶段可以解析协议做业务开发
+        wasm_http_in_headers阶段可以修改请求的原始http数据
+        wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
+        wasm_http_filter_headers阶段可以修改响应给客户端http数据
+        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
 ```
 ## 负载均衡算法
 ```

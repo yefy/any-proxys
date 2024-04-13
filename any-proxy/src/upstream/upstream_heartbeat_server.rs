@@ -4,20 +4,20 @@ use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_writer::BufWriter;
 use any_base::stream_flow::{StreamFlowRead, StreamFlowWrite};
-use any_base::typ::ArcMutex;
+use any_base::typ::ShareRw;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::time::Instant;
 
 pub struct UpstreamHeartbeatServer {
     executors: ExecutorsLocal,
-    ups_data: ArcMutex<UpstreamData>,
+    ups_data: ShareRw<UpstreamData>,
     ///在map中的索引
     index: usize,
 }
 
 impl UpstreamHeartbeatServer {
-    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ArcMutex<UpstreamData>, index: usize) {
+    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ShareRw<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
             None,
@@ -34,7 +34,7 @@ impl UpstreamHeartbeatServer {
     }
     pub fn new(
         executors: ExecutorsLocal,
-        ups_data: ArcMutex<UpstreamData>,
+        ups_data: ShareRw<UpstreamData>,
         index: usize,
     ) -> Result<UpstreamHeartbeatServer> {
         Ok(UpstreamHeartbeatServer {
@@ -166,9 +166,7 @@ impl UpstreamHeartbeatServer {
                 Ok(_) => {
                     let mut ups_heartbeat = ups_heartbeat.get_mut();
                     if ups_heartbeat.disable {
-                        {
-                            self.ups_data.get_mut().is_heartbeat_disable = true;
-                        }
+                        self.ups_data.get_mut().is_heartbeat_change = true;
                         ups_heartbeat.curr_fail = 0;
                         ups_heartbeat.disable = false;
                         log::info!(
@@ -189,9 +187,7 @@ impl UpstreamHeartbeatServer {
                     ups_heartbeat.effective_weight =
                         ups_heartbeat.weight / ups_heartbeat.curr_fail as i64;
                     if ups_heartbeat.curr_fail > fail && !ups_heartbeat.disable {
-                        {
-                            self.ups_data.get_mut().is_heartbeat_disable = true;
-                        }
+                        self.ups_data.get_mut().is_heartbeat_change = true;
                         ups_heartbeat.disable = true;
                         log::info!(
                                 "heartbeat name:{}, index:{}, domain_index:{}, index:{}, disable addr:{}",

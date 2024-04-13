@@ -27,7 +27,7 @@ lazy_static! {
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
             name: "proxy_pass_tunnel2_ssl".to_string(),
@@ -35,7 +35,7 @@ lazy_static! {
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
             name: "proxy_pass_tunnel2_quic".to_string(),
@@ -43,7 +43,7 @@ lazy_static! {
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_SERVER,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
         },
     ]);
 }

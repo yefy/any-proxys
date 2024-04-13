@@ -72,8 +72,8 @@ impl StreamConfigContext {
             common_conf,
         }
     }
-    pub fn ms(&self) -> module::Modules {
-        self.ms.clone()
+    pub fn ms(&self) -> &module::Modules {
+        &self.ms
     }
     pub fn common_core_conf(&self) -> &common_core::Conf {
         common_core::curr_conf(&self.common_conf)
@@ -88,11 +88,11 @@ impl StreamConfigContext {
     pub fn net_server_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
         &self.server_confs
     }
-    pub fn common_core_any_conf(&self) -> typ::ArcUnsafeAny {
-        self.common_conf.clone()
+    pub fn common_core_any_conf(&self) -> &typ::ArcUnsafeAny {
+        &self.common_conf
     }
-    pub fn net_curr_conf(&self) -> typ::ArcUnsafeAny {
-        self.curr_conf.clone()
+    pub fn net_curr_conf(&self) -> &typ::ArcUnsafeAny {
+        &self.curr_conf
     }
 }
 
@@ -170,7 +170,7 @@ pub struct StreamStreamShareContext {
 pub struct StreamStreamShare {
     sss_ctx: ShareRw<StreamStreamShareContext>,
     ssc: Arc<StreamStreamContext>,
-    _scc: ShareRw<StreamConfigContext>,
+    _scc: Arc<StreamConfigContext>,
     stream_info: Share<StreamInfo>,
     r: ArcMutexTokio<StreamFlowRead>,
     w: ArcMutexTokio<StreamFlowWrite>,

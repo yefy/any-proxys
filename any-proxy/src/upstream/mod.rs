@@ -35,7 +35,7 @@ pub struct UpstreamHeartbeatData {
     pub current_weight: i64,
 }
 use crate::config::upstream_core;
-use any_base::typ::Share;
+use any_base::typ::ShareRw;
 use any_base::util::ArcString;
 
 pub struct UpstreamDynamicDomainData {
@@ -52,21 +52,21 @@ pub struct UpstreamDynamicDomainData {
 //哪个心跳失败删除哪个
 //如果host改变了就全部初始化
 pub struct UpstreamData {
-    ///心跳失败了
-    pub is_heartbeat_disable: bool,
+    ///心跳发生改变了
+    pub is_heartbeat_change: bool,
     ///域名发生变化了
     pub is_dynamic_domain_change: bool,
     ///响应时间有变化需要排序了
     pub is_sort_heartbeats_active: bool,
     pub ups_config: Arc<upstream_block::Conf>,
     ///全部域名
-    pub ups_dynamic_domains: Vec<Share<UpstreamDynamicDomainData>>,
+    pub ups_dynamic_domains: Vec<ShareRw<UpstreamDynamicDomainData>>,
     ///全部域名对于的ip（包括心跳失败）
-    pub ups_heartbeats: Vec<Share<UpstreamHeartbeatData>>,
+    pub ups_heartbeats: Vec<ShareRw<UpstreamHeartbeatData>>,
     ///全部域名对于的活动ip
-    pub ups_heartbeats_active: Vec<Share<UpstreamHeartbeatData>>,
+    pub ups_heartbeats_active: Vec<ShareRw<UpstreamHeartbeatData>>,
     ///全部域名对于的ip
-    pub ups_heartbeats_map: HashMap<usize, Share<UpstreamHeartbeatData>>,
+    pub ups_heartbeats_map: HashMap<usize, ShareRw<UpstreamHeartbeatData>>,
     ///map索引，保证唯一
     pub ups_heartbeats_index: usize,
     ///轮询对于的index

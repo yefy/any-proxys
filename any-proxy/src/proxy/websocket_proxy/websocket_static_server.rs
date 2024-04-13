@@ -7,13 +7,14 @@ use crate::Protocol77;
 use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::{ArcMutex, ShareRw};
+use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use std::io::Read;
+use std::sync::Arc;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::WebSocketStream;
 
@@ -136,14 +137,13 @@ impl WebsocketServer {
     pub async fn steam_to_stream(
         &self,
         client_stream: WebSocketStream<BufStream<StreamFlow>>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         mut name: String,
     ) -> Result<()> {
         let file_name = {
-            let scc = scc.get();
             use crate::config::net_server_static_websocket;
             let http_server_static_websocket_conf =
-                net_server_static_websocket::currs_conf(scc.net_server_confs());
+                net_server_static_websocket::curr_conf(scc.net_curr_conf());
             let mut seq = "";
             log::trace!("name:{}", name);
             if name.len() <= 0 || name == "/" {

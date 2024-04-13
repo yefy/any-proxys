@@ -3,7 +3,7 @@ use crate::config::config_toml::QuicListenPort;
 use crate::quic::server as quic_server;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcUnsafeAny, ShareRw};
+use any_base::typ::ArcUnsafeAny;
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -174,7 +174,7 @@ async fn port_listen_quic(
         net_server_core_conf.is_port_listen = Some(true);
     }
 
-    let scc = ShareRw::new(StreamConfigContext::new(
+    let scc = Arc::new(StreamConfigContext::new(
         ms.clone(),
         net_server_conf.net_confs.clone(),
         net_server_conf.server_confs.clone(),

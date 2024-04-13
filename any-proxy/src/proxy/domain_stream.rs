@@ -7,7 +7,7 @@ use super::stream_stream::StreamStream;
 use super::tunnel_stream::TunnelStream;
 use crate::proxy::domain_context::DomainContext;
 use crate::proxy::util as proxy_util;
-use crate::proxy::util::run_plugin_handle_access;
+use crate::proxy::util::{run_plugin_handle_access, run_plugin_handle_serverless};
 use crate::proxy::ServerArg;
 use crate::stream::server::ServerStreamInfo;
 use crate::util::util::host_and_port;
@@ -203,13 +203,24 @@ impl proxy::Stream for DomainStream {
             },
         )
         .await?;
-
-        run_plugin_handle_access(scc.clone(), stream_info.clone()).await?;
-
-        stream_info.get_mut().add_work_time1("connect_and_stream");
         let client_buf_reader = unsafe { client_buf_reader.take().await };
+
+        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+            return Ok(());
+        }
+
+        let client_buf_reader =
+            run_plugin_handle_serverless(scc.clone(), stream_info.clone(), client_buf_reader)
+                .await?;
+        if client_buf_reader.is_none() {
+            return Ok(());
+        }
+        let client_buf_reader = client_buf_reader.unwrap();
+
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
-        StreamStream::connect_and_stream(scc, stream_info, client_buffer, client_stream).await
+
+        stream_info.get_mut().add_work_time1("connect_and_stream");
+        StreamStream::connect_and_stream(stream_info, client_buffer, client_stream).await
     }
 }

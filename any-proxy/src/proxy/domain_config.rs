@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 pub struct DomainConfigContext {
-    pub scc: ShareRw<StreamConfigContext>,
+    pub scc: Arc<StreamConfigContext>,
 }
 
 #[derive(Clone)]
@@ -26,7 +26,7 @@ type DomainConfigFunc =
     fn(ArcMutex<DomainConfigListenMerge>) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 use crate::config::net_server_core_plugin::PluginHandleProtocol;
 use any_base::module::module;
-use any_base::typ::{ArcMutex, ArcRwLockTokio, ShareRw};
+use any_base::typ::{ArcMutex, ArcRwLockTokio};
 
 #[derive(Clone)]
 pub struct DomainConfigListenMerge {

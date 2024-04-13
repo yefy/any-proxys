@@ -3,7 +3,6 @@ mod bindings;
 mod macros;
 
 use crate::bindings::component::server::wasm_std;
-use crate::bindings::component::server::wasm_std::Error;
 use crate::bindings::exports::component::server::wasm_service;
 
 use serde::{Deserialize, Serialize};
@@ -16,7 +15,7 @@ pub struct WasmConf {
 
 struct Component;
 impl wasm_service::Guest for Component {
-    fn run(config: String) -> Result<Error, String> {
+    fn run(config: String) -> Result<wasm_std::Error, String> {
         let wasm_conf: WasmConf = toml::from_str(&config).map_err(|e| e.to_string())?;
         debug!("wasm_conf:{:?}", wasm_conf);
 
@@ -27,7 +26,7 @@ impl wasm_service::Guest for Component {
                 &format!("max-age={}", wasm_conf.expires),
             )?;
         }
-        Ok(Error::Ok)
+        Ok(wasm_std::Error::Ok)
     }
 }
 

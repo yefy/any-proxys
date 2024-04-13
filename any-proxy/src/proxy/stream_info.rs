@@ -5,7 +5,7 @@ use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::{ArcMutex, OptionExt, Share, ShareRw};
+use any_base::typ::{ArcMutex, ArcMutexTokio, OptionExt, Share};
 use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,7 +21,7 @@ pub enum ErrStatus {
 }
 
 use crate::proxy::StreamStreamContext;
-use any_base::stream_flow::StreamFlowErr;
+use any_base::stream_flow::{StreamFlow, StreamFlowErr};
 /// 200 对应的详细错误
 //200
 use lazy_static::lazy_static;
@@ -129,6 +129,7 @@ impl ErrStatus200 for ErrStatusUpstream {
 
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use any_base::stream_flow;
+use std::collections::HashMap;
 
 pub struct ErrStatusInfo {
     pub err: StreamFlowErr,
@@ -218,7 +219,7 @@ pub struct StreamInfo {
     pub open_sendfile: Option<String>,
     pub ups_balancer: Option<ArcString>,
     pub is_proxy_protocol_hello: bool,
-    pub scc: ShareRw<StreamConfigContext>,
+    pub scc: OptionExt<Arc<StreamConfigContext>>,
     pub is_discard_timeout: bool,
     pub buffer_cache: Option<Arc<String>>,
     pub upstream_connect_info: Share<ConnectInfo>,
@@ -236,6 +237,8 @@ pub struct StreamInfo {
     pub ssc_upload: OptionExt<Arc<StreamStreamContext>>,
     pub session_id: u64,
     pub http_r: OptionExt<Arc<HttpStreamRequest>>,
+    pub wasm_socket_map:
+        HashMap<u64, ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>>,
 }
 
 impl StreamInfo {
@@ -275,7 +278,7 @@ impl StreamInfo {
             open_sendfile: None,
             ups_balancer: None,
             is_proxy_protocol_hello: false,
-            scc: ShareRw::default(),
+            scc: OptionExt::default(),
             is_discard_timeout: false,
             buffer_cache: None,
             upstream_connect_info: Share::default(),
@@ -293,6 +296,7 @@ impl StreamInfo {
             ssc_upload: OptionExt::default(),
             session_id,
             http_r: None.into(),
+            wasm_socket_map: HashMap::new(),
         }
     }
 

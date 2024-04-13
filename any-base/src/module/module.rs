@@ -796,9 +796,23 @@ pub struct Modules {
     merge_old_main_confs_map: ArcMutex<HashMap<i32, MergeOldMainConfs>>,
     merge_confs_map: ArcMutex<HashMap<i32, MergeConfs>>,
     is_work_thread: bool,
+    curr_module_confs: ArcUnsafeAny,
+    cmd_conf_type: usize,
 }
 unsafe impl Send for Modules {}
 impl Modules {
+    pub fn curr_conf(&self) -> &ArcUnsafeAny {
+        &self.curr_module_confs
+    }
+
+    pub fn set_cmd_conf_type(&mut self, cmd_conf_type: usize) {
+        self.cmd_conf_type = cmd_conf_type;
+    }
+
+    pub fn cmd_conf_type(&self) -> usize {
+        self.cmd_conf_type
+    }
+
     pub fn new(old_ms: Option<Modules>, is_work_thread: bool) -> Modules {
         let old_ms = if old_ms.is_some() {
             ArcMutex::new(old_ms.unwrap())
@@ -814,6 +828,8 @@ impl Modules {
             merge_old_main_confs_map: ArcMutex::default(),
             merge_confs_map: ArcMutex::default(),
             is_work_thread,
+            curr_module_confs: ArcUnsafeAny::default(),
+            cmd_conf_type: 0,
         }
     }
 
@@ -1245,7 +1261,7 @@ impl Modules {
 
     #[async_recursion(?Send)]
     pub async fn parse_config_file(
-        &self,
+        &mut self,
         conf_arg: &mut ConfArg,
         path_full_name: &str,
         module_confs: ArcUnsafeAny,
@@ -1275,7 +1291,7 @@ impl Modules {
     }
 
     pub async fn parse_config(
-        &self,
+        &mut self,
         conf_arg: &mut ConfArg,
         module_confs: ArcUnsafeAny,
     ) -> Result<()> {
@@ -1593,6 +1609,7 @@ impl Modules {
                         ret_errs(ret, conf_arg, &str_key)?;
                     } else {
                         conf_arg.curr_module_confs = module_confs.clone();
+                        self.curr_module_confs = module_confs.clone();
                         let module_conf = {
                             let module_confs = module_confs.get_mut::<Vec<ArcUnsafeAny>>();
                             module_confs[ctx_index as usize].clone()

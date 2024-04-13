@@ -1,9 +1,10 @@
 use crate::config::config_toml::AccessConfig;
-use crate::proxy::http_proxy::http_filter::http_filter_headers_pre::{run_wasm_plugin, WasmHost};
 use crate::proxy::proxy::AccessContext;
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::stream_var;
 use crate::util::var::Var;
+use crate::wasm::run_wasm_plugin;
+use crate::wasm::WasmHost;
 use any_base::typ::Share;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -103,8 +104,8 @@ impl AccessLog {
     pub async fn access_log(stream_info: Share<StreamInfo>) -> Result<()> {
         let stream_info = stream_info.get_mut();
         use crate::config::net_access_log;
-        let scc = stream_info.scc.get();
-        let net_access_log_conf = net_access_log::currs_conf(scc.net_server_confs());
+        let scc = stream_info.scc.clone();
+        let net_access_log_conf = net_access_log::curr_conf(scc.net_curr_conf());
 
         for (index, access) in net_access_log_conf.access.iter().enumerate() {
             if access.access_log {
@@ -158,8 +159,8 @@ impl AccessLog {
     pub async fn debug_access_log(stream_info: Share<StreamInfo>) -> Result<()> {
         let stream_info = stream_info.get();
         use crate::config::net_access_log;
-        let scc = stream_info.scc.get();
-        let net_access_log_conf = net_access_log::currs_conf(scc.net_server_confs());
+        let scc = stream_info.scc.clone();
+        let net_access_log_conf = net_access_log::curr_conf(scc.net_curr_conf());
 
         for (index, _) in net_access_log_conf.access.iter().enumerate() {
             let access_context = &net_access_log_conf.access_context[index];
@@ -189,24 +190,20 @@ impl AccessLog {
         if stream_info.get().scc.is_none() {
             return Ok(());
         }
+        let scc = stream_info.get().scc.clone();
         log::trace!(
             "session_id:{}, wasm_access_log",
             stream_info.get().session_id
         );
         use crate::config::net_access_log;
         use crate::config::net_core_wasm;
-        let (ms, net_curr_conf) = {
-            let stream_info = stream_info.get();
-            let scc = stream_info.scc.get();
-            (scc.ms(), scc.net_curr_conf())
-        };
-        let conf = net_access_log::curr_conf(&net_curr_conf);
+        let conf = net_access_log::curr_conf(scc.net_curr_conf());
 
         if conf.wasm_plugin_confs.is_none() {
             return Ok(());
         }
         let wasm_plugin_confs = conf.wasm_plugin_confs.as_ref().unwrap();
-        let net_core_wasm_conf = net_core_wasm::main_conf(&ms).await;
+        let net_core_wasm_conf = net_core_wasm::main_conf(scc.ms()).await;
         for wasm_plugin_conf in &wasm_plugin_confs.wasm {
             let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
             let plugin = WasmHost::new(stream_info.clone());

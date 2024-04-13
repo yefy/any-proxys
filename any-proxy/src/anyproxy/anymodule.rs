@@ -10,6 +10,7 @@ use crate::config::net;
 use crate::config::net_core;
 use crate::config::net_core_plugin;
 use crate::config::net_local;
+use crate::config::net_local_core;
 use crate::config::net_proxy_pass_quic;
 use crate::config::net_proxy_pass_ssl;
 use crate::config::net_proxy_pass_tcp;
@@ -82,6 +83,7 @@ pub fn add_modules() -> Result<()> {
     module::add_module(net::module())?;
     module::add_module(net_server::module())?;
     module::add_module(net_local::module())?;
+    module::add_module(net_local_core::module())?;
     module::add_module(net_core::module())?;
     module::add_module(net_core_plugin::module())?;
     module::add_module(net_server_core_plugin::module())?;
@@ -113,6 +115,10 @@ pub fn add_modules() -> Result<()> {
 
     use crate::config::net_access;
     module::add_module(net_access::module())?;
+
+    use crate::config::net_serverless;
+    module::add_module(net_serverless::module())?;
+
     use crate::config::net_access_log;
     module::add_module(net_access_log::module())?;
 

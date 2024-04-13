@@ -1,11 +1,12 @@
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
-use any_base::typ::{ArcMutex, ArcRwLock, OptionExt, ShareRw};
+use any_base::typ::{ArcMutex, ArcRwLock, OptionExt};
 //use hyper::body::HttpBody;
 use crate::config::net_core_proxy::CACHE_FILE_SLISE;
 use crate::proxy::http_proxy::http_cache_file::HttpCacheFile;
 use crate::proxy::http_proxy::http_header_parse::{http_headers_size, HttpParts};
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
+use crate::proxy::http_proxy::HttpHeaderResponse;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::io::async_write_msg::{MsgReadBufFile, MsgWriteBufBytes};
 use any_base::util::HttpHeaderExt;
@@ -249,7 +250,7 @@ pub struct HttpStreamRequestContext {
     pub r_out_main: Option<HttpOut>,
     pub in_body_buf: Option<HttpBodyBufFilter>,
     pub out_body_buf: Option<HttpBodyBufFilter>,
-    pub response_tx: Option<tokio::sync::oneshot::Sender<Response<Body>>>,
+    pub header_response: Arc<HttpHeaderResponse>,
 
     pub client_write_tx: Option<any_base::stream_channel_write::Stream>,
     pub executor_client_write: Option<ExecutorLocalSpawn>,
@@ -262,6 +263,7 @@ pub struct HttpStreamRequestContext {
     pub slice_upstream_index: i32,
     pub last_slice_upstream_index: i32,
     pub is_try_cache: bool,
+    pub wasm_body: Option<Body>,
 }
 
 impl HttpStreamRequestContext {
@@ -273,7 +275,7 @@ impl HttpStreamRequestContext {
 
 pub struct HttpStreamRequest {
     pub http_arg: ServerArg,
-    pub scc: ShareRw<StreamConfigContext>,
+    pub scc: Arc<StreamConfigContext>,
     pub ctx: ArcRwLock<HttpStreamRequestContext>,
     pub http_cache_file: OptionExt<HttpCacheFile>,
     pub cache_file_slice: u64,
@@ -291,15 +293,15 @@ impl HttpStreamRequest {
     pub async fn new(
         arg: ServerArg,
         http_arg: ServerArg,
-        scc: ShareRw<StreamConfigContext>,
         session_id: u64,
-        response_tx: tokio::sync::oneshot::Sender<Response<Body>>,
+        header_response: Arc<HttpHeaderResponse>,
         parts: HttpParts,
         request_upstream: Request<Body>,
         mut is_client_sendfile: bool,
         is_upstream_sendfile: bool,
         client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
     ) -> Result<HttpStreamRequest> {
+        let scc = http_arg.stream_info.get().scc.clone().unwrap();
         use crate::util::default_config::PAGE_SIZE;
         let page_size = PAGE_SIZE.load(Ordering::Relaxed);
 
@@ -354,7 +356,7 @@ impl HttpStreamRequest {
         };
 
         use crate::config::net_core_proxy;
-        let net_curr_conf = scc.get().net_curr_conf();
+        let net_curr_conf = scc.net_curr_conf();
         let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
 
         let http_request_slice = net_core_proxy_conf.proxy_request_slice;
@@ -447,7 +449,7 @@ impl HttpStreamRequest {
                 r_out_main: None,
                 in_body_buf: None,
                 out_body_buf: None,
-                response_tx: Some(response_tx),
+                header_response,
                 client_write_tx: None,
                 executor_client_write: None,
                 is_client_sendfile,
@@ -459,6 +461,7 @@ impl HttpStreamRequest {
                 last_slice_upstream_index: -1,
                 upstream_count_drop: UpstreamCountDrop::new(None),
                 is_try_cache: false,
+                wasm_body: None,
             }),
             http_cache_file: None.into(),
             cache_file_slice,

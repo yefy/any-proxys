@@ -51,9 +51,8 @@ pub async fn http_server_handle(
         is_directio: _is_directio,
         file_name,
     } = {
-        let scc = scc.get();
         use crate::config::net_server_stream_test;
-        let net_server_stream_test = net_server_stream_test::currs_conf(scc.net_server_confs());
+        let net_server_stream_test = net_server_stream_test::curr_conf(scc.net_curr_conf());
         log::info!("config:{:?}", net_server_stream_test.config);
         net_server_stream_test.config.clone()
     };

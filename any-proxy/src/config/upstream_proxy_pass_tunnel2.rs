@@ -10,8 +10,7 @@ use crate::tunnel2::connect as tunnel2_connect;
 use crate::upstream::UpstreamHeartbeatData;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
-use any_base::typ::Share;
+use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -266,7 +265,7 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
         host: String,
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
-    ) -> Result<Share<UpstreamHeartbeatData>> {
+    ) -> Result<ShareRw<UpstreamHeartbeatData>> {
         use crate::config::socket_tcp;
         use crate::config::tunnel2_core;
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
@@ -329,7 +328,7 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
             current_weight: 0,
         };
 
-        Ok(Share::new(ups_heartbeat))
+        Ok(ShareRw::new(ups_heartbeat))
     }
 }
 
@@ -354,7 +353,7 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
         host: String,
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
-    ) -> Result<Share<UpstreamHeartbeatData>> {
+    ) -> Result<ShareRw<UpstreamHeartbeatData>> {
         use crate::config::socket_tcp;
         use crate::config::tunnel2_core;
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
@@ -418,7 +417,7 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
             current_weight: 0,
         };
 
-        Ok(Share::new(ups_heartbeat))
+        Ok(ShareRw::new(ups_heartbeat))
     }
 }
 
@@ -443,7 +442,7 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
         host: String,
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
-    ) -> Result<Share<UpstreamHeartbeatData>> {
+    ) -> Result<ShareRw<UpstreamHeartbeatData>> {
         use crate::config::socket_quic;
         use crate::config::tunnel2_core;
         let socket_quic_conf = socket_quic::main_conf(&ms).await;
@@ -513,6 +512,6 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
             current_weight: 0,
         };
 
-        Ok(Share::new(ups_heartbeat))
+        Ok(ShareRw::new(ups_heartbeat))
     }
 }

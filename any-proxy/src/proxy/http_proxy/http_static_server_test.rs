@@ -2,11 +2,10 @@ use crate::proxy::http_proxy::http_connection;
 use crate::proxy::{ServerArg, StreamConfigContext};
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ShareRw;
 use anyhow::Result;
 use hyper::http::{Request, Response, StatusCode};
 use hyper::Body;
-//use std::io::Read;
+use std::sync::Arc;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -25,7 +24,7 @@ pub async fn http_server_handle(
 pub async fn http_server_run_handle(
     arg: ServerArg,
     http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     request: Request<Body>,
 ) -> Result<Response<Body>> {
     HttpStaticServer::new(arg, http_arg, request, scc)
@@ -37,7 +36,7 @@ pub struct HttpStaticServer {
     _arg: ServerArg,
     _http_arg: ServerArg,
     _req: Request<Body>,
-    _scc: ShareRw<StreamConfigContext>,
+    _scc: Arc<StreamConfigContext>,
 }
 
 impl HttpStaticServer {
@@ -45,7 +44,7 @@ impl HttpStaticServer {
         _arg: ServerArg,
         _http_arg: ServerArg,
         _req: Request<Body>,
-        _scc: ShareRw<StreamConfigContext>,
+        _scc: Arc<StreamConfigContext>,
     ) -> HttpStaticServer {
         HttpStaticServer {
             _arg,

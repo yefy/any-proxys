@@ -3,21 +3,21 @@ use super::upstream_heartbeat_server::UpstreamHeartbeatServer;
 use super::UpstreamData;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::module::module::Modules;
-use any_base::typ::ArcMutex;
+use any_base::typ::ShareRw;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashMap;
 
 pub struct UpstreamServer {
     executors: ExecutorsLocal,
-    ups_data: ArcMutex<UpstreamData>,
+    ups_data: ShareRw<UpstreamData>,
     ms: Modules,
 }
 
 impl UpstreamServer {
     pub fn new(
         executors: ExecutorsLocal,
-        ups_data: ArcMutex<UpstreamData>,
+        ups_data: ShareRw<UpstreamData>,
         ms: Modules,
     ) -> Result<UpstreamServer> {
         Ok(UpstreamServer {
@@ -92,7 +92,7 @@ impl UpstreamServer {
 
             if self.ups_data.get().is_dynamic_domain_change {
                 self.ups_data.get_mut().is_dynamic_domain_change = false;
-                self.ups_data.get_mut().is_heartbeat_disable = true;
+                self.ups_data.get_mut().is_heartbeat_change = true;
                 let mut domain_addrs = HashMap::new();
                 {
                     for (_, ups_dynamic_domain) in
@@ -212,12 +212,12 @@ impl UpstreamServer {
             }
 
             let ups_data = &mut *self.ups_data.get_mut();
-            if ups_data.is_heartbeat_disable {
-                ups_data.is_heartbeat_disable = false;
+            if ups_data.is_heartbeat_change {
+                ups_data.is_heartbeat_change = false;
                 ups_data.is_sort_heartbeats_active = true;
                 ups_data.ups_heartbeats_active.clear();
                 for (_, v) in ups_data.ups_heartbeats.iter().enumerate() {
-                    if !v.get().disable {
+                    if v.get().disable {
                         continue;
                     }
                     ups_data.ups_heartbeats_active.push(v.clone());

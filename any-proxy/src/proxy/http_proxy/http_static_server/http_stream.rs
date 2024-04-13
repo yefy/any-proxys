@@ -3,22 +3,23 @@ use crate::proxy::http_proxy::http_header_parse::copy_request_parts;
 use crate::proxy::http_proxy::http_stream_request::{
     HttpCacheStatus, HttpResponseBody, HttpStreamRequest,
 };
+use crate::proxy::http_proxy::{stream_send_err_head, HttpHeaderResponse};
 use crate::proxy::proxy;
 use crate::proxy::stream_info::{ErrStatus, StreamInfo};
 use crate::proxy::stream_start;
+use crate::proxy::util::{find_local, http_serverless, run_plugin_handle_http_serverless};
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
 use any_base::io::async_write_msg::MsgReadBufFile;
-use any_base::typ::{Share, ShareRw};
+use any_base::typ::Share;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
-use http::header::HOST;
+use http::HeaderValue;
 use http::Version;
-use http::{HeaderValue, StatusCode};
 use hyper::http::{Request, Response};
 use hyper::Body;
 use std::sync::Arc;
@@ -28,25 +29,26 @@ use std::sync::Arc;
 pub struct HttpStream {
     arg: ServerArg,
     http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     request: Option<Request<Body>>,
-    response_tx: Option<tokio::sync::oneshot::Sender<Response<Body>>>,
+    header_response: Arc<HttpHeaderResponse>,
 }
 
 impl HttpStream {
     pub fn new(
         arg: ServerArg,
         http_arg: ServerArg,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         request: Request<Body>,
-        tx: tokio::sync::oneshot::Sender<Response<Body>>,
+        response_tx: async_channel::Sender<Response<Body>>,
     ) -> HttpStream {
+        let header_response = Arc::new(HttpHeaderResponse::new(response_tx));
         HttpStream {
             arg,
             http_arg,
             scc,
             request: Some(request),
-            response_tx: Some(tx),
+            header_response,
         }
     }
 
@@ -58,7 +60,11 @@ impl HttpStream {
             .context
             .shutdown_thread_tx
             .subscribe();
+        let header_response = self.header_response.clone();
         let ret = stream_start::do_start(self, stream_info, shutdown_thread_rx).await;
+        if ret.is_err() {
+            let _ = stream_send_err_head(header_response).await;
+        }
         ret
     }
 }
@@ -68,44 +74,19 @@ impl proxy::Stream for HttpStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
         stream_info.get_mut().add_work_time1("http_static_server");
         self.http_arg.stream_info.get_mut().err_status = ErrStatus::Ok;
+        let scc = self.http_arg.stream_info.get().scc.clone().unwrap();
 
         let session_id = self.http_arg.stream_info.get().session_id;
         let request = self.request.take().unwrap();
         log::debug!(target: "ext3", "r.session_id:{}, client headers = {:#?}", session_id, request);
-        let mut part = copy_request_parts(&request);
-
-        let scheme = if self.http_arg.stream_info.get().server_stream_info.is_tls {
-            "https"
-        } else {
-            "http"
-        };
-
-        let req_host = request.headers().get(HOST).cloned();
-        if req_host.is_none() {
-            return Err(anyhow!("host nil"));
-        }
-        let req_host = req_host.unwrap();
-        let req_host = req_host.to_str().unwrap();
-        let uri = format!(
-            "{}://{}{}",
-            scheme,
-            req_host,
-            request
-                .uri()
-                .path_and_query()
-                .map(|x| x.as_str())
-                .unwrap_or("/")
-        );
-        let uri: http::Uri = uri.parse()?;
-        part.uri = uri;
+        let part = copy_request_parts(self.http_arg.stream_info.clone(), &request)?;
 
         let r = Arc::new(
             HttpStreamRequest::new(
                 self.arg.clone(),
                 self.http_arg.clone(),
-                self.scc.clone(),
                 session_id,
-                self.response_tx.take().unwrap(),
+                self.header_response.clone(),
                 part,
                 request,
                 false,
@@ -116,29 +97,25 @@ impl proxy::Stream for HttpStream {
         );
         r.ctx.get_mut().r_in.http_cache_status = HttpCacheStatus::Hit;
         r.http_arg.stream_info.get_mut().http_r = Some(r.clone()).into();
+        let ms = scc.ms().clone();
 
-        let plugin_http_header_in = {
-            use crate::config::net_core_plugin;
-            let ms = self.scc.get().ms.clone();
-            let http_core_plugin_main_conf = net_core_plugin::main_conf(&ms).await;
-            let plugin_http_header_in = http_core_plugin_main_conf.plugin_http_header_in.clone();
-            plugin_http_header_in
-        };
+        find_local(stream_info.clone())?;
+        let scc = stream_info.get().scc.clone().unwrap();
 
-        let plugin_http_header_in = plugin_http_header_in.get().await;
+        use crate::config::net_core_plugin;
+        let http_core_plugin_main_conf = net_core_plugin::main_conf(&ms).await;
+
+        let plugin_http_header_in = http_core_plugin_main_conf.plugin_http_header_in.get().await;
         (plugin_http_header_in)(r.clone()).await?;
+
+        if run_plugin_handle_http_serverless(scc.clone(), stream_info.clone()).await? {
+            return http_serverless(r, scc.clone()).await;
+        }
 
         let ret = self.do_stream(r.clone()).await;
         if ret.is_err() {
-            let response_tx = r.ctx.get_mut().response_tx.take();
-            if response_tx.is_some() {
-                let response_tx = response_tx.unwrap();
-                let _ = response_tx.send(
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::default())?,
-                );
-            }
+            let header_response = self.header_response.clone();
+            let _ = stream_send_err_head(header_response).await;
         }
         return ret;
     }
@@ -146,6 +123,7 @@ impl proxy::Stream for HttpStream {
 
 impl HttpStream {
     async fn do_stream(&mut self, r: Arc<HttpStreamRequest>) -> Result<()> {
+        let scc = self.http_arg.stream_info.get().scc.clone();
         log::trace!("r.request.version:{:?}", r.ctx.get().r_in.version);
         let is_client_sendfile_version = match &r.ctx.get().r_in.version {
             &Version::HTTP_2 => false,
@@ -162,22 +140,19 @@ impl HttpStream {
             plugin_http_body_filter,
         ) = {
             use crate::config::net_core_plugin;
-            let ms = self.scc.get().ms.clone();
-            let http_core_plugin_main_conf = net_core_plugin::main_conf(&ms).await;
+            let http_core_plugin_main_conf = net_core_plugin::main_conf(scc.ms()).await;
             let plugin_http_header_filter =
                 http_core_plugin_main_conf.plugin_http_header_filter.clone();
             let plugin_http_body_filter =
                 http_core_plugin_main_conf.plugin_http_body_filter.clone();
 
-            let scc = self.scc.get();
             let net_core_conf = scc.net_core_conf();
 
             let is_open_sendfile = net_core_conf.is_open_sendfile;
             let directio = net_core_conf.directio;
 
             use crate::config::net_server_static_http;
-            let http_server_static_conf =
-                net_server_static_http::currs_conf(scc.net_server_confs());
+            let http_server_static_conf = net_server_static_http::curr_conf(scc.net_curr_conf());
             let mut seq = "";
             let r_ctx = &*r.ctx.get();
             let mut name = r_ctx.r_in.uri.path();

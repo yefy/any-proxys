@@ -3,6 +3,7 @@ use super::StreamConfigContext;
 use super::StreamStreamContext;
 use crate::protopack;
 use crate::proxy::stream_stream_buf::StreamStreamCacheWriteDeque;
+use crate::proxy::util::find_local;
 use crate::proxy::{
     util as proxy_util, DelayState, StreamCloseType, StreamStreamData, StreamStreamShare,
     StreamStreamShareContext,
@@ -27,11 +28,13 @@ pub struct StreamStream {}
 
 impl StreamStream {
     pub async fn connect_and_stream(
-        scc: ShareRw<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client_buffer: &[u8],
         client_stream: StreamFlow,
     ) -> Result<()> {
+        find_local(stream_info.clone())?;
+        let scc = stream_info.get().scc.clone().unwrap();
+
         let (is_proxy_protocol_hello, mut upstream_stream) =
             proxy_util::upsteam_connect(stream_info.clone(), scc.clone()).await?;
 
@@ -106,24 +109,32 @@ impl StreamStream {
 
     #[cfg(feature = "anyproxy-ebpf")]
     pub async fn connect_and_ebpf(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client_stream: StreamFlow,
     ) -> Result<Option<StreamFlow>> {
         use crate::config::any_ebpf_core;
         use crate::Protocol7;
-        let ms = scc.get().ms.clone();
-        let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
+        let any_ebpf_core_conf = any_ebpf_core::main_conf(scc.ms()).await;
         let ebpf_tx = any_ebpf_core_conf.ebpf();
         if ebpf_tx.is_none() {
             return Ok(Some(client_stream));
         }
+
+        find_local(stream_info.clone())?;
+        let scc = stream_info.get().scc.clone().unwrap();
 
         let (_, connect_func) =
             proxy_util::upsteam_connect_info(stream_info.clone(), scc.clone()).await?;
         if connect_func.protocol7().await != Protocol7::Tcp.to_string() {
             return Ok(Some(client_stream));
         }
+
+        use crate::proxy::util::run_plugin_handle_access;
+        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+            return Ok(None);
+        }
+
         let upstream_stream =
             proxy_util::upsteam_do_connect(stream_info.clone(), connect_func).await?;
 
@@ -144,14 +155,13 @@ impl StreamStream {
         w_wait: FutureWait,
         wait_group: &awaitgroup::WaitGroup,
         worker_inner: &awaitgroup::WorkerInner,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
     ) -> Result<()> {
         let mut data = vec![0; 8192];
         let data = data.as_mut_slice();
         let mut timeout = tokio::time::Duration::from_millis(u64::max_value());
         let wait_timeout = {
-            let ssc = scc.get();
-            let net_core_conf = ssc.net_core_conf();
+            let net_core_conf = scc.net_core_conf();
             let client_timeout_mil_time_ebpf = net_core_conf.client_timeout_mil_time_ebpf;
             let upstream_timeout_mil_time_ebpf = net_core_conf.upstream_timeout_mil_time_ebpf;
             if is_client {
@@ -203,7 +213,7 @@ impl StreamStream {
     }
 
     pub async fn wait_ebpf_stream(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         _stream_info: Share<StreamInfo>,
         client_stream: StreamFlow,
         upstream_stream: StreamFlow,
@@ -252,11 +262,10 @@ impl StreamStream {
     pub fn is_sendfile(
         client_stream_fd: i32,
         upstream_stream_fd: i32,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
     ) -> (bool, bool) {
         let mut stream_info = stream_info.get_mut();
-        let scc = scc.get();
         let net_core_conf = scc.net_core_conf();
         if net_core_conf.is_open_sendfile {
             let is_client_sendfile = if client_stream_fd > 0 {
@@ -284,20 +293,19 @@ impl StreamStream {
     }
 
     pub async fn ebpf_and_stream(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client_stream: StreamFlow,
         mut _upstream_stream: StreamFlow,
     ) -> Result<()> {
         #[cfg(feature = "anyproxy-ebpf")]
-        if scc.get().net_core_conf().is_open_ebpf {
+        if scc.net_core_conf().is_open_ebpf {
             let client_stream_fd = client_stream.raw_fd();
             let upstream_stream_fd = _upstream_stream.raw_fd();
 
             use crate::config::any_ebpf_core;
             use crate::ebpf::any_ebpf::AnyEbpfTx;
-            let ms = scc.get().ms.clone();
-            let any_ebpf_core_conf = any_ebpf_core::main_conf(&ms).await;
+            let any_ebpf_core_conf = any_ebpf_core::main_conf(scc.ms()).await;
             let ebpf_tx = any_ebpf_core_conf.ebpf();
             if ebpf_tx.is_some() && client_stream_fd > 0 && upstream_stream_fd > 0 {
                 let sock_map_data = {
@@ -373,7 +381,7 @@ impl StreamStream {
         );
 
         stream_info.get_mut().add_work_time1("stream_to_stream");
-        let close_type = scc.get().net_core_conf().close_type;
+        let close_type = scc.net_core_conf().close_type;
         let ret = StreamStream::stream_to_stream(
             scc.clone(),
             stream_info.clone(),
@@ -399,7 +407,7 @@ impl StreamStream {
     }
 
     pub async fn stream_to_stream(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
@@ -419,7 +427,7 @@ impl StreamStream {
 
         let (client_read, client_write) = client.split();
         let (upstream_read, upstream_write) = upstream.split();
-        let download = scc.get().net_core_conf().download.clone();
+        let download = scc.net_core_conf().download.clone();
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
@@ -447,7 +455,7 @@ impl StreamStream {
             other_close_wait: upload_close.clone(),
         });
 
-        let upload = scc.get().net_core_conf().upload.clone();
+        let upload = scc.net_core_conf().upload.clone();
         let ssc_upload = Arc::new(StreamStreamContext {
             cs: upload.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(upload.max_limit_rate as i64)),
@@ -514,7 +522,7 @@ impl StreamStream {
     }
 
     pub async fn stream_single(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
         is_sendfile: bool,
@@ -530,9 +538,9 @@ impl StreamStream {
 
         let (client_read, client_write) = client.split();
         let download = if is_download {
-            scc.get().net_core_conf().download.clone()
+            scc.net_core_conf().download.clone()
         } else {
-            scc.get().net_core_conf().upload.clone()
+            scc.net_core_conf().upload.clone()
         };
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
@@ -586,7 +594,7 @@ impl StreamStream {
     }
 
     pub async fn stream_to_stream_single(
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
@@ -604,7 +612,7 @@ impl StreamStream {
 
         let (client_read, client_write) = client.split();
         let (upstream_read, upstream_write) = upstream.split();
-        let download = scc.get().net_core_conf().download.clone();
+        let download = scc.net_core_conf().download.clone();
         let ssc_download = Arc::new(StreamStreamContext {
             cs: download.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(download.max_limit_rate as i64)),
@@ -632,7 +640,7 @@ impl StreamStream {
             other_close_wait: upload_close.clone(),
         });
 
-        let upload = scc.get().net_core_conf().upload.clone();
+        let upload = scc.net_core_conf().upload.clone();
         let ssc_upload = Arc::new(StreamStreamContext {
             cs: upload.clone(),
             curr_limit_rate: Arc::new(AtomicI64::new(upload.max_limit_rate as i64)),
@@ -701,7 +709,7 @@ impl StreamStream {
 
     pub async fn do_single_stream_to_stream(
         ssc: Arc<StreamStreamContext>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         read: StreamFlowRead,
         write: StreamFlowWrite,
@@ -782,7 +790,7 @@ impl StreamStream {
 
     pub async fn do_stream_to_stream(
         ssc: Arc<StreamStreamContext>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
         stream_info: Share<StreamInfo>,
         r: StreamFlowRead,
         w: StreamFlowWrite,
@@ -829,7 +837,7 @@ impl StreamStream {
             stream_info
                 .get_mut()
                 .add_work_time2(ssc.is_client, "WaitEmpty");
-            let ms = scc.get().ms.clone();
+            let ms = scc.ms.clone();
             use crate::config::net_core_plugin;
             let net_core_plugin_conf = net_core_plugin::main_conf(&ms).await;
             net_core_plugin_conf.plugin_handle_stream_cache.clone()

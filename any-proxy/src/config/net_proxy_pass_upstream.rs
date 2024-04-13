@@ -20,7 +20,7 @@ lazy_static! {
         name: "proxy_pass_upstream".to_string(),
         set: |ms, conf_arg, cmd, conf| Box::pin(proxy_pass_upstream(ms, conf_arg, cmd, conf)),
         typ: module::CMD_TYPE_DATA,
-        conf_typ: conf::CMD_CONF_TYPE_SERVER,
+        conf_typ: conf::CMD_CONF_TYPE_LOCAL,
     },]);
 }
 

@@ -21,6 +21,7 @@ impl HttpStream {
         stream_info: Share<StreamInfo>,
         protocol7: &str,
     ) -> Result<Arc<hyper::Client<HttpHyperConnector>>> {
+        let scc = stream_info.get().scc.clone();
         let addr = connect_func.addr().await?;
         let is_http2 = match &version {
             &hyper::http::Version::HTTP_11 => false,
@@ -49,9 +50,8 @@ impl HttpStream {
             .set(upstream_connect_info);
 
         let http_context = {
-            let scc = self.scc.get();
             use crate::config::net_core;
-            let net_core_conf = net_core::currs_conf(scc.net_server_confs());
+            let net_core_conf = net_core::curr_conf(scc.net_curr_conf());
 
             if net_core_conf.is_disable_share_http_context {
                 self.http_arg.http_context.clone()

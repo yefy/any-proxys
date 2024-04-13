@@ -1,5 +1,6 @@
 /*
 域名解析器，支持全域名， 范域名， 全匹配
+domain str = "www.example.cn $$(..).example.cn $$(.*)";
  */
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub struct DomainIndex {
     domain_map: HashMap<String, i32>,
-    domain_regex_map: HashMap<String, (String, i32)>,
+    domain_regex_map: HashMap<String, (Regex, String, i32)>,
     full_match_index: Option<i32>,
 }
 
@@ -96,7 +97,8 @@ impl DomainIndex {
                         return Err(anyhow!("err:domain => domain:{}", v));
                     }
 
-                    domain_regex_map.insert(data, (v.to_string(), *index));
+                    let regex = Regex::new(v).map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
+                    domain_regex_map.insert(data, (regex, v.to_string(), *index));
                 } else {
                     log::trace!("v:{}", v);
                     if domain_map.get(v).is_some() {
@@ -146,12 +148,12 @@ impl DomainIndex {
                     if value.is_none() {
                         continue;
                     }
-                    let (regex, domain_index) = value.unwrap();
+                    let (regex, _, domain_index) = value.unwrap();
                     //log::debug!("regex:{}, domain_index:{}", regex, domain_index);
 
-                    let re = Regex::new(regex.as_str())
-                        .map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
-                    let caps = re.captures(domain);
+                    // let regex = Regex::new(regex.as_str())
+                    //     .map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
+                    let caps = regex.captures(domain);
                     if caps.is_none() {
                         continue;
                     } else {

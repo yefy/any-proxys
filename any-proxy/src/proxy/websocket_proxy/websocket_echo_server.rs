@@ -7,12 +7,12 @@ use crate::Protocol77;
 use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ShareRw;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
 use futures_util::{SinkExt, StreamExt};
+use std::sync::Arc;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::WebSocketStream;
 
@@ -133,17 +133,14 @@ impl WebsocketServer {
     pub async fn steam_to_stream(
         &self,
         client_stream: WebSocketStream<BufStream<StreamFlow>>,
-        scc: ShareRw<StreamConfigContext>,
+        scc: Arc<StreamConfigContext>,
     ) -> Result<()> {
-        let body = {
-            let scc = scc.get();
-            use crate::config::net_server_echo_websocket;
-            let http_server_echo_websocket_conf =
-                net_server_echo_websocket::currs_conf(scc.net_server_confs());
-            http_server_echo_websocket_conf.body.clone()
-        };
+        use crate::config::net_server_echo_websocket;
+        let http_server_echo_websocket_conf =
+            net_server_echo_websocket::curr_conf(scc.net_curr_conf());
         let (mut w, _r) = client_stream.split();
-        w.send(body.into()).await?;
+        w.send(http_server_echo_websocket_conf.body.clone().into())
+            .await?;
         Ok(())
     }
 }

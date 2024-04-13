@@ -435,10 +435,6 @@ pub struct Var {
 
 impl Var {
     pub fn new(vars_str: &str, default_str: &str) -> Result<Var> {
-        if vars_str.len() <= 0 {
-            return Err(anyhow!("err:var nil"))?;
-        }
-
         //let mut items = Vec::with_capacity(50);
         let mut datas = Vec::with_capacity(50);
         let mut vars = vars_str;

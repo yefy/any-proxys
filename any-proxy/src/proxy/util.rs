@@ -1,9 +1,11 @@
 use crate::protopack::anyproxy::{AnyproxyHello, ANYPROXY_VERSION};
+use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::stream_info::{ErrStatus, StreamInfo};
 use crate::proxy::{stream_var, ServerArg, StreamConfigContext};
 use crate::stream::connect::Connect;
+use crate::util::var::Var;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::{Share, ShareRw};
+use any_base::typ::{ArcMutexTokio, ArcUnsafeAny, Share};
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -14,7 +16,7 @@ pub async fn parse_proxy_domain<S, SF, D, DF>(
     arg: &ServerArg,
     hello_service: S,
     domain_service: D,
-) -> Result<ShareRw<StreamConfigContext>>
+) -> Result<Arc<StreamConfigContext>>
 where
     S: FnOnce() -> SF,
     SF: Future<Output = Result<Option<(AnyproxyHello, usize)>>>,
@@ -90,9 +92,8 @@ where
     let scc = domain_config_context.scc.clone();
     {
         let mut stream_info = arg.stream_info.get_mut();
-        let scc_ = scc.get();
-        let net_core_conf = scc_.net_core_conf();
-        stream_info.scc = scc.clone();
+        let net_core_conf = scc.net_core_conf();
+        stream_info.scc = Some(scc.clone()).into();
         stream_info.debug_is_open_print = net_core_conf.debug_is_open_print;
         stream_info.debug_is_open_stream_work_times = net_core_conf.debug_is_open_stream_work_times;
         stream_info.debug_print_access_log_time = net_core_conf.debug_print_access_log_time;
@@ -104,7 +105,7 @@ where
 
 pub async fn upsteam_connect_info(
     stream_info: Share<StreamInfo>,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
 ) -> Result<(Option<bool>, Arc<Box<dyn Connect>>)> {
     let client_ip = stream_var::client_ip(&stream_info.get());
     let client_ip = if client_ip.is_none() {
@@ -119,16 +120,18 @@ pub async fn upsteam_connect_info(
         }
     };
     stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
-    let (ups_balancer, connect_info) = {
-        use crate::config::net_server_core;
-        let upstream_data = {
-            let scc = scc.get();
-            let net_server_core_conf = net_server_core::currs_conf(scc.net_server_confs());
-            net_server_core_conf.upstream_data.clone()
-        };
-        let ret = upstream_data.get_mut().balancer_and_connect(&client_ip)?;
-        ret
-    };
+
+    use crate::config::net_server_core;
+    let net_server_core_conf = net_server_core::curr_conf(scc.net_curr_conf());
+    if net_server_core_conf.upstream_data.is_none() {
+        return Err(anyhow!("err:upstream_data.is_none"));
+    }
+
+    let (ups_balancer, connect_info) = net_server_core_conf
+        .upstream_data
+        .get_mut()
+        .balancer_and_connect(&client_ip)?;
+
     stream_info.get_mut().ups_balancer = Some(ups_balancer);
     if connect_info.is_none() {
         return Err(anyhow!("err: connect_func nil"));
@@ -189,7 +192,7 @@ pub async fn upsteam_do_connect(
 
 pub async fn upsteam_connect(
     stream_info: Share<StreamInfo>,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
 ) -> Result<(Option<bool>, StreamFlow)> {
     stream_info.get_mut().add_work_time1("upsteam_connect");
 
@@ -204,12 +207,11 @@ pub async fn upsteam_connect(
 pub async fn get_proxy_hello(
     is_proxy_protocol_hello: Option<bool>,
     stream_info: Share<StreamInfo>,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
 ) -> Option<Arc<AnyproxyHello>> {
     let is_proxy_protocol_hello = {
         let mut stream_info = stream_info.get_mut();
         stream_info.err_status = ErrStatus::Ok;
-        let scc = scc.get();
         let is_proxy_protocol_hello = if is_proxy_protocol_hello.is_none() {
             scc.net_core_conf().is_proxy_protocol_hello
         } else {
@@ -228,11 +230,10 @@ pub async fn get_proxy_hello(
 }
 
 pub async fn run_plugin_handle_access(
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     stream_info: Share<StreamInfo>,
-) -> Result<()> {
+) -> Result<bool> {
     let plugin_handle_access = {
-        let scc = scc.get();
         use crate::config::net_core_plugin;
         //___wait___
         //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
@@ -251,8 +252,205 @@ pub async fn run_plugin_handle_access(
             crate::Error::Error => {
                 return Err(anyhow::anyhow!("err:plugin_handle_access"));
             }
+            crate::Error::Return => {
+                return Ok(true);
+            }
             _ => {}
         }
     }
+    Ok(false)
+}
+
+pub async fn run_plugin_handle_serverless(
+    scc: Arc<StreamConfigContext>,
+    stream_info: Share<StreamInfo>,
+    client_buf_reader: any_base::io_rb::buf_reader::BufReader<StreamFlow>,
+) -> Result<Option<any_base::io_rb::buf_reader::BufReader<StreamFlow>>> {
+    use crate::config::net_serverless;
+    let conf = net_serverless::curr_conf(scc.net_curr_conf());
+
+    if conf.wasm_plugin_confs.is_none() {
+        return Ok(Some(client_buf_reader));
+    }
+
+    let client_buf_reader =
+        any_base::io::buf_reader::BufReader::from_rb_buf_reader(client_buf_reader);
+    let client_buf_stream = any_base::io::buf_writer::BufWriter::new(client_buf_reader);
+    let client_buf_stream = any_base::io::buf_stream::BufStream::from(client_buf_stream);
+    let client_buf_stream = ArcMutexTokio::new(client_buf_stream);
+    stream_info
+        .get_mut()
+        .wasm_socket_map
+        .insert(0, client_buf_stream);
+
+    use crate::config::net_core_plugin;
+    //___wait___
+    //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+    let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+
+    for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await {
+        let err = (plugin_handle_serverless)(stream_info.clone()).await?;
+        match err {
+            crate::Error::Ok => {}
+            crate::Error::Break => {}
+            crate::Error::Finish => {
+                break;
+            }
+            crate::Error::Error => {
+                return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
+            }
+            crate::Error::Return => {
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+pub async fn run_plugin_handle_http_serverless(
+    scc: Arc<StreamConfigContext>,
+    stream_info: Share<StreamInfo>,
+) -> Result<bool> {
+    use crate::config::net_serverless;
+    let conf = net_serverless::curr_conf(scc.net_curr_conf());
+
+    if conf.wasm_plugin_confs.is_none() {
+        return Ok(false);
+    }
+
+    use crate::config::net_core_plugin;
+    //___wait___
+    //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+    let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+
+    for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await {
+        let err = (plugin_handle_serverless)(stream_info.clone()).await?;
+        match err {
+            crate::Error::Ok => {}
+            crate::Error::Break => {}
+            crate::Error::Finish => {
+                break;
+            }
+            crate::Error::Error => {
+                return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
+            }
+            crate::Error::Return => {
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(true)
+}
+
+pub async fn http_serverless(
+    r: Arc<HttpStreamRequest>,
+    scc: Arc<StreamConfigContext>,
+) -> Result<()> {
+    let (plugin_http_header_filter, plugin_http_body_filter) = {
+        use crate::config::net_core_plugin;
+        let http_core_plugin_main_conf = net_core_plugin::main_conf(scc.ms()).await;
+        let plugin_http_header_filter =
+            http_core_plugin_main_conf.plugin_http_header_filter.clone();
+        let plugin_http_body_filter = http_core_plugin_main_conf.plugin_http_body_filter.clone();
+
+        (plugin_http_header_filter, plugin_http_body_filter)
+    };
+
+    let plugin_http_header_filter = plugin_http_header_filter.get().await;
+    (plugin_http_header_filter)(r.clone()).await?;
+
+    let body = r.ctx.get_mut().wasm_body.take();
+    if r.ctx.get().r_in.is_head || body.is_none() {
+        return Ok(());
+    }
+    use crate::proxy::http_proxy::http_stream_request::HttpResponseBody;
+    let upstream_body = HttpResponseBody::Body(body.unwrap());
+
+    let client_write_tx = r.ctx.get_mut().client_write_tx.take();
+    if client_write_tx.is_none() {
+        log::trace!(target: "ext", "r.session_id:{}-{}, Response disable body", r.session_id, r.local_cache_req_count);
+        return Ok(());
+    }
+    let mut client_write_tx = client_write_tx.unwrap();
+    use crate::proxy::http_proxy::http_stream::HttpStream as _HttpStream;
+    _HttpStream::stream_to_client(
+        r.clone(),
+        upstream_body,
+        plugin_http_body_filter,
+        &mut client_write_tx,
+    )
+    .await?;
+    r.ctx.get_mut().client_write_tx = Some(client_write_tx);
+    _HttpStream::stream_end_free(&r).await?;
+    return Ok(());
+}
+
+pub fn find_local(stream_info: Share<StreamInfo>) -> Result<()> {
+    let scc = stream_info.get().scc.clone();
+    use crate::config::net_local_core;
+    let net_local_core_conf = net_local_core::curr_conf(&scc.net_curr_conf());
+
+    let mut local: Option<ArcUnsafeAny> = None;
+
+    for local_rules in &net_local_core_conf.local_rules {
+        let stream_info = &*stream_info.get();
+        let mut data_format_vars = Var::copy(&local_rules.data_format_vars)
+            .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+        data_format_vars.for_each(|var| {
+            let var_name = Var::var_name(var);
+            let value = stream_var::find(var_name, &stream_info);
+            match value {
+                Err(e) => {
+                    log::error!("{}", anyhow!("{}", e));
+                    Ok(None)
+                }
+                Ok(value) => Ok(value),
+            }
+        })?;
+
+        let data = data_format_vars
+            .join()
+            .map_err(|e| anyhow!("err:data_format_vars.join => e:{}", e))?;
+        log::debug!("data:{}", data);
+        if local_rules.regex.is_none() {
+            let index = data.find(&local_rules.rule.filter);
+            if index.is_none() {
+                continue;
+            }
+            let index = index.unwrap();
+            if index != 0 {
+                continue;
+            }
+            local = Some(local_rules.local.clone());
+            break;
+        }
+
+        let caps = local_rules.regex.captures(&local_rules.rule.filter);
+        if caps.is_none() {
+            continue;
+        } else {
+            local = Some(local_rules.local.clone());
+            break;
+        }
+    }
+
+    let local = if local.is_none() {
+        net_local_core_conf.full_match_local_rule.local.clone()
+    } else {
+        local.unwrap()
+    };
+
+    let _ssc = Arc::new(StreamConfigContext {
+        ms: scc.ms.clone(),
+        net_confs: scc.net_confs.clone(),
+        server_confs: scc.server_confs.clone(),
+        curr_conf: local,
+        common_conf: scc.common_conf.clone(),
+    });
+
+    stream_info.get_mut().scc = Some(_ssc).into();
+
     Ok(())
 }

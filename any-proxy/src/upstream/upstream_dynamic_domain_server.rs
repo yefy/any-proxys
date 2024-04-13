@@ -1,19 +1,19 @@
 use super::UpstreamData;
 use crate::util;
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::ArcMutex;
+use any_base::typ::ShareRw;
 use anyhow::anyhow;
 use anyhow::Result;
 
 pub struct UpstreamDynamicDomainServer {
     executors: ExecutorsLocal,
-    ups_data: ArcMutex<UpstreamData>,
+    ups_data: ShareRw<UpstreamData>,
     ///vector中第几个域名的索引
     index: usize,
 }
 
 impl UpstreamDynamicDomainServer {
-    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ArcMutex<UpstreamData>, index: usize) {
+    pub fn spawn_local(executors: ExecutorsLocal, ups_data: ShareRw<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
             None,
@@ -31,7 +31,7 @@ impl UpstreamDynamicDomainServer {
     }
     pub fn new(
         executors: ExecutorsLocal,
-        ups_data: ArcMutex<UpstreamData>,
+        ups_data: ShareRw<UpstreamData>,
         index: usize,
     ) -> Result<UpstreamDynamicDomainServer> {
         Ok(UpstreamDynamicDomainServer {

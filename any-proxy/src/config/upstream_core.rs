@@ -3,8 +3,7 @@ use crate::config::upstream_block;
 use crate::upstream::{UpstreamData, UpstreamHeartbeatData};
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
-use any_base::typ::{ArcMutex, Share};
+use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -23,12 +22,13 @@ pub trait HeartbeatI: Send + Sync + 'static {
         host: String,
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
-    ) -> Result<Share<UpstreamHeartbeatData>>;
+    ) -> Result<ShareRw<UpstreamHeartbeatData>>;
 }
 
 pub struct Conf {
     pub servers: Vec<Arc<upstream_block::Conf>>,
-    pub ups_data_map: HashMap<String, ArcMutex<UpstreamData>>,
+    pub ups_data_map: HashMap<String, ShareRw<UpstreamData>>,
+    pub is_work_thread: bool,
 }
 
 impl Conf {
@@ -36,13 +36,19 @@ impl Conf {
         Conf {
             servers: Vec::new(),
             ups_data_map: HashMap::new(),
+            is_work_thread: false,
         }
     }
 
     pub fn add_upstream(&mut self, upstream_block: upstream_block::Conf) -> Result<()> {
+        //___wait___
+        // if self.is_work_thread {
+        //     return Ok(());
+        // }
+
         let upstream_block = Arc::new(upstream_block);
-        let ups_data = ArcMutex::new(UpstreamData {
-            is_heartbeat_disable: false,
+        let ups_data = ShareRw::new(UpstreamData {
+            is_heartbeat_change: false,
             is_dynamic_domain_change: false,
             is_sort_heartbeats_active: false,
             ups_dynamic_domains: upstream_block.ups_dynamic_domains.clone(),
@@ -60,7 +66,7 @@ impl Conf {
         Ok(())
     }
 
-    pub fn upstream_data(&self, name: &str) -> Option<ArcMutex<UpstreamData>> {
+    pub fn upstream_data(&self, name: &str) -> Option<ShareRw<UpstreamData>> {
         self.ups_data_map.get(name).cloned()
     }
 }
@@ -163,11 +169,29 @@ async fn merge_conf(
 async fn merge_old_conf(
     _old_ms: Option<module::Modules>,
     _old_main_conf: Option<typ::ArcUnsafeAny>,
-    _old_conf: Option<typ::ArcUnsafeAny>,
-    _ms: module::Modules,
+    old_conf: Option<typ::ArcUnsafeAny>,
+    ms: module::Modules,
     _main_conf: typ::ArcUnsafeAny,
-    _conf: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
+    //___wait___
+    if true {
+        return Ok(());
+    }
+
+    let conf = conf.get_mut::<Conf>();
+    conf.is_work_thread = ms.is_work_thread();
+    if !ms.is_work_thread() {
+        return Ok(());
+    }
+
+    if old_conf.is_none() {
+        return Err(anyhow::anyhow!("err:upstream_core old_conf.is_none"));
+    }
+    let old_conf = old_conf.as_ref().unwrap().get_mut::<Conf>();
+    conf.servers = old_conf.servers.clone();
+    conf.ups_data_map = old_conf.ups_data_map.clone();
+
     return Ok(());
 }
 
@@ -190,7 +214,7 @@ fn create_server(value: typ::ArcUnsafeAny) -> Result<Box<dyn module::Server>> {
 }
 
 async fn server(
-    ms: module::Modules,
+    mut ms: module::Modules,
     mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,

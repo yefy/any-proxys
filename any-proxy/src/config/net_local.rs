@@ -47,7 +47,7 @@ lazy_static! {
 
 lazy_static! {
     pub static ref M: typ::ArcRwLock<module::Module> = typ::ArcRwLock::new(module::Module {
-        name: "netlocal".to_string(),
+        name: "net_local".to_string(),
         main_index: -1,
         ctx_index: -1,
         index: -1,
@@ -139,7 +139,7 @@ async fn init_conf(
 }
 
 async fn local(
-    ms: module::Modules,
+    mut ms: module::Modules,
     mut conf_arg: module::ConfArg,
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
@@ -155,6 +155,7 @@ async fn local(
     }
     let mut local_confs: Vec<typ::ArcUnsafeAny> = Vec::with_capacity(ctx_index_len as usize);
 
+    ms.set_cmd_conf_type(conf::CMD_CONF_TYPE_LOCAL);
     for module in ms.get_modules() {
         let (typ, func) = {
             let module_ = &*module.get();

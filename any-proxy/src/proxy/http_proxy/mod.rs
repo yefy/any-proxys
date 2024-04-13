@@ -30,7 +30,6 @@ use crate::Protocol77;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::stream_flow::StreamReadWriteFlow;
 use any_base::typ::Share;
-use any_base::typ::ShareRw;
 use any_base::util::{ArcString, HttpHeaderExt};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -44,13 +43,51 @@ use hyper::{Body, Request, Response};
 use lazy_static::lazy_static;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct HttpHeaderResponse {
+    response_tx: async_channel::Sender<Response<Body>>,
+    is_send: Arc<AtomicBool>,
+}
+
+impl HttpHeaderResponse {
+    pub fn new(response_tx: async_channel::Sender<Response<Body>>) -> HttpHeaderResponse {
+        HttpHeaderResponse {
+            response_tx,
+            is_send: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn is_send(&self) -> bool {
+        self.is_send.load(Ordering::SeqCst)
+    }
+
+    pub async fn send_header(&self, head: Response<Body>) -> Result<()> {
+        self.is_send.store(true, Ordering::SeqCst);
+        self.response_tx.send(head).await?;
+        Ok(())
+    }
+}
+
+pub async fn stream_send_err_head(header_response: Arc<HttpHeaderResponse>) -> Result<()> {
+    if !header_response.is_send() {
+        let _ = header_response
+            .send_header(
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::default())?,
+            )
+            .await;
+    }
+    Ok(())
+}
 
 type Handle = fn(
     arg: ServerArg,
     http_arg: ServerArg,
-    scc: ShareRw<StreamConfigContext>,
+    scc: Arc<StreamConfigContext>,
     request: Request<Body>,
 ) -> Pin<Box<dyn Future<Output = Result<Response<Body>>> + Send>>;
 
@@ -243,7 +280,11 @@ pub async fn do_http_handle(
     )
     .await?;
 
-    run_plugin_handle_access(scc.clone(), stream_info.clone()).await?;
+    if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+        return Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::default())?);
+    }
 
     (handle)(arg, http_arg, scc, request).await
 }
