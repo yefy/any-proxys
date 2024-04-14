@@ -187,6 +187,6 @@ async fn wasm_http_filter_headers(
     }
 
     c.wasm_plugin_confs = Some(wasm_plugin_confs);
-    log::trace!("c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
+    log::trace!(target: "main", "c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
     return Ok(());
 }

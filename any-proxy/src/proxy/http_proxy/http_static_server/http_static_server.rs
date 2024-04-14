@@ -84,8 +84,8 @@ impl HttpStaticServer {
     pub async fn do_run(&mut self) -> Result<Response<Body>> {
         self.http_arg.stream_info.get_mut().err_status = ErrStatus::Ok;
         let version = self.request.version();
-        log::trace!("self.request.version:{:?}", version);
-        log::trace!("self.request:{:?}", self.request);
+        log::trace!(target: "main", "self.request.version:{:?}", version);
+        log::trace!(target: "main", "self.request:{:?}", self.request);
         let is_client_sendfile = match version {
             Version::HTTP_2 => false,
             Version::HTTP_3 => false,
@@ -110,7 +110,7 @@ impl HttpStaticServer {
             let mut seq = "";
             let mut name = self.request.uri().path();
 
-            log::trace!("name:{}", name);
+            log::trace!(target: "main", "name:{}", name);
             if name.len() <= 0 || name == "/" {
                 seq = "/";
                 name = &http_server_static_conf.conf.index;

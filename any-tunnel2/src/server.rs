@@ -28,7 +28,7 @@ impl Listener {
 
     pub async fn accept(&mut self) -> Result<(Stream, SocketAddr, SocketAddr)> {
         let accept = self.accept_rx.recv().await?;
-        log::debug!("accept_rx recv");
+        log::debug!(target: "main", "accept_rx recv");
         Ok(accept)
     }
 }
@@ -155,7 +155,7 @@ impl Server {
         let tunnel_hello = protopack::read_tunnel_hello(&mut stream)
             .await
             .map_err(|e| anyhow!("err:read_tunnel_hello => e:{}", e))?;
-        log::debug!("server tunnel_hello:{:?}", tunnel_hello);
+        log::debug!(target: "main", "server tunnel_hello:{:?}", tunnel_hello);
 
         let peer_client_sender = self
             .insert_peer_client(

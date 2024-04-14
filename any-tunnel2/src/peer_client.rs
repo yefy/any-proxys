@@ -124,7 +124,7 @@ impl PeerClientAsync {
                 .load(Ordering::Relaxed);
             let peer_stream_max_len = self.peer_stream_max_len.load(Ordering::Relaxed);
 
-            log::debug!(
+            log::debug!(target: "main",
                 "peer_stream_len:{}, peer_stream_max_len:{}",
                 peer_stream_len,
                 peer_stream_max_len,
@@ -154,7 +154,7 @@ impl PeerClientAsync {
     pub async fn add_peer_stream(&self) -> Result<()> {
         let (peer_stream_connect, connect_addr) = self.peer_stream_connect.as_ref().unwrap();
 
-        log::debug!("connect_addr:{}", connect_addr);
+        log::debug!(target: "main", "connect_addr:{}", connect_addr);
         let (stream, _, _) = peer_stream_connect
             .connect()
             .await
@@ -332,7 +332,7 @@ impl PeerClient {
                     .await?;
                 return Ok(());
             }
-            log::debug!(
+            log::debug!(target: "main",
                 "peer_stream_len:{}, peer_stream_max_len:{}",
                 peer_stream_len,
                 peer_stream_max_len
@@ -361,7 +361,7 @@ impl PeerClient {
         let ret = self.stream_pack_tx_map.send(stream_id, pack).await;
         match ret {
             AnyAsyncSenderErr::Err(e) => {
-                log::debug!("stream_pack_tx_map:{}", e);
+                log::debug!(target: "main", "stream_pack_tx_map:{}", e);
                 return Ok(());
             }
             AnyAsyncSenderErr::Ok => {
@@ -370,7 +370,7 @@ impl PeerClient {
             AnyAsyncSenderErr::Close(_) => {}
             AnyAsyncSenderErr::None(pack) => {
                 if self.accept_tx.is_some() {
-                    log::debug!("accept_tx send");
+                    log::debug!(target: "main", "accept_tx send");
                     let stream = self
                         .register_stream(stream_id)
                         .await
@@ -428,7 +428,7 @@ impl PeerClient {
             version: TUNNEL_VERSION.to_string(),
             session_id,
         };
-        log::debug!("client hello_pack:{:?}", hello_pack);
+        log::debug!(target: "main", "client hello_pack:{:?}", hello_pack);
         protopack::write_pack(
             &mut stream,
             protopack::TunnelHeaderType::TunnelHello,
@@ -496,7 +496,7 @@ impl PeerClient {
         &mut self,
         stream_id: u32,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
-        log::debug!("accept_map stream_id:{:?}", stream_id);
+        log::debug!(target: "main", "accept_map stream_id:{:?}", stream_id);
         let peer_client_sender = &self.peer_client_sender;
         let local_addr = self.local_addr.clone();
         let remote_addr = self.remote_addr.clone();

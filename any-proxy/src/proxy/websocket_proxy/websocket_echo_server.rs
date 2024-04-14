@@ -53,7 +53,7 @@ impl WebsocketServer {
             for (k, v) in request.headers().iter() {
                 ups_request.headers_mut().insert(k, v.clone());
             }
-            log::debug!("request.headers:{:?}", request.headers());
+            log::debug!(target: "main", "request.headers:{:?}", request.headers());
             let host_func = |request: &Request| -> Result<String> {
                 let host = request
                     .headers()
@@ -113,7 +113,7 @@ impl WebsocketServer {
         if err.is_some() {
             return Err(err.unwrap());
         }
-        log::debug!("ws_host:{}", ws_host);
+        log::debug!(target: "main", "ws_host:{}", ws_host);
         let (domain, _) = host_and_port(&ws_host);
         let domain = ArcString::new(domain.to_string());
 

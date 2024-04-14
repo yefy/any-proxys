@@ -318,7 +318,7 @@ async fn proxy_cache(
     }
 
     c.proxy_cache_confs.push(proxy_cache_conf);
-    log::trace!("c.proxy_cache_confs:{:?}", c.proxy_cache_confs);
+    log::trace!(target: "main", "c.proxy_cache_confs:{:?}", c.proxy_cache_confs);
     return Ok(());
 }
 
@@ -335,7 +335,7 @@ async fn proxy_cache_name(
         return Err(anyhow!("err:c.proxy_cache_names.len() <= 0"));
     }
 
-    log::trace!("c.proxy_cache_names:{:?}", c.proxy_cache_names);
+    log::trace!(target: "main", "c.proxy_cache_names:{:?}", c.proxy_cache_names);
     return Ok(());
 }
 
@@ -378,7 +378,7 @@ async fn proxy_cache_key(
         )
     })?;
 
-    log::trace!("c.proxy_cache_key:{:?}", c.proxy_cache_key);
+    log::trace!(target: "main", "c.proxy_cache_key:{:?}", c.proxy_cache_key);
     return Ok(());
 }
 
@@ -395,6 +395,6 @@ async fn proxy_request_slice(
         return Err(anyhow!("err:c.proxy_request_slice <= 0"));
     }
 
-    log::trace!("c.proxy_request_slice:{:?}", c.proxy_request_slice);
+    log::trace!(target: "main", "c.proxy_request_slice:{:?}", c.proxy_request_slice);
     return Ok(());
 }

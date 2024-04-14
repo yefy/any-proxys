@@ -157,7 +157,7 @@ pub async fn set_header_filter(plugin: PluginHttpFilter) -> Result<()> {
 }
 
 pub async fn http_filter_header_start(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!("r.session_id:{}, http_filter_header_start", r.session_id);
+    log::trace!(target: "main", "r.session_id:{}, http_filter_header_start", r.session_id);
     let next = HEADER_FILTER_NEXT.get().await;
     if next.is_some() {
         (next)(r).await?;

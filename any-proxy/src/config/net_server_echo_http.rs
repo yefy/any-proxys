@@ -146,7 +146,7 @@ async fn net_server_echo_http(
     let str = conf_arg.value.get::<String>();
     let echo_conf: HttpServerEchoConfig =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("net_server_echo_http echo_conf:{:?}", echo_conf);
+    log::trace!(target: "main", "net_server_echo_http echo_conf:{:?}", echo_conf);
     conf.body = echo_conf.body;
 
     use crate::config::net_server_core_plugin;

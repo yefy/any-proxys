@@ -45,7 +45,7 @@ impl ExecutorLocalSpawnWaitRun {
         let index = self.worker_threads;
         self.worker_threads += 1;
         let version = self.executors.context.group_version;
-        log::debug!("start version:{}, worker_threads:{}", version, index,);
+        log::debug!(target: "main", "start version:{}, worker_threads:{}", version, index,);
 
         let wait_group_worker_inner = if is_wait {
             Some(self.executors.context.wait_group_worker.add())
@@ -62,7 +62,7 @@ impl ExecutorLocalSpawnWaitRun {
             .clone()
             .spawn(Box::pin(async move {
                 scopeguard::defer! {
-                    log::debug!("stop executor version:{} index:{}", version, index);
+                    log::debug!(target: "main", "stop executor version:{} index:{}", version, index);
                     if wait_group_worker_inner.is_some() {
                         wait_group_worker_inner.unwrap().done();
                     }
@@ -72,7 +72,7 @@ impl ExecutorLocalSpawnWaitRun {
                     err_run_wait_group_worker.error(anyhow!("err:executor_local_spawn_wait_run"));
                 }
 
-                log::debug!("start executor version:{} index:{}", version, index,);
+                log::debug!(target: "main", "start executor version:{} index:{}", version, index,);
 
                 let ret: Result<()> = async {
                     let async_local_context =
@@ -88,7 +88,7 @@ impl ExecutorLocalSpawnWaitRun {
     }
 
     pub async fn wait_run(&self) -> Result<()> {
-        log::debug!(
+        log::debug!(target: "main",
             "start wait_start version:{}, worker_executor:{}",
             self.executors.context.group_version,
             self.worker_threads
@@ -97,7 +97,7 @@ impl ExecutorLocalSpawnWaitRun {
             .wait_complete(self.worker_threads)
             .await
             .map_err(|e| anyhow!("err:wait_start => e:{}", e))?;
-        log::debug!(
+        log::debug!(target: "main",
             "end wait_start version:{}, worker_executor:{}",
             self.executors.context.group_version,
             self.worker_threads

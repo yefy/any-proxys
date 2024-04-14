@@ -167,7 +167,7 @@ pub async fn upsteam_do_connect(
 
     {
         let stream_info = stream_info.get();
-        log::trace!(
+        log::trace!(target: "main",
             "skip ebpf warning request_id:{}, server_stream_info:{:?}, ups_local_addr:{}, ups_remote_addr:{}",
             stream_info.request_id,
             stream_info.server_stream_info,
@@ -176,7 +176,7 @@ pub async fn upsteam_do_connect(
         );
     }
 
-    log::trace!(
+    log::trace!(target: "main",
         "upstream_protocol_name:{}",
         upstream_connect_info.protocol7.to_string()
     );
@@ -413,7 +413,7 @@ pub fn find_local(stream_info: Share<StreamInfo>) -> Result<()> {
         let data = data_format_vars
             .join()
             .map_err(|e| anyhow!("err:data_format_vars.join => e:{}", e))?;
-        log::debug!("data:{}", data);
+        log::debug!(target: "main", "data:{}", data);
         if local_rules.regex.is_none() {
             let index = data.find(&local_rules.rule.filter);
             if index.is_none() {

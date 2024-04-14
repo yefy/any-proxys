@@ -146,7 +146,7 @@ async fn proxy_pass_tcp(
     let str = conf_arg.value.get::<String>();
     let proxy_pass_conf: ProxyPassTcp =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("ProxyPassTcp proxy_pass_conf:{:?}", proxy_pass_conf);
+    log::trace!(target: "main", "ProxyPassTcp proxy_pass_conf:{:?}", proxy_pass_conf);
 
     let heartbeat: Arc<Box<dyn upstream_core::HeartbeatI>> =
         Arc::new(Box::new(Heartbeat::new(proxy_pass_conf.clone())));

@@ -21,7 +21,7 @@ impl TunnelStream {
         stream_info: Share<StreamInfo>,
         executors: ExecutorsLocal,
     ) -> Result<Option<any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>>> {
-        log::debug!(
+        log::debug!(target: "main",
             "server protocol7:{}",
             server_stream_info.protocol7.to_string()
         );
@@ -38,7 +38,7 @@ impl TunnelStream {
                 return Err(anyhow::anyhow!("tunnel_publish nil"));
             }
             let tunnel_hello = tunnel_hello.unwrap();
-            log::debug!("tunnel_hello:{:?}", tunnel_hello);
+            log::debug!(target: "main", "tunnel_hello:{:?}", tunnel_hello);
             stream_info.get_mut().is_discard_flow = true;
             stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(
@@ -92,7 +92,7 @@ impl TunnelStream {
                 return Err(anyhow::anyhow!("tunnel2_publish nil"));
             }
             let tunnel_hello = tunnel_hello.unwrap();
-            log::debug!("tunnel_hello:{:?}", tunnel_hello);
+            log::debug!(target: "main", "tunnel_hello:{:?}", tunnel_hello);
             stream_info.get_mut().is_discard_flow = true;
             stream_info.get_mut().is_discard_timeout = true;
             let client_buf_stream = any_base::io::buf_stream::BufStream::from(

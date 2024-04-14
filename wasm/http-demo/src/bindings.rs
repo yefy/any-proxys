@@ -5118,10 +5118,24 @@ pub mod exports {
                 pub type Error = super::super::super::super::component::server::wasm_std::Error;
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_run_cabi<T: Guest>(arg0: *mut u8, arg1: usize) -> *mut u8 {
-                    let len0 = arg1;
-                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
-                    let result1 = T::run(_rt::string_lift(bytes0));
+                pub unsafe fn _export_run_cabi<T: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    let result1 = T::run(match arg0 {
+                        0 => None,
+                        1 => {
+                            let e = {
+                                let len0 = arg2;
+                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+
+                                _rt::string_lift(bytes0)
+                            };
+                            Some(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    });
                     let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result1 {
                         Ok(e) => {
@@ -5154,7 +5168,7 @@ pub mod exports {
                     }
                 }
                 pub trait Guest {
-                    fn run(config: _rt::String) -> Result<Error, _rt::String>;
+                    fn run(config: Option<_rt::String>) -> Result<Error, _rt::String>;
                 }
                 #[doc(hidden)]
 
@@ -5162,8 +5176,8 @@ pub mod exports {
         ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
           #[export_name = "component:server/wasm-service#run"]
-          unsafe extern "C" fn export_run(arg0: *mut u8,arg1: usize,) -> *mut u8 {
-            $($path_to_types)*::_export_run_cabi::<$ty>(arg0, arg1)
+          unsafe extern "C" fn export_run(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
+            $($path_to_types)*::_export_run_cabi::<$ty>(arg0, arg1, arg2)
           }
           #[export_name = "cabi_post_component:server/wasm-service#run"]
           unsafe extern "C" fn _post_return_run(arg0: *mut u8,) {
@@ -5397,8 +5411,8 @@ pub(crate) use __export_wasm_server_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.21.0:wasm-server:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3342] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8c\x19\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3345] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8f\x19\x01A\x02\x01\
 A\x0f\x01B\x16\x01{\x04\0\x0bhttp-status\x03\0\0\x01p}\x04\0\x04body\x03\0\x02\x01\
 o\x02ss\x01p\x04\x04\0\x07headers\x03\0\x05\x01p\x04\x04\0\x06params\x03\0\x07\x01\
 s\x04\0\x03uri\x03\0\x09\x01m\x07\x03get\x04post\x03put\x06delete\x05patch\x04he\
@@ -5471,12 +5485,12 @@ m-store\x05\x05\x01B\x11\x01m\x03\x03tcp\x03ssl\x04quic\x04\0\x0bsocket-type\x03
 \x0bsocket-read\x01\x06\x04\0\x11socket-read-exact\x01\x06\x01@\x02\x02fdw\x04da\
 tas\0\x03\x04\0\x0csocket-write\x01\x07\x04\0\x10socket-write-all\x01\x07\x01j\0\
 \x01s\x01@\x01\x02fdw\0\x08\x04\0\x0csocket-flush\x01\x09\x04\0\x0csocket-close\x01\
-\x09\x03\x01\x19component:server/wasm-tcp\x05\x06\x02\x03\0\x01\x05error\x01B\x05\
-\x02\x03\x02\x01\x07\x04\0\x05error\x03\0\0\x01j\x01\x01\x01s\x01@\x01\x06config\
-s\0\x02\x04\0\x03run\x01\x03\x04\x01\x1dcomponent:server/wasm-service\x05\x08\x04\
-\x01\x1ccomponent:server/wasm-server\x04\0\x0b\x11\x01\0\x0bwasm-server\x03\0\0\0\
-G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.201.0\x10wit-bindge\
-n-rust\x060.21.0";
+\x09\x03\x01\x19component:server/wasm-tcp\x05\x06\x02\x03\0\x01\x05error\x01B\x06\
+\x02\x03\x02\x01\x07\x04\0\x05error\x03\0\0\x01ks\x01j\x01\x01\x01s\x01@\x01\x06\
+config\x02\0\x03\x04\0\x03run\x01\x04\x04\x01\x1dcomponent:server/wasm-service\x05\
+\x08\x04\x01\x1ccomponent:server/wasm-server\x04\0\x0b\x11\x01\0\x0bwasm-server\x03\
+\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.201.0\x10wit-\
+bindgen-rust\x060.21.0";
 
 #[inline(never)]
 #[doc(hidden)]

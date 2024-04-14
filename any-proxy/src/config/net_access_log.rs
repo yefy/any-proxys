@@ -32,7 +32,7 @@ impl Conf {
     pub async fn new() -> Result<Self> {
         let access_conf: AccessConfigs =
             toml::from_str("").map_err(|e| anyhow!("err: => e:{}", e))?;
-        log::trace!("access access_conf:{:?}", access_conf);
+        log::trace!(target: "main", "access access_conf:{:?}", access_conf);
         let access = access_conf.access;
 
         let access_context = AccessLog::parse_config_access_log(&access).await?;
@@ -209,7 +209,7 @@ async fn access(
     let str = conf_arg.value.get::<String>();
     let access_conf: AccessConfigs =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("access access_conf:{:?}", access_conf);
+    log::trace!(target: "main", "access access_conf:{:?}", access_conf);
     let access = access_conf.access;
 
     if access.len() <= 0 {
@@ -243,7 +243,7 @@ async fn wasm_access_log(
     }
 
     c.wasm_plugin_confs = Some(wasm_plugin_confs);
-    log::trace!("c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
+    log::trace!(target: "main", "c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
     return Ok(());
 }
 

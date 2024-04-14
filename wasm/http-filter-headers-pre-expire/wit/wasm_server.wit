@@ -2,7 +2,7 @@ package component:server;
 
 interface wasm-service {
     use wasm-std.{error};
-    run: func(config: string) -> result<error, string>;
+    run: func(config: option<string>) -> result<error, string>;
 }
 
 world wasm-server {

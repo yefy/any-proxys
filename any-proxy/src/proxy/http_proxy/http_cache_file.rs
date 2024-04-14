@@ -169,7 +169,7 @@ impl ProxyCache {
             &self.cache_conf.path
         };
         Self::load_file_full_path(file_full_name, &mut file_full_names)?;
-        log::debug!("file_full_names: {:?}", file_full_names);
+        log::debug!(target: "main", "file_full_names: {:?}", file_full_names);
 
         for file_full_name in file_full_names {
             let proxy_cache_path = ArcString::new(file_full_name);
@@ -301,12 +301,12 @@ impl ProxyCache {
             if path.is_dir() {
                 let name = path.file_name().unwrap().to_str().unwrap();
                 let file_full_path = format!("{}/{}", file_full_path, name);
-                log::debug!("{}", file_full_path);
+                log::debug!(target: "main", "{}", file_full_path);
                 Self::load_file_full_path(&file_full_path, file_full_names)?;
             } else {
                 let name = path.file_name().unwrap().to_str().unwrap();
                 let file_full_name = format!("{}/{}", file_full_path, name);
-                log::debug!("{}", file_full_name);
+                log::debug!(target: "main", "{}", file_full_name);
                 file_full_names.push(file_full_name);
             }
         }

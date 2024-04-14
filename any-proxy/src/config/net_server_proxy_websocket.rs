@@ -140,7 +140,7 @@ async fn net_server_proxy_websocket(
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
     let str = conf_arg.value.get::<String>();
-    log::trace!("net_server_proxy_websocket str:{:?}", str);
+    log::trace!(target: "main", "net_server_proxy_websocket str:{:?}", str);
 
     use crate::config::net_server_core_plugin;
     let net_server_core_plugin_conf = net_server_core_plugin::curr_conf_mut(conf_arg.curr_conf());

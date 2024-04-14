@@ -134,14 +134,14 @@ impl OpensslSni {
                         openssl::ssl::SniError::ALERT_FATAL
                     })?;
 
-                log::debug!("domain:{}", domain);
+                log::debug!(target: "main", "domain:{}", domain);
                 let domain_index = domain_index.get().index(domain).map_err(|_| {
                     log::error!("{}", "err:openssl cert nil");
                     *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
                     openssl::ssl::SniError::ALERT_FATAL
                 })?;
 
-                log::debug!("domain_index:{}", domain_index);
+                log::debug!(target: "main", "domain_index:{}", domain_index);
                 let sni_map = sni_map.get();
                 let ssl_context = sni_map.get(&domain_index).ok_or_else(|| {
                     *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
@@ -156,7 +156,7 @@ impl OpensslSni {
                 //             openssl::ssl::SniError::ALERT_FATAL
                 //         })
                 //         .and_then(|domain| {
-                //             log::debug!("domain:{}", domain);
+                //             log::debug!(target: "main", "domain:{}", domain);
                 //             domain_index.read().unwrap().as_ref().unwrap()
                 //                 .index(domain)
                 //                 .map_err(|_| {
@@ -165,7 +165,7 @@ impl OpensslSni {
                 //                     openssl::ssl::SniError::ALERT_FATAL
                 //                 })
                 //                 .and_then(|domain_index| {
-                //                     log::debug!("domain_index:{}", domain_index);
+                //                     log::debug!(target: "main", "domain_index:{}", domain_index);
                 //                     let sni_map = sni_map.read().unwrap();
                 //                     sni_map.as_ref().unwrap().get(&domain_index).ok_or_else(|| {
                 //                         *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();

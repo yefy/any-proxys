@@ -152,9 +152,9 @@ impl StreamPack {
             }
         }
             .await;
-        log::debug!("send_pack_close");
+        log::debug!(target: "main", "send_pack_close");
         if let Err(_) = self.send_pack_close().await {
-            log::debug!("send_pack_close err");
+            log::debug!(target: "main", "send_pack_close err");
         }
         ret?;
         Ok(())
@@ -187,7 +187,7 @@ impl StreamPack {
                         Ok(pack) => {
                             //let pack = peer_client_to_stream_pack_rx.recv().await;
                             if pack.is_err() {
-                                log::debug!("peer_client_to_stream_pack close");
+                                log::debug!(target: "main", "peer_client_to_stream_pack close");
                                 return Err(anyhow!("err:peer_client_to_stream_pack_rx close"));
                             }
                             let pack = pack.unwrap();
@@ -255,7 +255,7 @@ impl StreamPack {
                                         let mut waiting_pack_map =
                                             self.waiting_pack_map.lock().await;
                                         for pack_id in value.data.pack_ids.iter() {
-                                            log::trace!("pack_id drop:{:?}", pack_id);
+                                            log::trace!(target: "main", "pack_id drop:{:?}", pack_id);
                                             #[cfg(feature = "anydebug")]
                                             {
                                                 if pack_id % DEFAULT_PRINT_NUM == 0 {
@@ -361,7 +361,7 @@ impl StreamPack {
                             .map_err(|e| anyhow!("err:send_tunnel_data_ack => e:{}", e))?;
                         pack_ids.clear();
                     }
-                    log::trace!("tunnel_data.header:{:?}", tunnel_data.header);
+                    log::trace!(target: "main", "tunnel_data.header:{:?}", tunnel_data.header);
 
                     //尝试发送判断队列是否满了， 如果满了ack就不合并了马上发送， 为了在阻塞前windows窗口最大化
                     if let Err(e) = stream_pack_to_stream_tx.try_send(tunnel_data) {
@@ -381,7 +381,7 @@ impl StreamPack {
                         }
 
                         if let Err(_) = stream_pack_to_stream_tx.send(tunnel_data).await {
-                            log::debug!("stream_pack_to_stream_tx close");
+                            log::debug!(target: "main", "stream_pack_to_stream_tx close");
                             break;
                         }
                     } else {
@@ -402,7 +402,7 @@ impl StreamPack {
             }
             .await;
             if ret.is_err() {
-                log::debug!("peer_client_to_stream_pack close");
+                log::debug!(target: "main", "peer_client_to_stream_pack close");
                 self.is_close.swap(true, Ordering::Relaxed);
             }
         }
@@ -443,7 +443,7 @@ impl StreamPack {
                     pack_id,
                     pack_size: datas.len() as u32,
                 };
-                log::trace!("stream_pack_to_peer_client:{:?}", header);
+                log::trace!(target: "main", "stream_pack_to_peer_client:{:?}", header);
                 let value = Arc::new(TunnelData { header, datas });
                 self.stream_pack_to_peer_client(pack_id, TunnelArcPack::TunnelData(value), 0)
                     .await
@@ -452,12 +452,12 @@ impl StreamPack {
             }
             .await;
             if let Err(e) = ret {
-                log::debug!("stream_to_stream_pack_rx close, e:{}", e);
+                log::debug!(target: "main", "stream_to_stream_pack_rx close, e:{}", e);
                 return Ok(());
             }
 
             if self.is_close.load(Ordering::Relaxed) {
-                log::debug!("is_close stream_to_stream_pack_rx close");
+                log::debug!(target: "main", "is_close stream_to_stream_pack_rx close");
                 return Ok(());
             }
         }

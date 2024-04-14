@@ -118,7 +118,7 @@ impl PeerStream {
                     log::error!("err:TunnelHello => TunnelHello:{:?}", value);
                 }
                 TunnelPack::TunnelData(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelData:{:?}", value.header);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelData:{:?}", value.header);
                     #[cfg(feature = "anydebug")]
                     {
                         if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
@@ -136,7 +136,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelDataAck(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelDataAck:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelDataAck:{:?}", value);
 
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
@@ -148,7 +148,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelClose(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelClose:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelClose:{:?}", value);
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
                             value.stream_id,
@@ -159,7 +159,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelHeartbeat(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelHeartbeat:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelHeartbeat:{:?}", value);
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
                             value.stream_id,
@@ -170,7 +170,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelHeartbeatAck(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelHeartbeatAck:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelHeartbeatAck:{:?}", value);
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
                             value.stream_id,
@@ -181,7 +181,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelAddConnect(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelCreateConnect:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelCreateConnect:{:?}", value);
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
                             0,
@@ -192,7 +192,7 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:{}", e))?;
                 }
                 TunnelPack::TunnelMaxConnect(value) => {
-                    log::trace!("peer_stream_to_peer_client TunnelCreateConnect:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_to_peer_client TunnelCreateConnect:{:?}", value);
                     peer_stream_to_peer_client_tx
                         .send(PeerStreamTunnelData::new(
                             0,
@@ -216,17 +216,17 @@ impl PeerStream {
                 .await
                 .map_err(|_| anyhow!("pack_to_peer_stream_rx close"));
             if pack.is_err() {
-                log::debug!("pack_to_peer_stream_rx close");
+                log::debug!(target: "main", "pack_to_peer_stream_rx close");
                 return Ok(());
             }
             let pack = pack.unwrap();
-            log::trace!("peer_client_to_stream write_stream");
+            log::trace!(target: "main", "peer_client_to_stream write_stream");
             match pack {
                 TunnelArcPack::TunnelHello(value) => {
                     log::error!("err:TunnelHello => TunnelHello:{:?}", value);
                 }
                 TunnelArcPack::TunnelData(value) => {
-                    log::trace!("peer_stream_write TunnelData:{:?}", value.header);
+                    log::trace!(target: "main", "peer_stream_write TunnelData:{:?}", value.header);
                     #[cfg(feature = "anydebug")]
                     {
                         if value.header.pack_id % DEFAULT_PRINT_NUM == 0 {
@@ -238,13 +238,13 @@ impl PeerStream {
                         .map_err(|e| anyhow!("err:write_tunnel_data => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelDataAck(value) => {
-                    log::trace!("peer_stream_write TunnelDataAck:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelDataAck:{:?}", value);
                     protopack::write_tunnel_data_ack(&mut w, &value)
                         .await
                         .map_err(|e| anyhow!("err:write_tunnel_data_ack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelClose(value) => {
-                    log::trace!("peer_stream_write TunnelClose:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelClose:{:?}", value);
                     protopack::write_pack(
                         &mut w,
                         TunnelHeaderType::TunnelClose,
@@ -255,7 +255,7 @@ impl PeerStream {
                     .map_err(|e| anyhow!("err:protopack::write_pack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelHeartbeat(value) => {
-                    log::trace!("peer_stream_write TunnelHeartbeat:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelHeartbeat:{:?}", value);
                     protopack::write_pack(
                         &mut w,
                         TunnelHeaderType::TunnelHeartbeat,
@@ -266,7 +266,7 @@ impl PeerStream {
                     .map_err(|e| anyhow!("err:protopack::write_pack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelHeartbeatAck(value) => {
-                    log::trace!("peer_stream_write TunnelHeartbeatAck:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelHeartbeatAck:{:?}", value);
                     protopack::write_pack(
                         &mut w,
                         TunnelHeaderType::TunnelHeartbeatAck,
@@ -277,7 +277,7 @@ impl PeerStream {
                     .map_err(|e| anyhow!("err:protopack::write_pack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelAddConnect(value) => {
-                    log::trace!("peer_stream_write TunnelAddConnect:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelAddConnect:{:?}", value);
                     protopack::write_pack(
                         &mut w,
                         TunnelHeaderType::TunnelAddConnect,
@@ -288,7 +288,7 @@ impl PeerStream {
                     .map_err(|e| anyhow!("err:protopack::write_pack => e:{}", e))?;
                 }
                 TunnelArcPack::TunnelMaxConnect(value) => {
-                    log::trace!("peer_stream_write TunnelMaxConnect:{:?}", value);
+                    log::trace!(target: "main", "peer_stream_write TunnelMaxConnect:{:?}", value);
                     protopack::write_pack(
                         &mut w,
                         TunnelHeaderType::TunnelMaxConnect,

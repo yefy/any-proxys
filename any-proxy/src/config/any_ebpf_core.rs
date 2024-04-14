@@ -203,7 +203,7 @@ async fn data(
     let str = conf_arg.value.get::<String>();
     let ebpf_conf: EbpfConf =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("ebpf_conf:{:?}", ebpf_conf);
+    log::trace!(target: "main", "ebpf_conf:{:?}", ebpf_conf);
     conf.ebpf_conf = ebpf_conf.clone();
 
     ONCE.get_or_init(|| async move {

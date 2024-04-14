@@ -56,7 +56,7 @@ impl PortStream {
     }
 
     pub async fn start(self) -> Result<()> {
-        log::trace!("port stream start");
+        log::trace!(target: "main", "port stream start");
         let stream_info = {
             let session_id = {
                 use crate::config::common_core;
@@ -153,7 +153,7 @@ impl proxy::Stream for PortStream {
             match hello {
                 Some((mut hello, hello_pack_size)) => {
                     stream_info.get_mut().client_protocol_hello_size = hello_pack_size;
-                    log::debug!("hello:{:?}", hello);
+                    log::debug!(target: "main", "hello:{:?}", hello);
                     //优先使用hello的值
                     stream_info.get_mut().remote_domain = Some(hello.domain.clone());
                     if stream_info.get().local_domain.is_some() {
@@ -186,7 +186,7 @@ impl proxy::Stream for PortStream {
                         domain: stream_info.local_domain.clone().unwrap(),
                     };
 
-                    log::debug!("new hello:{:?}", hello);
+                    log::debug!(target: "main", "new hello:{:?}", hello);
                     hello
                 }
             }
@@ -197,7 +197,7 @@ impl proxy::Stream for PortStream {
 
             stream_info.protocol_hello.set(Arc::new(hello));
 
-            log::debug!(
+            log::debug!(target: "main",
                 "connect_and_stream request_id:{}, server_stream_info:{:?}",
                 stream_info.request_id,
                 self.server_stream_info

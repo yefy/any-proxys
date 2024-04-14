@@ -340,7 +340,7 @@ impl HttpStream {
                 let proxy_cache_key = proxy_cache_key_vars
                     .join()
                     .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
-                log::debug!(
+                log::debug!(target: "main",
                     "r.session_id:{}, proxy_cache_key:{}",
                     r.session_id,
                     proxy_cache_key
@@ -365,7 +365,7 @@ impl HttpStream {
             let md5 = format!("{:x}", md5);
             let crc32 = crc32fast::hash(md5.as_bytes()) as usize;
 
-            log::debug!(
+            log::debug!(target: "main",
                 "r.session_id:{}, is_request_cache:{}",
                 r.session_id,
                 is_request_cache
@@ -438,7 +438,7 @@ impl HttpStream {
 
                     proxy_cache_path_tmp.push_str(&format!("{}_{}_{}", md5, pid, tmpfile_id));
                     proxy_cache_path.push_str(&md5);
-                    log::debug!(
+                    log::debug!(target: "main",
                         "r.session_id:{}, proxy_cache_path:{}, proxy_cache_path_tmp:{}",
                         r.session_id,
                         proxy_cache_path,
@@ -464,7 +464,7 @@ impl HttpStream {
             } else {
                 true
             };
-            log::debug!(
+            log::debug!(target: "main",
                 "r.session_id:{}, is_request_cache:{}",
                 r.session_id,
                 is_request_cache
@@ -1231,7 +1231,7 @@ impl HttpStream {
                         upstream_waits: VecDeque::with_capacity(10),
                     }),
                 );
-                log::debug!(
+                log::debug!(target: "main",
                     "111111 r.session_id:{}, slice_index:{}, slice upstream:{}",
                     r.session_id,
                     slice_index,
@@ -1252,7 +1252,7 @@ impl HttpStream {
                         .upstream_count
                         .fetch_add(1, Ordering::Relaxed)
                         + 1;
-                    log::debug!(
+                    log::debug!(target: "main",
                         "2222222 r.session_id:{}, slice_index:{}, slice upstream:{}",
                         r.session_id,
                         slice_index,
@@ -1462,8 +1462,8 @@ impl HttpStream {
                 r.ctx.get_mut().r_out.head_upstream_size += head.len();
 
                 if r.ctx.get().r_out_main.is_none() {
-                    if log::log_enabled!(log::Level::Debug) {
-                        log::debug!(
+                    if log::log_enabled!(target: "main", log::Level::Debug) {
+                        log::debug!(target: "main",
                             "r.session_id:{}, raw head:{}",
                             r.session_id,
                             String::from_utf8_lossy(head.as_ref())
@@ -1479,11 +1479,11 @@ impl HttpStream {
                             .extensions()
                             .get::<hyper::AnyProxyRawHttpHeaderExt>();
                         if header_ext.is_some() {
-                            log::debug!("Response header_ext:{}", r.local_cache_req_count);
+                            log::debug!(target: "main", "Response header_ext:{}", r.local_cache_req_count);
                             let header_ext = header_ext.unwrap();
                             header_ext.0 .0.clone()
                         } else {
-                            log::debug!("nil Response header_ext:{}", r.local_cache_req_count);
+                            log::debug!(target: "main", "nil Response header_ext:{}", r.local_cache_req_count);
                             HttpHeaderExt::new()
                         }
                     } else {
@@ -1507,7 +1507,7 @@ impl HttpStream {
                 }
             }
             HttpRequest::CacheFileRequest(ups_request) => {
-                log::debug!("r.session_id:{}, slice local_req", r.session_id);
+                log::debug!(target: "main", "r.session_id:{}, slice local_req", r.session_id);
                 HttpResponse {
                     response: ups_request.response,
                     body: HttpResponseBody::File(ups_request.buf_file),

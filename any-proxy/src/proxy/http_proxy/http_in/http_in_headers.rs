@@ -19,7 +19,7 @@ pub async fn set_header_filter(plugin: PluginHttpIn) -> Result<()> {
 }
 
 pub async fn http_in_headers(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!("r.session_id:{}, http_in_headers", r.session_id);
+    log::trace!(target: "main", "r.session_id:{}, http_in_headers", r.session_id);
     do_http_in_headers(&r).await?;
 
     let next = HEADER_FILTER_NEXT.get().await;
@@ -30,7 +30,7 @@ pub async fn http_in_headers(r: Arc<HttpStreamRequest>) -> Result<()> {
 }
 
 pub async fn do_http_in_headers(r: &Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!("r.session_id:{}, http_in_headers", r.session_id);
+    log::trace!(target: "main", "r.session_id:{}, http_in_headers", r.session_id);
     use crate::config::http_in::http_in_headers;
     use crate::config::net_core_wasm;
     let conf = http_in_headers::curr_conf(r.scc.net_curr_conf());

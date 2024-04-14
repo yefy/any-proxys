@@ -183,7 +183,7 @@ async fn quic(
     let str = conf_arg.value.get::<String>();
     let quic_confs: QuicConfigs =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("socket_quic quic_confs:{:?}", quic_confs);
+    log::trace!(target: "main", "socket_quic quic_confs:{:?}", quic_confs);
 
     for quic_conf in &quic_confs.confs {
         if quic_conf.quic_config_name != default_quic_config_name() {

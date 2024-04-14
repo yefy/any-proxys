@@ -939,7 +939,7 @@ async fn stream_cache_size(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.stream_cache_size = *conf_arg.value.get::<usize>();
-    log::trace!("c.stream_cache_size:{:?}", c.stream_cache_size);
+    log::trace!(target: "main", "c.stream_cache_size:{:?}", c.stream_cache_size);
     return Ok(());
 }
 
@@ -951,7 +951,7 @@ async fn is_upload_open_stream_cache(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.is_upload_open_stream_cache = *conf_arg.value.get::<bool>();
-    log::trace!(
+    log::trace!(target: "main",
         "c.is_upload_open_stream_cache:{:?}",
         c.is_upload_open_stream_cache
     );
@@ -966,7 +966,7 @@ async fn is_download_open_stream_cache(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.is_download_open_stream_cache = *conf_arg.value.get::<bool>();
-    log::trace!(
+    log::trace!(target: "main",
         "c.is_download_open_stream_cache:{:?}",
         c.is_download_open_stream_cache
     );
@@ -981,7 +981,7 @@ async fn debug_is_open_stream_work_times(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.debug_is_open_stream_work_times = *conf_arg.value.get::<bool>();
-    log::trace!(
+    log::trace!(target: "main",
         "c.debug_is_open_stream_work_times:{:?}",
         c.debug_is_open_stream_work_times
     );
@@ -995,7 +995,7 @@ async fn debug_print_access_log_time(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.debug_print_access_log_time = *conf_arg.value.get::<u64>();
-    log::trace!(
+    log::trace!(target: "main",
         "c.debug_print_access_log_time:{:?}",
         c.debug_print_access_log_time
     );
@@ -1010,7 +1010,7 @@ async fn debug_print_stream_flow_time(
     let c = conf.get_mut::<Conf>();
     c.debug_print_stream_flow_time = *conf_arg.value.get::<u64>();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.debug_print_stream_flow_time:{:?}",
         c.debug_print_stream_flow_time
     );
@@ -1026,7 +1026,7 @@ async fn is_tmp_file_io_page(
     let c = conf.get_mut::<Conf>();
     c.is_tmp_file_io_page = *conf_arg.value.get::<bool>();
 
-    log::trace!("c.is_tmp_file_io_page:{:?}", c.is_tmp_file_io_page);
+    log::trace!(target: "main", "c.is_tmp_file_io_page:{:?}", c.is_tmp_file_io_page);
     return Ok(());
 }
 
@@ -1039,7 +1039,7 @@ async fn stream_so_singer_time(
     let c = conf.get_mut::<Conf>();
     c.stream_so_singer_time = *conf_arg.value.get::<usize>();
 
-    log::trace!("c.stream_so_singer_time:{:?}", c.stream_so_singer_time);
+    log::trace!(target: "main", "c.stream_so_singer_time:{:?}", c.stream_so_singer_time);
     return Ok(());
 }
 
@@ -1052,7 +1052,7 @@ async fn download_limit_rate_after(
     let c = conf.get_mut::<Conf>();
     c.download_limit_rate_after = *conf_arg.value.get::<u64>();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.download_limit_rate_after:{:?}",
         c.download_limit_rate_after
     );
@@ -1068,7 +1068,7 @@ async fn download_limit_rate(
     let c = conf.get_mut::<Conf>();
     c.download_limit_rate = *conf_arg.value.get::<u64>();
 
-    log::trace!("c.download_limit_rate:{:?}", c.download_limit_rate);
+    log::trace!(target: "main", "c.download_limit_rate:{:?}", c.download_limit_rate);
     return Ok(());
 }
 
@@ -1081,7 +1081,7 @@ async fn upload_limit_rate_after(
     let c = conf.get_mut::<Conf>();
     c.upload_limit_rate_after = *conf_arg.value.get::<u64>();
 
-    log::trace!("c.upload_limit_rate_after:{:?}", c.upload_limit_rate_after);
+    log::trace!(target: "main", "c.upload_limit_rate_after:{:?}", c.upload_limit_rate_after);
     return Ok(());
 }
 
@@ -1094,7 +1094,7 @@ async fn upload_limit_rate(
     let c = conf.get_mut::<Conf>();
     c.upload_limit_rate = *conf_arg.value.get::<u64>();
 
-    log::trace!("c.upload_limit_rate:{:?}", c.upload_limit_rate);
+    log::trace!(target: "main", "c.upload_limit_rate:{:?}", c.upload_limit_rate);
     return Ok(());
 }
 
@@ -1107,7 +1107,7 @@ async fn download_tmp_file_size(
     let c = conf.get_mut::<Conf>();
     c.download_tmp_file_size = *conf_arg.value.get::<u64>();
 
-    log::trace!("c.download_tmp_file_size:{:?}", c.download_tmp_file_size);
+    log::trace!(target: "main", "c.download_tmp_file_size:{:?}", c.download_tmp_file_size);
     return Ok(());
 }
 async fn upload_tmp_file_size(
@@ -1119,7 +1119,7 @@ async fn upload_tmp_file_size(
     let c = conf.get_mut::<Conf>();
     c.upload_tmp_file_size = *conf_arg.value.get::<u64>();
 
-    log::trace!("c.upload_tmp_file_size:{:?}", c.upload_tmp_file_size);
+    log::trace!(target: "main", "c.upload_tmp_file_size:{:?}", c.upload_tmp_file_size);
     return Ok(());
 }
 
@@ -1132,7 +1132,7 @@ async fn download_tmp_file_reopen_size(
     let c = conf.get_mut::<Conf>();
     c.download_tmp_file_reopen_size = *conf_arg.value.get::<u64>();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.download_tmp_file_reopen_size:{:?}",
         c.download_tmp_file_reopen_size
     );
@@ -1147,7 +1147,7 @@ async fn upload_tmp_file_reopen_size(
     let c = conf.get_mut::<Conf>();
     c.upload_tmp_file_reopen_size = *conf_arg.value.get::<u64>();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.upload_tmp_file_reopen_size:{:?}",
         c.upload_tmp_file_reopen_size
     );
@@ -1162,7 +1162,7 @@ async fn debug_is_open_print(
     let c = conf.get_mut::<Conf>();
     c.debug_is_open_print = *conf_arg.value.get::<bool>();
 
-    log::trace!("c.debug_is_open_print:{:?}", c.debug_is_open_print);
+    log::trace!(target: "main", "c.debug_is_open_print:{:?}", c.debug_is_open_print);
     return Ok(());
 }
 async fn is_open_sendfile(
@@ -1180,7 +1180,7 @@ async fn is_open_sendfile(
         }
     };
 
-    log::trace!("c.is_open_sendfile:{:?}", c.is_open_sendfile);
+    log::trace!(target: "main", "c.is_open_sendfile:{:?}", c.is_open_sendfile);
     return Ok(());
 }
 async fn sendfile_max_write_size(
@@ -1191,7 +1191,7 @@ async fn sendfile_max_write_size(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.sendfile_max_write_size = *conf_arg.value.get::<usize>();
-    log::trace!("c.sendfile_max_write_size:{:?}", c.sendfile_max_write_size);
+    log::trace!(target: "main", "c.sendfile_max_write_size:{:?}", c.sendfile_max_write_size);
     return Ok(());
 }
 async fn tcp_config_name(
@@ -1205,7 +1205,7 @@ async fn tcp_config_name(
     if tcp_config_name.len() > 0 {
         c.tcp_config_name = tcp_config_name;
     }
-    log::trace!("c.tcp_config_name:{:?}", c.tcp_config_name);
+    log::trace!(target: "main", "c.tcp_config_name:{:?}", c.tcp_config_name);
     return Ok(());
 }
 async fn quic_config_name(
@@ -1220,7 +1220,7 @@ async fn quic_config_name(
         c.quic_config_name = quic_config_name;
     }
 
-    log::trace!("c.quic_config_name:{:?}", c.quic_config_name);
+    log::trace!(target: "main", "c.quic_config_name:{:?}", c.quic_config_name);
     return Ok(());
 }
 
@@ -1233,7 +1233,7 @@ async fn is_proxy_protocol_hello(
     let c = conf.get_mut::<Conf>();
     c.is_proxy_protocol_hello = *conf_arg.value.get::<bool>();
 
-    log::trace!("c.is_proxy_protocol_hello:{:?}", c.is_proxy_protocol_hello);
+    log::trace!(target: "main", "c.is_proxy_protocol_hello:{:?}", c.is_proxy_protocol_hello);
     return Ok(());
 }
 
@@ -1246,7 +1246,7 @@ async fn domain(
     let c = conf.get_mut::<Conf>();
     c.domain = conf_arg.value.get::<String>().clone().into();
 
-    log::trace!("c.domain:{:?}", c.domain);
+    log::trace!(target: "main", "c.domain:{:?}", c.domain);
     return Ok(());
 }
 
@@ -1275,7 +1275,7 @@ async fn is_open_ebpf(
         }
     }
 
-    log::trace!("c.is_open_ebpf:{:?}", c.is_open_ebpf);
+    log::trace!(target: "main", "c.is_open_ebpf:{:?}", c.is_open_ebpf);
     return Ok(());
 }
 
@@ -1288,7 +1288,7 @@ async fn is_disable_share_http_context(
     let c = conf.get_mut::<Conf>();
     c.is_disable_share_http_context = conf_arg.value.get::<bool>().clone();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.is_disable_share_http_context:{:?}",
         c.is_disable_share_http_context
     );
@@ -1307,7 +1307,7 @@ async fn read_buffer_page_size(
         c.read_buffer_page_size = 2
     }
 
-    log::trace!("c.read_buffer_page_size:{:?}", c.read_buffer_page_size);
+    log::trace!(target: "main", "c.read_buffer_page_size:{:?}", c.read_buffer_page_size);
     return Ok(());
 }
 
@@ -1323,7 +1323,7 @@ async fn write_buffer_page_size(
         c.write_buffer_page_size = 2
     }
 
-    log::trace!("c.write_buffer_page_size:{:?}", c.write_buffer_page_size);
+    log::trace!(target: "main", "c.write_buffer_page_size:{:?}", c.write_buffer_page_size);
     return Ok(());
 }
 
@@ -1336,7 +1336,7 @@ async fn is_port_direct_ebpf(
     let c = conf.get_mut::<Conf>();
     c.is_port_direct_ebpf = conf_arg.value.get::<bool>().clone();
 
-    log::trace!("c.is_port_direct_ebpf:{:?}", c.is_port_direct_ebpf);
+    log::trace!(target: "main", "c.is_port_direct_ebpf:{:?}", c.is_port_direct_ebpf);
     return Ok(());
 }
 
@@ -1349,7 +1349,7 @@ async fn client_timeout_mil_time_ebpf(
     let c = conf.get_mut::<Conf>();
     c.client_timeout_mil_time_ebpf = conf_arg.value.get::<u64>().clone();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.client_timeout_mil_time_ebpf:{:?}",
         c.client_timeout_mil_time_ebpf
     );
@@ -1365,7 +1365,7 @@ async fn upstream_timeout_mil_time_ebpf(
     let c = conf.get_mut::<Conf>();
     c.upstream_timeout_mil_time_ebpf = conf_arg.value.get::<u64>().clone();
 
-    log::trace!(
+    log::trace!(target: "main",
         "c.upstream_timeout_mil_time_ebpf:{:?}",
         c.upstream_timeout_mil_time_ebpf
     );
@@ -1399,7 +1399,7 @@ async fn close_type(
         }
     }
 
-    log::trace!("c.close_type:{:?}", c.close_type);
+    log::trace!(target: "main", "c.close_type:{:?}", c.close_type);
     return Ok(());
 }
 
@@ -1415,7 +1415,7 @@ async fn stream_delay_mil_time(
         c.stream_delay_mil_time = STREAM_MAX_DELAY_MIL_TIME_DEFAULT;
     }
 
-    log::trace!("c.stream_delay_mil_time:{:?}", c.stream_delay_mil_time);
+    log::trace!(target: "main", "c.stream_delay_mil_time:{:?}", c.stream_delay_mil_time);
     return Ok(());
 }
 
@@ -1428,7 +1428,7 @@ async fn stream_nopush(
     let c = conf.get_mut::<Conf>();
     c.stream_nopush = conf_arg.value.get::<bool>().clone();
 
-    log::trace!("c.stream_nopush:{:?}", c.stream_nopush);
+    log::trace!(target: "main", "c.stream_nopush:{:?}", c.stream_nopush);
     return Ok(());
 }
 
@@ -1441,7 +1441,7 @@ async fn stream_nodelay_size(
     let c = conf.get_mut::<Conf>();
     c.stream_nodelay_size = conf_arg.value.get::<usize>().clone() as i64;
 
-    log::trace!("c.stream_nodelay_size:{:?}", c.stream_nodelay_size);
+    log::trace!(target: "main", "c.stream_nodelay_size:{:?}", c.stream_nodelay_size);
     return Ok(());
 }
 
@@ -1454,7 +1454,7 @@ async fn directio(
     let c = conf.get_mut::<Conf>();
     c.directio = conf_arg.value.get::<u64>().clone();
 
-    log::trace!("c.directio:{:?}", c.directio);
+    log::trace!(target: "main", "c.directio:{:?}", c.directio);
     return Ok(());
 }
 
@@ -1467,7 +1467,7 @@ async fn tmp_file_cache_size(
     let c = conf.get_mut::<Conf>();
     let tmp_file_cache_size = conf_arg.value.get::<usize>().clone();
     c.tmp_file_cache_size = tmp_file_cache_size;
-    log::trace!("c.tmp_file_cache_size:{:?}", c.tmp_file_cache_size);
+    log::trace!(target: "main", "c.tmp_file_cache_size:{:?}", c.tmp_file_cache_size);
     return Ok(());
 }
 
@@ -1480,7 +1480,7 @@ async fn expires(
     let c = conf.get_mut::<Conf>();
     let expires = conf_arg.value.get::<usize>().clone();
     c.expires = expires;
-    log::trace!("c.expires:{:?}", c.expires);
+    log::trace!(target: "main", "c.expires:{:?}", c.expires);
     return Ok(());
 }
 
@@ -1503,7 +1503,7 @@ async fn domain_from_http_v1(
     domain_from_http_v1.check_methods = check_methods;
 
     c.domain_from_http_v1 = Arc::new(domain_from_http_v1);
-    log::trace!("c.domain_from_http_v1:{:?}", c.domain_from_http_v1);
+    log::trace!(target: "main", "c.domain_from_http_v1:{:?}", c.domain_from_http_v1);
     return Ok(());
 }
 

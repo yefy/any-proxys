@@ -167,7 +167,7 @@ fn parse_if_none_match(r: &HttpStreamRequest) -> Option<bool> {
 }
 
 pub async fn http_filter_header_not_modified(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!(
+    log::trace!(target: "main",
         "r.session_id:{}, http_filter_header_not_modified",
         r.session_id
     );

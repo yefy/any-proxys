@@ -153,8 +153,8 @@ where
     let local_addr = listen_server
         .listen_addr()
         .map_err(|e| anyhow!("err:listen_server.listen_addr => e:{}", e))?;
-    if log::log_enabled!(log::Level::Debug) {
-        log::debug!(
+    if log::log_enabled!(target: "main", log::Level::Debug) {
+        log::debug!(target: "main",
             "start listen thread_id:{:?}, Protocol7:{}, listen_addr:{}",
             std::thread::current().id(),
             listen_server.protocol7().to_string(),
@@ -268,8 +268,8 @@ where
     executor
         .stop("listen stop", is_fast_shutdown, shutdown_timeout)
         .await;
-    if log::log_enabled!(log::Level::Debug) {
-        log::debug!(
+    if log::log_enabled!(target: "main", log::Level::Debug) {
+        log::debug!(target: "main",
             "close listen thread_id:{:?}, Protocol7{}, listen_addr:{}",
             std::thread::current().id(),
             listen_server.protocol7().to_string(),

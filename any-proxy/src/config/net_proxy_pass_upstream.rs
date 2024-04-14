@@ -138,7 +138,7 @@ async fn proxy_pass_upstream(
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
     let str = conf_arg.value.get::<String>();
-    log::trace!("proxy_pass_upstream str:{:?}", str);
+    log::trace!(target: "main", "proxy_pass_upstream str:{:?}", str);
 
     use crate::config::upstream_core;
     let upstream_core_conf = upstream_core::main_conf_mut(&ms).await;

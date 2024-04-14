@@ -186,9 +186,9 @@ async fn merge_confs(mut ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
             let module_ = module.get();
             let merge_conf = module_.func.merge_conf.clone();
             let net_conf = net_confs[module_.ctx_index as usize].clone();
+            log::trace!(target: "main", "net main_index:{}, ctx_index:{}, name:{}", module_.main_index, module_.ctx_index, module_.name);
             (merge_conf, net_conf)
         };
-
         (merge_conf)(ms.clone(), None, net_conf).await?;
     }
 
@@ -300,7 +300,7 @@ async fn merge_old_main_confs(
         } else {
             None
         };
-        log::trace!(
+        log::trace!(target: "main",
             "net merge_old_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,
@@ -343,7 +343,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
         if typ & conf::MODULE_TYPE_NET == 0 {
             continue;
         }
-        log::trace!(
+        log::trace!(target: "main",
             "net init_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,

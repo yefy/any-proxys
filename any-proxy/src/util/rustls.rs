@@ -113,12 +113,12 @@ impl ResolvesServerCertUsingSNI {
 impl ResolvesServerCert for ResolvesServerCertUsingSNI {
     fn resolve(&self, client_hello: ClientHello) -> Option<Arc<sign::CertifiedKey>> {
         if let Some(domain) = client_hello.server_name() {
-            log::trace!("domain:{}", domain);
+            log::trace!(target: "main", "domain:{}", domain);
             let domain_index = match self.domain_index.get().index(domain) {
                 Err(_) => return None,
                 Ok(domain_index) => domain_index,
             };
-            log::trace!("domain_index:{}", domain_index);
+            log::trace!(target: "main", "domain_index:{}", domain_index);
             self.by_name.get().get(&domain_index).cloned()
         } else {
             // This kind of resolver requires SNI
@@ -183,7 +183,7 @@ pub fn tls_acceptor(
             .with_cert_resolver(sni_rustls_map);
 
         // Configure ALPN to accept HTTP/2, HTTP/1.1 in that order.
-        //cfg.set_protocols(&[b"h2".to_vec(), b"http/1.1".to_vec()]);
+        //cfg.set_protocols(&[b"http/1.1".to_vec(), b"h2".to_vec()]);
         if alpn_protocols.len() > 0 {
             //server_crypto.alpn_protocols = protocols.to_vec();
             server_crypto.alpn_protocols = alpn_protocols;

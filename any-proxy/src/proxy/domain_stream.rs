@@ -60,7 +60,7 @@ impl DomainStream {
     }
 
     pub async fn start(self) -> Result<()> {
-        log::trace!("domain stream start");
+        log::trace!(target: "main", "domain stream start");
         use crate::config::net_core;
         let ms = self.ms.clone();
         let net_core_conf = net_core::main_conf_mut(&ms).await;

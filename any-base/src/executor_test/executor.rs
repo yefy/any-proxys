@@ -194,7 +194,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
-        log::debug!(
+        log::debug!(target: "main",
             "send version:{}, flag:{}, is_fast_shutdown:{}",
             self.executors.group_version,
             flag,
@@ -204,7 +204,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub async fn wait(&self, flag: &str) -> Result<()> {
-        log::debug!(
+        log::debug!(target: "main",
             "wait version:{}, flag:{}",
             self.executors.group_version,
             flag
@@ -229,7 +229,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
-        log::debug!(
+        log::debug!(target: "main",
             "stop version:{}, flag:{}, is_fast_shutdown:{}, \
         shutdown_timeout:{}, wait_group.count:{}",
             self.executors.group_version,
@@ -287,7 +287,7 @@ pub fn _start<S, F>(
     F: Future<Output = Result<()>> + Send + 'static,
 {
     let version = executors.group_version;
-    log::debug!(
+    log::debug!(target: "main",
         "start version:{}, worker_threads:{}",
         version,
         executors.wait_group_worker.count(),
@@ -303,7 +303,7 @@ pub fn _start<S, F>(
         #[cfg(feature = "anyspawn-count")]
         let name_defer = name.clone();
         scopeguard::defer! {
-            log::debug!("stop executor version:{}", version);
+            log::debug!(target: "main", "stop executor version:{}", version);
             if wait_group_worker_inner.is_some() {
                 wait_group_worker_inner.unwrap().done();
             }
@@ -324,7 +324,7 @@ pub fn _start<S, F>(
                 }
             }
         }
-        log::debug!("start executor version:{}", version);
+        log::debug!(target: "main", "start executor version:{}", version);
 
         #[cfg(feature = "anyspawn-count")]
         {

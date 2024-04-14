@@ -42,7 +42,7 @@ impl PortServer {
     }
 
     pub async fn start(&self) -> Result<()> {
-        log::trace!("port server start");
+        log::trace!(target: "main", "port server start");
         use crate::config::tunnel2_core;
         use crate::config::tunnel_core;
         let tunnel_core_conf = tunnel_core::main_conf_mut(&self.ms).await;

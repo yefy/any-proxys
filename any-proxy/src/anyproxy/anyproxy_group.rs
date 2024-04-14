@@ -34,7 +34,7 @@ impl AnyproxyGroup {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        log::trace!("anyproxy_group start");
+        log::trace!(target: "main", "anyproxy_group start");
         let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
         let mut ms = module::Modules::new(Some(self.ms.clone()), false);
         ms.parse_module_config(&file_name, None)
@@ -87,7 +87,7 @@ impl AnyproxyGroup {
         );
         let mut thread_pool_wait_run = thread_pool.thread_pool_wait_run();
         thread_pool_wait_run._start(move |async_context| {
-            log::debug!(
+            log::debug!(target: "main",
                 "group_version:{}, cpu_affinity:{}, thread_id:{:?}",
                 async_context.group_version,
                 async_context.cpu_affinity,

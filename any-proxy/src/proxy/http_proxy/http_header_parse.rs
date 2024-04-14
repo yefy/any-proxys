@@ -110,7 +110,7 @@ pub fn http_parse(buf: &Bytes) -> std::result::Result<(Response<Body>, usize), E
                 &mut headers,
             ) {
                 Ok(httparse::Status::Complete(len)) => {
-                    log::trace!("Response.parse Complete({})", len);
+                    log::trace!(target: "main", "Response.parse Complete({})", len);
                     let status = StatusCode::from_u16(response.code.unwrap())
                         .map_err(|_| ErrParse::Status)?;
 
@@ -135,7 +135,7 @@ pub fn http_parse(buf: &Bytes) -> std::result::Result<(Response<Body>, usize), E
                 }
                 Ok(httparse::Status::Partial) => return Err(ErrParse::Internal),
                 Err(httparse::Error::Version) if h09_responses => {
-                    log::trace!("Response.parse accepted HTTP/0.9 response",);
+                    log::trace!(target: "main", "Response.parse accepted HTTP/0.9 response",);
 
                     (0, StatusCode::OK, None, Version::HTTP_09, 0)
                 }
@@ -277,7 +277,7 @@ pub fn http_respons_to_vec(response: &Response<Body>) -> Vec<u8> {
             other => panic!("unexpected request version: {:?}", other),
         }
 
-        log::debug!(
+        log::debug!(target: "main",
             "respons_to_vec => {},{}",
             response.status().as_u16(),
             response.status().canonical_reason().unwrap()
@@ -292,7 +292,7 @@ pub fn http_respons_to_vec(response: &Response<Body>) -> Vec<u8> {
         write_headers(response.headers(), dst);
         extend(dst, b"\r\n");
 
-        log::debug!(
+        log::debug!(target: "main",
             "respons_to_vec:[{}]",
             String::from_utf8(data.clone()).unwrap()
         );

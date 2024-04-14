@@ -397,7 +397,7 @@ pub async fn read_buffer(sss: &StreamStreamShare) -> Result<StreamStatus> {
                 let mut data = vec![0u8; size];
                 let fr = fr.file.clone();
                 let fr = &mut *fr.get_mut();
-                log::trace!("tmpfile seek:{}, size:{}", seek, size);
+                log::trace!(target: "main", "tmpfile seek:{}, size:{}", seek, size);
                 fr.seek(std::io::SeekFrom::Start(seek))?;
                 let ret = fr
                     .read_exact(data.as_mut_slice())

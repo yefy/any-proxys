@@ -62,7 +62,7 @@ impl UpstreamHeartbeatServer {
             );
         }
 
-        log::debug!(
+        log::debug!(target: "main",
             "start upstream_heartbeat_server ups_name:[{}], addr:{}",
             ups_config_name,
             ups_heartbeat.get().addr
@@ -108,7 +108,7 @@ impl UpstreamHeartbeatServer {
                         .map_err(|e| anyhow!("err:connect => e:{}", e))?;
 
                     let (upstream_stream, upstream_connect_info) = connect_info;
-                    log::debug!(
+                    log::debug!(target: "main",
                         "new upstream_heartbeat upstream_addr:{}, remote_addr:{}",
                         upstream_connect_info.domain,
                         upstream_connect_info.remote_addr
@@ -150,7 +150,7 @@ impl UpstreamHeartbeatServer {
                         self.ups_data.get_mut().is_sort_heartbeats_active = true;
                     }
 
-                    log::debug!(
+                    log::debug!(target: "main",
                         "heartbeat name:{}, index:{}, domain_index:{}, index:{}, addr:{}",
                         ups_config_name,
                         self.index,

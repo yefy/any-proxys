@@ -443,7 +443,7 @@ impl AnyEbpf<'_> {
     ) -> anyhow::Result<()> {
         let mut maps_mut = skel.maps_mut();
 
-        log::trace!("socket_data:{:?}", socket_data);
+        log::trace!(target: "main", "socket_data:{:?}", socket_data);
 
         if socket_data.ups_fd > 0 {
             let ip = &socket_data.client_peer_addr.ip().to_string();
@@ -475,7 +475,7 @@ impl AnyEbpf<'_> {
                 local_port: socket_data.client_local_addr.port() as u16,
                 family: 2,
             };
-            log::trace!(
+            log::trace!(target: "main",
                 "ups_fd:{}, remote_ip4:{}, local_ip4:{}, remote_port:{}, local_port:{}",
                 socket_data.ups_fd,
                 key.remote_ip4,
@@ -485,7 +485,7 @@ impl AnyEbpf<'_> {
             );
             let key_bytes: &[u8] = unsafe { any_as_u8_slice(&key) };
 
-            log::trace!("ups_fd:{}, key_bytes:{:?}", socket_data.ups_fd, key_bytes);
+            log::trace!(target: "main", "ups_fd:{}, key_bytes:{:?}", socket_data.ups_fd, key_bytes);
             maps_mut
                 .sk_index_hash()
                 .update(
@@ -527,7 +527,7 @@ impl AnyEbpf<'_> {
                 local_port: socket_data.ups_local_addr.port() as u16,
                 family: 2,
             };
-            log::trace!(
+            log::trace!(target: "main",
                 "client_fd:{}, remote_ip4:{}, local_ip4:{}, remote_port:{}, local_port:{}",
                 socket_data.client_fd,
                 key.remote_ip4,
@@ -537,7 +537,7 @@ impl AnyEbpf<'_> {
             );
             let key_bytes: &[u8] = unsafe { any_as_u8_slice(&key) };
 
-            log::trace!(
+            log::trace!(target: "main",
                 "client_fd:{}, key_bytes:{:?}",
                 socket_data.client_fd,
                 key_bytes
@@ -574,7 +574,7 @@ impl AnyEbpf<'_> {
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
         }
 
-        log::trace!("ebpf  success");
+        log::trace!(target: "main", "ebpf  success");
 
         Ok(())
     }
@@ -589,7 +589,7 @@ impl AnyEbpf<'_> {
     ) -> anyhow::Result<()> {
         let mut maps_mut = skel.maps_mut();
 
-        log::trace!("del socket_data:{:?}", socket_data);
+        log::trace!(target: "main", "del socket_data:{:?}", socket_data);
 
         // if socket_data.ups_fd > 0 {
         //     let _ = maps_mut
@@ -627,7 +627,7 @@ impl AnyEbpf<'_> {
                 local_port: socket_data.client_local_addr.port() as u16,
                 family: 2,
             };
-            log::trace!(
+            log::trace!(target: "main",
                 "ups_fd:{}, remote_ip4:{}, local_ip4:{}, remote_port:{}, local_port:{}",
                 socket_data.ups_fd,
                 key.remote_ip4,
@@ -637,7 +637,7 @@ impl AnyEbpf<'_> {
             );
             let key_bytes: &[u8] = unsafe { any_as_u8_slice(&key) };
 
-            log::trace!("ups_fd:{}, key_bytes:{:?}", socket_data.ups_fd, key_bytes);
+            log::trace!(target: "main", "ups_fd:{}, key_bytes:{:?}", socket_data.ups_fd, key_bytes);
             maps_mut
                 .sk_index_hash()
                 .delete(key_bytes)
@@ -666,7 +666,7 @@ impl AnyEbpf<'_> {
                 local_port: socket_data.ups_local_addr.port() as u16,
                 family: 2,
             };
-            log::trace!(
+            log::trace!(target: "main",
                 "client_fd:{}, remote_ip4:{}, local_ip4:{}, remote_port:{}, local_port:{}",
                 socket_data.client_fd,
                 key.remote_ip4,
@@ -676,7 +676,7 @@ impl AnyEbpf<'_> {
             );
             let key_bytes: &[u8] = unsafe { any_as_u8_slice(&key) };
 
-            log::trace!(
+            log::trace!(target: "main",
                 "client_fd:{}, key_bytes:{:?}",
                 socket_data.client_fd,
                 key_bytes
@@ -687,7 +687,7 @@ impl AnyEbpf<'_> {
                 .map_err(|e| anyhow::anyhow!("update e:{}", e))?;
         }
 
-        log::trace!("ebpf  success");
+        log::trace!(target: "main", "ebpf  success");
 
         Ok(())
     }
@@ -703,7 +703,7 @@ impl AnyEbpf<'_> {
         if !cfg!(feature = "anyproxy-reuseport") {
             return Ok(());
         }
-        log::trace!("reuseport_data:{:?}", reuseport_data);
+        log::trace!(target: "main", "reuseport_data:{:?}", reuseport_data);
         let mut maps_mut = skel.maps_mut();
         maps_mut
             .quic_sockhash()

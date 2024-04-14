@@ -97,7 +97,7 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(cpu_core_ids) = core_affinity::get_core_ids() {
         log::info!("cpu_core_id num:{:?}", cpu_core_ids.len());
         for cpu_core_id in cpu_core_ids.iter() {
-            log::debug!("cpu_core_id:{:?}", cpu_core_id);
+            log::debug!(target: "main", "cpu_core_id:{:?}", cpu_core_id);
         }
     }
 

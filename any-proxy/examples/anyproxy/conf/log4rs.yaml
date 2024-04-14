@@ -22,6 +22,9 @@ root:
     - file
 
 loggers:
+  main:
+    level: info
+    additive: true
   ext:
     level: debug
     additive: false
@@ -61,6 +64,11 @@ loggers:
 #流程信息，调试程序只想到哪里了，循环打印，详细日志  例如：http请求 响应信息  log::debug!(target: "ext3", "ext3 debug");
 #调试循环信息，量非常大  log::trace!(target: "ext3", "ext3 trace");
 
+
+
+#log::debug!(target: "main", "main debug");
+#log::trace!(target: "main", "main trace");
+
 #log::error!(target: "ext", "ext error");
 #log::warn!(target: "ext", "ext warn");
 #log::info!(target: "ext", "ext info");
@@ -70,6 +78,8 @@ loggers:
 #log::debug!(target: "ext2", "ext2 debug");
 #log::trace!(target: "ext2", "ext2 trace");
 
+#log::debug!(target: "ext3", "ext3 debug");
+#log::trace!(target: "ext3", "ext3 trace");
 
 #log::error!(target: "wasm", "ext error");
 #log::warn!(target: "wasm", "ext warn");

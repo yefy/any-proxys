@@ -61,7 +61,7 @@ impl HttpStream {
         };
 
         let key = format!("{}-{}-{}", protocol7, addr, is_http2);
-        log::debug!("session_id:{}, get_client key:{}", session_id, key);
+        log::debug!(target: "main", "session_id:{}, get_client key:{}", session_id, key);
         let client = http_context.client_map.get().get(&key).cloned();
         if client.is_some() {
             return Ok(client.unwrap());

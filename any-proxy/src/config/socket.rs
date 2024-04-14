@@ -205,7 +205,7 @@ async fn merge_old_main_confs(
         } else {
             None
         };
-        log::trace!(
+        log::trace!(target: "main",
             "socket merge_old_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,
@@ -249,7 +249,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
         if typ & conf::MODULE_TYPE_SOCKET == 0 {
             continue;
         }
-        log::trace!(
+        log::trace!(target: "main",
             "socket init_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,

@@ -210,7 +210,7 @@ async fn merge_old_main_confs(
             None
         };
 
-        log::trace!(
+        log::trace!(target: "main",
             "tunnel merge_old_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,
@@ -254,7 +254,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
         if typ & conf::MODULE_TYPE_TUNNEL == 0 {
             continue;
         }
-        log::trace!(
+        log::trace!(target: "main",
             "tunnel init_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,

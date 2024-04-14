@@ -85,7 +85,7 @@ impl Stream {
     pub fn read_close(&mut self) {
         let stream_rx = self.stream_rx.take();
         if stream_rx.is_some() {
-            log::debug!("close stream_rx");
+            log::debug!(target: "main", "close stream_rx");
             let stream_rx = stream_rx.unwrap();
             stream_rx.close();
             std::mem::drop(stream_rx);
@@ -95,7 +95,7 @@ impl Stream {
     pub fn write_close(&mut self) {
         let stream_tx = self.stream_tx.take();
         if stream_tx.is_some() {
-            log::debug!("close stream_tx");
+            log::debug!(target: "main", "close stream_tx");
             let stream_tx = stream_tx.unwrap();
             stream_tx.close();
             std::mem::drop(stream_tx);

@@ -49,7 +49,7 @@ impl Stream {
     pub fn read_close(&mut self) {
         let stream_rx = self.stream_rx.take();
         if stream_rx.is_some() {
-            log::debug!("stream read_close");
+            log::debug!(target: "main", "stream read_close");
             let stream_rx = stream_rx.unwrap();
             stream_rx.close();
         }

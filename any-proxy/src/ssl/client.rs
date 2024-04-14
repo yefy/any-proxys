@@ -200,7 +200,7 @@ impl client::Connection for Connection {
                                 util_rustls::SkipServerVerification::new(),
                             )
                             .with_no_client_auth();
-                    client_crypto.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+                    client_crypto.alpn_protocols = vec![b"http/1.1".to_vec(), b"h2".to_vec()];
                     client_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
 
                     let connector = TlsConnector::from(Arc::new(client_crypto));

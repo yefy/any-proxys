@@ -333,7 +333,7 @@ impl HttpStreamRequest {
             0
         };
 
-        log::debug!(
+        log::debug!(target: "main",
             "r.session_id:{}, local_cache_req_count:{}",
             session_id,
             local_cache_req_count
@@ -347,11 +347,11 @@ impl HttpStreamRequest {
             .extensions()
             .get::<hyper::AnyProxyRawHttpHeaderExt>();
         let header_ext = if header_ext.is_some() {
-            log::debug!("HttpStreamRequest header_ext:{}", local_cache_req_count);
+            log::debug!(target: "main", "HttpStreamRequest header_ext:{}", local_cache_req_count);
             let header_ext = header_ext.unwrap();
             header_ext.0 .0.clone()
         } else {
-            log::debug!("nil HttpStreamRequest header_ext:{}", local_cache_req_count);
+            log::debug!(target: "main", "nil HttpStreamRequest header_ext:{}", local_cache_req_count);
             HttpHeaderExt::new()
         };
 

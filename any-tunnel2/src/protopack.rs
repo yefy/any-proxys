@@ -140,7 +140,7 @@ pub async fn write_tunnel_data<W: AsyncWrite + std::marker::Unpin>(
         .write_all(&value.datas)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_all => e:{}", e))?;
-    log::trace!("write_tunnel_data datas len:{:?}", value.datas.len());
+    log::trace!(target: "main", "write_tunnel_data datas len:{:?}", value.datas.len());
     buf_writer
         .flush()
         .await
@@ -166,7 +166,7 @@ pub async fn write_tunnel_data_ack<W: AsyncWrite + std::marker::Unpin>(
         .write_all(&data_slice)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_all => e:{}", e))?;
-    log::trace!("write_tunnel_data_ack datas len:{:?}", data_slice.len());
+    log::trace!(target: "main", "write_tunnel_data_ack datas len:{:?}", data_slice.len());
     buf_writer
         .flush()
         .await
@@ -193,17 +193,17 @@ where
         .write_u16(header_slice.len() as u16)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_u16 => e:{}", e))?;
-    log::trace!("write_pack header len:{:?}", header_slice.len());
+    log::trace!(target: "main", "write_pack header len:{:?}", header_slice.len());
     buf_writer
         .write_all(&header_slice)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_all => e:{}", e))?;
-    log::trace!("write_pack header:{:?}", header);
+    log::trace!(target: "main", "write_pack header:{:?}", header);
     buf_writer
         .write_all(&slice)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_all => e:{}", e))?;
-    log::trace!("write_pack body len:{:?}", slice.len());
+    log::trace!(target: "main", "write_pack body len:{:?}", slice.len());
     if is_flush {
         buf_writer
             .flush()
@@ -235,7 +235,7 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
         .await
         .map_err(|e| anyhow!("err:header_size => e:{}", e))?;
 
-    log::trace!("header_size:{}", header_size);
+    log::trace!(target: "main", "header_size:{}", header_size);
     if header_size as usize > slice.len() || header_size <= 0 {
         return Err(anyhow!(
             "err:header_size > slice.len() => header_size:{}",
@@ -250,7 +250,7 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
         .map_err(|e| anyhow!("err:header_slice => e:{}", e))?;
     let header: TunnelHeader =
         toml::from_slice(header_slice).map_err(|e| anyhow!("err:TunnelData header=> e:{}", e))?;
-    log::trace!("read_pack header:{:?}", header);
+    log::trace!(target: "main", "read_pack header:{:?}", header);
 
     let header_type: Option<TunnelHeaderType> = num::FromPrimitive::from_u8(header.header_type);
     if header_type.is_none() {
@@ -286,7 +286,7 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
         TunnelHeaderType::TunnelData => {
             let header: TunnelDataHeader =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:TunnelData=> e:{}", e))?;
-            log::trace!("read_pack body:{:?}", header);
+            log::trace!(target: "main", "read_pack body:{:?}", header);
             let mut datas = vec![0u8; header.pack_size as usize];
             let mut datas_slice = datas.as_mut_slice();
             buf_reader
@@ -294,20 +294,20 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
                 .await
                 .map_err(|e| anyhow!("err:datas => e:{}", e))?;
 
-            log::trace!("read_pack datas.len:{:?}", datas.len());
+            log::trace!(target: "main", "read_pack datas.len:{:?}", datas.len());
             Ok(Some(TunnelPack::TunnelData(TunnelData { header, datas })))
         }
         TunnelHeaderType::TunnelDataAck => {
             let header: TunnelDataAckHeader = toml::from_slice(body_slice)
                 .map_err(|e| anyhow!("err:TunnelDataAckHeader=> e:{}", e))?;
-            log::trace!("read_pack body:{:?}", header);
+            log::trace!(target: "main", "read_pack body:{:?}", header);
             let mut datas = vec![0u8; header.data_size as usize];
             let mut datas_slice = datas.as_mut_slice();
             buf_reader
                 .read_exact(&mut datas_slice)
                 .await
                 .map_err(|e| anyhow!("err:datas => e:{}", e))?;
-            log::trace!("read_pack datas.len:{:?}", datas_slice.len());
+            log::trace!(target: "main", "read_pack datas.len:{:?}", datas_slice.len());
             let data: TunnelDataAckData = toml::from_slice(datas_slice)?;
             Ok(Some(TunnelPack::TunnelDataAck(TunnelDataAck {
                 header,

@@ -10,6 +10,11 @@ use std::sync::Arc;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 
+use crate::wasm::ServerWasiView;
+use crate::wasm::WasmServer;
+use wasmtime::component::*;
+use wasmtime_wasi::preview2::command;
+
 #[derive(Clone)]
 pub enum WasmHashValue {
     Bool(bool),
@@ -38,6 +43,7 @@ pub struct WasmPlugin {
     pub path: String,
     pub engine: wasmtime::Engine,
     pub component: wasmtime::component::Component,
+    pub linker: Linker<ServerWasiView>,
 }
 
 pub struct Conf {
@@ -73,10 +79,20 @@ impl Conf {
         let component = Component::from_file(&engine, path)
             .map_err(|e| anyhow!("err:Component::from_file => err:{}", e))?;
 
+        let mut linker = Linker::new(&engine);
+
+        WasmServer::add_to_linker(&mut linker, ServerWasiView::wasm_host)
+            .map_err(|e| anyhow!("err:WasmServer::add_to_linker => err:{}", e))?;
+
+        // Add the command world (aka WASI CLI) to the linker
+        command::add_to_linker(&mut linker)
+            .map_err(|e| anyhow!("err:command::sync::add_to_linker => err:{}", e))?;
+
         let wasm_plugin = Arc::new(WasmPlugin {
             path: path.to_string(),
             engine,
             component,
+            linker,
         });
         self.push_wasm_plugin(wasm_plugin.clone())?;
         Ok(wasm_plugin)
@@ -98,10 +114,20 @@ impl Conf {
         let component = Component::from_file(&engine, path)
             .map_err(|e| anyhow!("err:Component::from_file => err:{}", e))?;
 
+        let mut linker = Linker::new(&engine);
+
+        WasmServer::add_to_linker(&mut linker, ServerWasiView::wasm_host)
+            .map_err(|e| anyhow!("err:WasmServer::add_to_linker => err:{}", e))?;
+
+        // Add the command world (aka WASI CLI) to the linker
+        command::add_to_linker(&mut linker)
+            .map_err(|e| anyhow!("err:command::sync::add_to_linker => err:{}", e))?;
+
         Ok(Arc::new(WasmPlugin {
             path: path.to_string(),
             engine,
             component,
+            linker,
         }))
     }
 

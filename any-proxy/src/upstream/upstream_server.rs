@@ -35,7 +35,7 @@ impl UpstreamServer {
 
     pub async fn run_ups_dynamic_domains(&self) {
         let ups_data = self.ups_data.get_mut();
-        log::debug!(
+        log::debug!(target: "main",
             "start run_ups_dynamic_domains ups_name:[{}]",
             ups_data.ups_config.name
         );
@@ -54,7 +54,7 @@ impl UpstreamServer {
 
     pub async fn run_ups_heartbeats(&self) {
         let ups_data = self.ups_data.get_mut();
-        log::debug!(
+        log::debug!(target: "main",
             "start run_ups_heartbeats ups_name:[{}]",
             ups_data.ups_config.name
         );
@@ -73,7 +73,7 @@ impl UpstreamServer {
     pub async fn run(&self) -> Result<()> {
         {
             let ups_data = self.ups_data.get_mut();
-            log::debug!("start ups_name:[{}]", ups_data.ups_config.name);
+            log::debug!(target: "main", "start ups_name:[{}]", ups_data.ups_config.name);
         }
 
         let mut shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();

@@ -89,7 +89,7 @@ impl AnyproxyWork {
         async_context: AsyncThreadContext,
         ms: module::Modules,
     ) -> Result<()> {
-        log::trace!("anyproxy_work start");
+        log::trace!(target: "main", "anyproxy_work start");
         let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(1)
@@ -143,7 +143,7 @@ impl AnyproxyWork {
                     let ms = ms.unwrap();
 
 
-                    log::trace!("anyproxy_work reload");
+                    log::trace!(target: "main", "anyproxy_work reload");
                     let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
                         tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(1)

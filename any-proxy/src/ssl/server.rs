@@ -225,7 +225,7 @@ impl server::Connection for Connection {
         {
             let tls_acceptor = util::rustls::tls_acceptor(
                 self.sni.sni_rustls.clone(),
-                vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+                vec![b"http/1.1".to_vec(), b"h2".to_vec()],
             );
             let ssl_stream = tls_acceptor
                 .accept(tcp_stream)

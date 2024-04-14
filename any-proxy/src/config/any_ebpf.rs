@@ -208,7 +208,7 @@ async fn merge_old_main_confs(
         } else {
             None
         };
-        log::trace!(
+        log::trace!(target: "main",
             "ebpf merge_old_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,
@@ -253,7 +253,7 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
         if typ & conf::MODULE_TYPE_EBPF == 0 {
             continue;
         }
-        log::trace!(
+        log::trace!(target: "main",
             "ebpf init_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
             name,
             typ,

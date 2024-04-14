@@ -56,9 +56,9 @@ impl UpstreamDynamicDomainServer {
             )
         };
         scopeguard::defer! {
-            log::debug!("stop run_ups_dynamic_domains ups_name:[{}], host:{}", ups_config_name, host);
+            log::debug!(target: "main", "stop run_ups_dynamic_domains ups_name:[{}], host:{}", ups_config_name, host);
         }
-        log::debug!(
+        log::debug!(target: "main",
             "start run_ups_dynamic_domains ups_name:[{}], host:{}",
             ups_config_name,
             host

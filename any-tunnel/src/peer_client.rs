@@ -959,7 +959,7 @@ impl PeerClientToStream {
         }
     }
     async fn start(&mut self) -> Result<()> {
-        log::trace!("skip waning is_client:{}", self.context.is_client);
+        log::trace!(target: "main", "skip waning is_client:{}", self.context.is_client);
         loop {
             if self.is_close {
                 self.context.peer_client_to_stream_tx.close();
@@ -1021,7 +1021,7 @@ impl PeerClientToStream {
                     .send(tunnel_data)
                     .await
                 {
-                    log::debug!("peer_client_to_stream_tx close");
+                    log::debug!(target: "main", "peer_client_to_stream_tx close");
                     return Ok(());
                 }
                 if !self.is_close {

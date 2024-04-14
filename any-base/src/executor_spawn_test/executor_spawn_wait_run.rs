@@ -48,7 +48,7 @@ impl<E: Clone> ExecutorSpawnWaitRun<E> {
         let index = self.worker_threads;
         self.worker_threads += 1;
         let version = self.executors.group_version;
-        log::debug!("start version:{}, worker_threads:{}", version, index,);
+        log::debug!(target: "main", "start version:{}, worker_threads:{}", version, index,);
 
         let wait_group_worker_inner = if is_wait {
             Some(self.executors.wait_group_worker.add())
@@ -69,7 +69,7 @@ impl<E: Clone> ExecutorSpawnWaitRun<E> {
     }
 
     pub async fn wait_run(&self) -> Result<()> {
-        log::debug!(
+        log::debug!(target: "main",
             "start wait_start version:{}, worker_executor:{}",
             self.executors.group_version,
             self.worker_threads
@@ -78,7 +78,7 @@ impl<E: Clone> ExecutorSpawnWaitRun<E> {
             .wait_complete(self.worker_threads)
             .await
             .map_err(|e| anyhow!("err:wait_start => e:{}", e))?;
-        log::debug!(
+        log::debug!(target: "main",
             "end wait_start version:{}, worker_executor:{}",
             self.executors.group_version,
             self.worker_threads

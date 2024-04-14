@@ -142,7 +142,7 @@ async fn port_listen_ssl(
     let str = conf_arg.value.get::<String>();
     let ssl_listen: SslListenPort =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("port_listen_ssl ssl_listen:{:?}", ssl_listen);
+    log::trace!(target: "main", "port_listen_ssl ssl_listen:{:?}", ssl_listen);
 
     use crate::config::common_core;
     use crate::config::config_toml;

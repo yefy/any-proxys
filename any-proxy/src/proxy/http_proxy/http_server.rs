@@ -72,7 +72,7 @@ impl HttpServer {
         scc: Arc<StreamConfigContext>,
         mut request: Request<Body>,
     ) -> Result<Response<Body>> {
-        log::trace!("client request = {:#?}", request);
+        log::trace!(target: "main", "client request = {:#?}", request);
         let (is_proxy_protocol_hello, connect_func) =
             proxy_util::upsteam_connect_info(self.http_arg.stream_info.clone(), scc.clone())
                 .await?;
@@ -148,14 +148,14 @@ impl HttpServer {
                 .map(|x| x.as_str())
                 .unwrap_or("/")
         );
-        log::trace!("url_string = {}", url_string);
+        log::trace!(target: "main", "url_string = {}", url_string);
         let uri = url_string.parse()?;
 
         *request.uri_mut() = uri;
         request.headers_mut().remove(HOST);
         request.headers_mut().remove("connection");
         *request.version_mut() = upstream_version;
-        log::trace!("upstream request = {:#?}", request);
+        log::trace!(target: "main", "upstream request = {:#?}", request);
 
         let (req_parts, req_body) = request.into_parts();
         let (client_req_sender, client_req_body) = Body::channel();

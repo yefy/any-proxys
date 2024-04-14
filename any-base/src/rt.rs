@@ -63,7 +63,7 @@ where
         // This will spawn into the currently running `LocalSet`.
         tokio::task::spawn_local(async move {
             scopeguard::defer! {
-                log::debug!("stop spawn_local version:{}", version);
+                log::debug!(target: "main", "stop spawn_local version:{}", version);
                 if worker_inner.is_some(){
                     worker_inner.unwrap().done();
                 }
@@ -71,12 +71,12 @@ where
 
             scopeguard::defer! {
                 if err_worker.is_some(){
-                    log::debug!("stop spawn_local err version:{}", version);
+                    log::debug!(target: "main", "stop spawn_local err version:{}", version);
                     err_worker.unwrap().error(anyhow!("err:spawn_local err_worker"));
                 }
             }
 
-            log::debug!("start spawn_local version:{}", version);
+            log::debug!(target: "main", "start spawn_local version:{}", version);
             let ret: Result<()> = async {
                 fut.await
                     .map_err(|e| anyhow!("err:spawn_local fut => e:{}", e))?;
@@ -111,7 +111,7 @@ where
     ) {
         let _ = tokio::task::spawn(async move {
             scopeguard::defer! {
-                log::debug!("stop spawn version:{}", version);
+                log::debug!(target: "main", "stop spawn version:{}", version);
                 if worker_inner.is_some(){
                     worker_inner.unwrap().done();
                 }
@@ -119,11 +119,11 @@ where
 
             scopeguard::defer! {
                 if err_worker.is_some(){
-                    log::debug!("stop spawn err version:{}", version);
+                    log::debug!(target: "main", "stop spawn err version:{}", version);
                     err_worker.unwrap().error(anyhow!("err:spawn err_worker"));
                 }
             }
-            log::debug!("start spawn version:{}", version);
+            log::debug!(target: "main", "start spawn version:{}", version);
             let ret: Result<()> = async {
                 fut.await.map_err(|e| anyhow!("err:spawn fut => e:{}", e))?;
                 Ok(())

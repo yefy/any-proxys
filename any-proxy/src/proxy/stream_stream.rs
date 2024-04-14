@@ -60,7 +60,7 @@ impl StreamStream {
             .await
             .map_err(|e| anyhow!("err:anyproxy::write_pack => e:{}", e))?;
             stream_info.get_mut().upstream_protocol_hello_size = hello_datas.len();
-            log::trace!("hello len:{:?}", hello_datas.len());
+            log::trace!(target: "main", "hello len:{:?}", hello_datas.len());
             Some(hello_datas)
         } else {
             None
@@ -68,7 +68,7 @@ impl StreamStream {
 
         let client_buffer = if client_buffer.len() > 0 {
             let len = client_buffer.len();
-            log::trace!("first cache len:{}, data:{:?}", len, &client_buffer[0..len]);
+            log::trace!(target: "main", "first cache len:{}, data:{:?}", len, &client_buffer[0..len]);
             if datas.is_some() {
                 let datas = datas.as_mut().unwrap();
                 datas.extend_from_slice(&client_buffer[0..len]);
@@ -89,7 +89,7 @@ impl StreamStream {
             let client_buffer = client_buffer.unwrap();
             if client_buffer.len() > 0 {
                 let len = client_buffer.len();
-                log::trace!("write:{:?}", &client_buffer[0..len]);
+                log::trace!(target: "main", "write:{:?}", &client_buffer[0..len]);
                 upstream_stream
                     .write(&client_buffer[0..len])
                     .await
@@ -333,7 +333,7 @@ impl StreamStream {
                     )
                 };
 
-                log::trace!("ebpf sock_map_data:{:?}", sock_map_data);
+                log::trace!(target: "main", "ebpf sock_map_data:{:?}", sock_map_data);
 
                 let rx = ebpf_tx
                     .as_ref()

@@ -191,7 +191,7 @@ impl AccessLog {
             return Ok(());
         }
         let scc = stream_info.get().scc.clone();
-        log::trace!(
+        log::trace!(target: "main",
             "session_id:{}, wasm_access_log",
             stream_info.get().session_id
         );

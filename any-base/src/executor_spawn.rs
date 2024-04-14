@@ -160,17 +160,17 @@ impl<E: Clone> ExecutorSpawn<E> {
     }
 
     pub fn send(&self, is_fast_shutdown: bool) {
-        log::debug!("send version:{}", self.executors.group_version);
+        log::debug!(target: "main", "send version:{}", self.executors.group_version);
         let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
     }
 
     pub async fn wait(&self) -> Result<()> {
-        log::debug!("wait version:{}", self.executors.group_version);
+        log::debug!(target: "main", "wait version:{}", self.executors.group_version);
         self.wait_group.wait().await
     }
 
     pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
-        log::debug!("stop version:{}", self.executors.group_version);
+        log::debug!(target: "main", "stop version:{}", self.executors.group_version);
         if is_fast_shutdown {
             let _ = self.executors.shutdown_thread_tx.send(is_fast_shutdown);
         }
@@ -206,7 +206,7 @@ where
     E: SpawnExec<F>,
 {
     let version = executors.group_version;
-    log::debug!(
+    log::debug!(target: "main",
         "start version:{}, worker_threads:{}",
         version,
         executors.wait_group_worker.count(),

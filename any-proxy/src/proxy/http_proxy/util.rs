@@ -101,7 +101,7 @@ pub async fn write_cache_file(
         }
 
         #[cfg(feature = "anyio-file")]
-        log::debug!(
+        log::debug!(target: "main",
             "r.session_id:{}, cur_slice_index:{}, data to file elapsed_time:{} => len:{}",
             _session_id,
             cur_slice_index,
@@ -243,7 +243,7 @@ pub async fn write_body_to_client(
                 if !buf_file.has_remaining() {
                     break;
                 }
-                log::debug!(
+                log::debug!(target: "main",
                     "r.session_id:{}, HttpBodyBuf buf_file.seek:{}, buf_file.size:{}",
                     r.session_id,
                     buf_file.seek,
@@ -264,11 +264,11 @@ pub async fn write_body_to_client(
                     return Err(anyhow!("err:File client close"));
                 }
             }
-            log::debug!("wait file start:{}", r.local_cache_req_count);
+            log::debug!(target: "main", "wait file start:{}", r.local_cache_req_count);
             for mut rx in wait_rx {
                 let _ = rx.recv().await;
             }
-            log::debug!("wait file end:{}", r.local_cache_req_count);
+            log::debug!(target: "main", "wait file end:{}", r.local_cache_req_count);
         }
     }
     Ok(())

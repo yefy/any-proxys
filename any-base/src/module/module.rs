@@ -789,12 +789,12 @@ pub struct Module {
 #[derive(Clone)]
 pub struct Modules {
     main_confs: ArcUnsafeAny,
-    init_main_confs_map: ArcMutex<HashMap<i32, InitMainConfs>>,
+    init_main_confs_map: ArcMutex<HashMap<i32, (String, InitMainConfs)>>,
     is_finish: Arc<AtomicBool>,
     main_index: Arc<AtomicI32>,
     old_ms: ArcMutex<Modules>,
-    merge_old_main_confs_map: ArcMutex<HashMap<i32, MergeOldMainConfs>>,
-    merge_confs_map: ArcMutex<HashMap<i32, MergeConfs>>,
+    merge_old_main_confs_map: ArcMutex<HashMap<i32, (String, MergeOldMainConfs)>>,
+    merge_confs_map: ArcMutex<HashMap<i32, (String, MergeConfs)>>,
     is_work_thread: bool,
     curr_module_confs: ArcUnsafeAny,
     cmd_conf_type: usize,
@@ -858,7 +858,7 @@ impl Modules {
         path_full_name: &str,
         any: Option<Box<dyn std::any::Any>>,
     ) -> Result<()> {
-        log::trace!("================parse_module_config start================");
+        log::trace!(target: "main", "================parse_module_config start================");
         let mut main_confs: Vec<ArcUnsafeAny> = Vec::with_capacity(self.main_index_len());
         let mut init_main_confs_map = HashMap::new();
         let mut merge_old_main_confs_map = HashMap::new();
@@ -874,7 +874,10 @@ impl Modules {
                 if init_main_confs.is_none() {
                     panic!("init_main_confs nil name:{}", module.name)
                 }
-                init_main_confs_map.insert(module.main_index, init_main_confs.unwrap());
+                init_main_confs_map.insert(
+                    module.main_index,
+                    (module.name.clone(), init_main_confs.unwrap()),
+                );
             }
 
             {
@@ -883,17 +886,23 @@ impl Modules {
                 if merge_old_main_confs.is_none() {
                     panic!("merge_old_main_confs nil name:{}", module.name)
                 }
-                merge_old_main_confs_map.insert(module.main_index, merge_old_main_confs.unwrap());
+                merge_old_main_confs_map.insert(
+                    module.main_index,
+                    (module.name.clone(), merge_old_main_confs.unwrap()),
+                );
             }
             {
                 let module = module.get();
                 let merge_confs = module.merge_confs.clone();
                 if merge_confs.is_some() {
-                    merge_confs_map.insert(module.main_index, merge_confs.unwrap());
+                    merge_confs_map.insert(
+                        module.main_index,
+                        (module.name.clone(), merge_confs.unwrap()),
+                    );
                 }
             }
 
-            log::trace!("parse_module_config module name:{}", module.get().name);
+            log::trace!(target: "main", "parse_module_config module name:{}", module.get().name);
             let conf = (create_main_confs.unwrap())(self.clone()).await?;
             main_confs.push(conf);
         }
@@ -920,8 +929,9 @@ impl Modules {
             {
                 let v = self.init_main_confs_map.get_mut().remove(&main_index);
                 if v.is_some() {
-                    log::trace!("init_main_confs_vec main_index:{}", main_index);
-                    (v.unwrap())(self.clone(), self.main_confs.clone())
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "init_main_confs_map main_index:{}, name:{}", main_index, name);
+                    (v)(self.clone(), self.main_confs.clone())
                         .await
                         .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))?;
                 }
@@ -930,15 +940,16 @@ impl Modules {
                 let old_ms = self.old_ms.get_option().clone();
                 let v = self.merge_old_main_confs_map.get_mut().remove(&main_index);
                 if v.is_some() {
-                    log::trace!("merge_old_main_confs_map main_index:{}", main_index);
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "merge_old_main_confs_map main_index:{}, name:{}", main_index, name);
                     let old_main_conf = if old_ms.is_some() {
                         Some(old_ms.as_ref().unwrap().main_confs())
                     } else {
                         None
                     };
-                    (v.unwrap())(old_ms, old_main_conf, self.clone(), self.main_confs())
+                    (v)(old_ms, old_main_conf, self.clone(), self.main_confs())
                         .await
-                        .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                        .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))
                         .unwrap();
                 }
             }
@@ -946,17 +957,18 @@ impl Modules {
             {
                 let v = self.merge_confs_map.get_mut().remove(&main_index);
                 if v.is_some() {
-                    log::trace!("init_main_confs_vec main_index:{}", main_index);
-                    (v.unwrap())(self.clone(), self.main_confs.clone())
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "merge_confs_map main_index:{}, name:{}", main_index, name);
+                    (v)(self.clone(), self.main_confs.clone())
                         .await
-                        .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                        .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))
                         .unwrap();
                 }
             }
         }
 
         self.is_finish.store(true, Ordering::SeqCst);
-        log::trace!("================parse_module_config end================");
+        log::trace!(target: "main", "================parse_module_config end================");
         return Ok(());
     }
 
@@ -965,7 +977,7 @@ impl Modules {
             let main_index = module.get().main_index;
             let self_main_index = self.main_index.load(Ordering::SeqCst);
             if main_index != self_main_index {
-                log::trace!(
+                log::trace!(target: "main",
                     "self_main_index:{}, main_index:{}",
                     self_main_index,
                     main_index
@@ -973,10 +985,11 @@ impl Modules {
                 {
                     let v = self.init_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "init_main_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs =>e{}", e))
+                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -985,15 +998,16 @@ impl Modules {
                     let old_ms = self.old_ms.get_option().clone();
                     let v = self.merge_old_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("merge_old_main_confs_map main_index:{}", main_index);
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_old_main_confs_map main_index:{}, name:{}", main_index, name);
                         let old_main_conf = if old_ms.is_some() {
                             Some(old_ms.as_ref().unwrap().main_confs())
                         } else {
                             None
                         };
-                        (v.unwrap())(old_ms, old_main_conf, self.clone(), self.main_confs())
+                        (v)(old_ms, old_main_conf, self.clone(), self.main_confs())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1001,10 +1015,11 @@ impl Modules {
                 {
                     let v = self.merge_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1035,7 +1050,7 @@ impl Modules {
             let main_index = module.get().main_index;
             let self_main_index = self.main_index.load(Ordering::SeqCst);
             if main_index != self_main_index {
-                log::trace!(
+                log::trace!(target: "main",
                     "self_main_index:{}, main_index:{}",
                     self_main_index,
                     main_index
@@ -1043,10 +1058,11 @@ impl Modules {
                 {
                     let v = self.init_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "init_main_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs =>e{}", e))
+                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1054,15 +1070,16 @@ impl Modules {
                     let old_ms = self.old_ms.get_option().clone();
                     let v = self.merge_old_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("merge_old_main_confs_map main_index:{}", main_index);
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_old_main_confs_map main_index:{}, name:{}", main_index, name);
                         let old_main_conf = if old_ms.is_some() {
                             Some(old_ms.as_ref().unwrap().main_confs())
                         } else {
                             None
                         };
-                        (v.unwrap())(old_ms, old_main_conf, self.clone(), self.main_confs())
+                        (v)(old_ms, old_main_conf, self.clone(), self.main_confs())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1070,10 +1087,11 @@ impl Modules {
                 {
                     let v = self.merge_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1104,7 +1122,7 @@ impl Modules {
             let main_index = module.get().main_index;
             let self_main_index = self.main_index.load(Ordering::SeqCst);
             if main_index != self_main_index {
-                log::trace!(
+                log::trace!(target: "main",
                     "self_main_index:{}, main_index:{}",
                     self_main_index,
                     main_index
@@ -1112,10 +1130,11 @@ impl Modules {
                 {
                     let v = self.init_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "init_main_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs =>e{}", e))
+                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1124,15 +1143,16 @@ impl Modules {
                     let old_ms = self.old_ms.get_option().clone();
                     let v = self.merge_old_main_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("merge_old_main_confs_map main_index:{}", main_index);
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_old_main_confs_map main_index:{}, name:{}", main_index, name);
                         let old_main_conf = if old_ms.is_some() {
                             Some(old_ms.as_ref().unwrap().main_confs())
                         } else {
                             None
                         };
-                        (v.unwrap())(old_ms, old_main_conf, self.clone(), self.main_confs())
+                        (v)(old_ms, old_main_conf, self.clone(), self.main_confs())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1140,10 +1160,11 @@ impl Modules {
                 {
                     let v = self.merge_confs_map.get_mut().remove(&main_index);
                     if v.is_some() {
-                        log::trace!("init_main_confs_vec main_index:{}", main_index);
-                        (v.unwrap())(self.clone(), self.main_confs.clone())
+                        let (name, v) = v.unwrap();
+                        log::trace!(target: "main", "merge_confs_map main_index:{}, name:{}", main_index, name);
+                        (v)(self.clone(), self.main_confs.clone())
                             .await
-                            .map_err(|e| anyhow!("err:init_main_confs_map =>e{}", e))
+                            .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))
                             .unwrap();
                     }
                 }
@@ -1303,7 +1324,7 @@ impl Modules {
                 }
                 break;
             }
-            log::trace!("str_raw:{:?}", str_raw);
+            log::trace!(target: "main", "str_raw:{:?}", str_raw);
             let str_left = str_raw.trim_start();
 
             if str_left.find(LINE_COMMENTS) == Some(0) {
@@ -1320,7 +1341,7 @@ impl Modules {
                     if str_raw.len() <= 0 {
                         return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
                     }
-                    log::trace!("str_raw:{:?}", str_raw);
+                    log::trace!(target: "main", "str_raw:{:?}", str_raw);
                     if str_raw.trim() == BLOCK_COMMENTS_END {
                         break;
                     }
@@ -1410,9 +1431,9 @@ impl Modules {
                 }
             };
 
-            // log::trace!(" key:{:?}", key);
-            // log::trace!(" typ:{:?}", typ);
-            // log::trace!(" value:{:?}", value);
+            // log::trace!(target: "main", " key:{:?}", key);
+            // log::trace!(target: "main", " typ:{:?}", typ);
+            // log::trace!(target: "main", " value:{:?}", value);
             if key.len() <= 0 {
                 return Ok(());
             }
@@ -1451,7 +1472,7 @@ impl Modules {
                         if str_raw.len() <= 0 {
                             return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
                         }
-                        log::trace!("str_raw:{:?}", str_raw);
+                        log::trace!(target: "main", "str_raw:{:?}", str_raw);
                         str_raw
                     };
 
@@ -1562,12 +1583,12 @@ impl Modules {
                         return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
                     }
 
-                    log::trace!("find str_key:{:?}", str_key);
-                    log::trace!("find str_typ:{:?}", str_typ);
-                    log::trace!("find str_value:{:?}", str_value);
+                    log::trace!(target: "main", "find str_key:{:?}", str_key);
+                    log::trace!(target: "main", "find str_typ:{:?}", str_typ);
+                    log::trace!(target: "main", "find str_value:{:?}", str_value);
 
                     if cmd.typ == CMD_TYPE_MAIN {
-                        log::trace!("========start {}", module.get().name);
+                        log::trace!(target: "main", "========start {}", module.get().name);
                         if self.init_main_confs_map.get().get(&main_index).is_none() {
                             panic!("It has already been accessed and cannot be loaded again, module name:{}", name);
                         }

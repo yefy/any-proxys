@@ -308,7 +308,7 @@ impl PeerStream {
         }
 
         let tunnel_hello = tunnel_hello.as_ref().unwrap();
-        log::trace!("write_stream tunnel_hello:{:?}", tunnel_hello);
+        log::trace!(target: "main", "write_stream tunnel_hello:{:?}", tunnel_hello);
 
         protopack::write_pack(w, TunnelHeaderType::TunnelHello, tunnel_hello, true)
             .await
@@ -525,7 +525,7 @@ impl PeerStream {
     }
 
     fn close(&self, stream_to_peer_stream_rx: async_channel::Receiver<TunnelPack>) {
-        log::debug!("stream_to_peer_stream_rx close");
+        log::debug!(target: "main", "stream_to_peer_stream_rx close");
         stream_to_peer_stream_rx.close();
     }
 }
@@ -780,13 +780,13 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
             if let Err(_) = pack {
                 #[cfg(feature = "anydebug")]
                 {
-                    log::trace!(
-                                "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream timeout ",
-                        {self.context.once.session_id.lock().unwrap()},
-                                get_flag(self.context.is_client),
-                                self.context.once.peer_stream_id.load(Ordering::Relaxed),
-                                self.context.once.peer_stream_index.load(Ordering::Relaxed),
-                            );
+                    log::trace!(target: "main",
+                            "session_id:{:?}, flag:{}, peer_stream_id:{}, peer_stream_index:{} write_stream timeout ",
+                    {self.context.once.session_id.lock().unwrap()},
+                            get_flag(self.context.is_client),
+                            self.context.once.peer_stream_id.load(Ordering::Relaxed),
+                            self.context.once.peer_stream_index.load(Ordering::Relaxed),
+                        );
                 }
                 continue;
             }
@@ -832,19 +832,19 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
             let pack = pack.unwrap();
             match &pack {
                 TunnelPack::TunnelHello(value) => {
-                    log::trace!("write_stream TunnelHello:{:?}", value);
+                    log::trace!(target: "main", "write_stream TunnelHello:{:?}", value);
                     return Err(anyhow!("err: write_stream TunnelHello:{:?}", value));
                 }
                 TunnelPack::TunnelHelloAck(value) => {
-                    log::trace!("write_stream TunnelHelloAck:{:?}", value);
+                    log::trace!(target: "main", "write_stream TunnelHelloAck:{:?}", value);
                     return Err(anyhow!("err: write_stream TunnelHelloAck:{:?}", value));
                 }
                 TunnelPack::TunnelClose(value) => {
-                    log::trace!("write_stream TunnelClose:{:?}", value);
+                    log::trace!(target: "main", "write_stream TunnelClose:{:?}", value);
                     return Err(anyhow!("err: write_stream TunnelClose:{:?}", value));
                 }
                 TunnelPack::TunnelData(value) => {
-                    log::trace!(
+                    log::trace!(target: "main",
                         "write_stream TunnelData:{:?}, data len:{}",
                         value.header,
                         value.datas.len()
@@ -874,7 +874,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                         .map_err(|e| anyhow!("e:{}", e))?;
                 }
                 TunnelPack::TunnelAddConnect(value) => {
-                    log::trace!("write_stream TunnelAddConnect:{:?}", value);
+                    log::trace!(target: "main", "write_stream TunnelAddConnect:{:?}", value);
                     protopack::write_pack(
                         &mut self.w,
                         TunnelHeaderType::TunnelAddConnect,
@@ -885,7 +885,7 @@ impl<W: AsyncWrite + std::marker::Unpin> PeerStreamWrite<'_, W> {
                     .map_err(|e| anyhow!("e:{}", e))?;
                 }
                 TunnelPack::TunnelMaxConnect(value) => {
-                    log::trace!("write_stream TunnelMaxConnect:{:?}", value);
+                    log::trace!(target: "main", "write_stream TunnelMaxConnect:{:?}", value);
                     protopack::write_pack(
                         &mut self.w,
                         TunnelHeaderType::TunnelMaxConnect,

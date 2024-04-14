@@ -78,7 +78,7 @@ impl HeartbeatStream {
             }
 
             let heartbeat = heartbeat.unwrap();
-            log::debug!(
+            log::debug!(target: "main",
                 "heartbeat:{:?}, remote_addr:{}",
                 heartbeat,
                 stream_info.get().server_stream_info.remote_addr

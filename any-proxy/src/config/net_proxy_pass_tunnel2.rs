@@ -164,7 +164,7 @@ async fn proxy_pass_tunnel2_tcp(
     let str = conf_arg.value.get::<String>();
     let proxy_pass_conf: ProxyPassTcpTunnel2 =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("ProxyPassTcpTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
+    log::trace!(target: "main", "ProxyPassTcpTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
 
     use crate::config::upstream_block;
     use crate::config::upstream_core;
@@ -228,7 +228,7 @@ async fn proxy_pass_tunnel2_ssl(
     let str = conf_arg.value.get::<String>();
     let proxy_pass_conf: ProxyPassSslTunnel2 =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("ProxyPassSslTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
+    log::trace!(target: "main", "ProxyPassSslTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
 
     use crate::config::upstream_block;
     use crate::config::upstream_core;
@@ -292,7 +292,7 @@ async fn proxy_pass_tunnel2_quic(
     let str = conf_arg.value.get::<String>();
     let proxy_pass_conf: ProxyPassQuicTunnel2 =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("ProxyPassQuicTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
+    log::trace!(target: "main", "ProxyPassQuicTunnel2 proxy_pass_conf:{:?}", proxy_pass_conf);
 
     use crate::config::upstream_block;
     use crate::config::upstream_core;

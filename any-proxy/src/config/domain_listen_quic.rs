@@ -147,7 +147,7 @@ async fn domain_listen_quic(
     let str = conf_arg.value.get::<String>();
     let quic_listen: QuicListenDomain =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("domain_listen_quic quic_listen:{:?}", quic_listen);
+    log::trace!(target: "main", "domain_listen_quic quic_listen:{:?}", quic_listen);
 
     use crate::config::common_core;
     use crate::config::config_toml;

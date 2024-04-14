@@ -30,7 +30,7 @@ impl DomainIndex {
                 }
                 if v.len() >= 3 && &v[0..2] == "$$" {
                     let v = &v[2..];
-                    log::trace!("v:{}", v);
+                    log::trace!(target: "main", "v:{}", v);
                     if v == "(.*)" {
                         if full_match_index.is_some() {
                             return Err(anyhow!("err:domain exist => domain:{}", v));
@@ -91,7 +91,7 @@ impl DomainIndex {
 
                     let (_, data) = func(v).map_err(|e| anyhow!("err:func => e:{}", e))?;
 
-                    //log::debug!("data:{}, v:{}, domain:{}", data, v, domain);
+                    //log::debug!(target: "main", "data:{}, v:{}, domain:{}", data, v, domain);
 
                     if domain_regex_map.get(&data).is_some() {
                         return Err(anyhow!("err:domain => domain:{}", v));
@@ -100,7 +100,7 @@ impl DomainIndex {
                     let regex = Regex::new(v).map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
                     domain_regex_map.insert(data, (regex, v.to_string(), *index));
                 } else {
-                    log::trace!("v:{}", v);
+                    log::trace!(target: "main", "v:{}", v);
                     if domain_map.get(v).is_some() {
                         return Err(anyhow!("err:domain exist => domain:{}", domain));
                     }
@@ -117,9 +117,9 @@ impl DomainIndex {
     }
 
     pub fn index(&self, domain: &str) -> Result<i32> {
-        //log::debug!("domain_map:{:?}", domain_map);
-        //log::debug!("domain_regex_map:{:?}", domain_regex_map);
-        //log::debug!("domain:{}", domain);
+        //log::debug!(target: "main", "domain_map:{:?}", domain_map);
+        //log::debug!(target: "main", "domain_regex_map:{:?}", domain_regex_map);
+        //log::debug!(target: "main", "domain:{}", domain);
         let domain_index = self.domain_map.get(domain);
         match domain_index {
             Some(domain_index) => return Ok(domain_index.clone()),
@@ -141,15 +141,15 @@ impl DomainIndex {
                         return Err(anyhow!("err:domain not found => domain:{}", domain))?;
                     }
                     vars = &vars[..find.unwrap()];
-                    //log::debug!("vars:{}", vars);
+                    //log::debug!(target: "main", "vars:{}", vars);
                     let suffix = &domain[find.unwrap()..];
-                    //log::debug!("suffix:{}", suffix);
+                    //log::debug!(target: "main", "suffix:{}", suffix);
                     let value = self.domain_regex_map.get(suffix);
                     if value.is_none() {
                         continue;
                     }
                     let (regex, _, domain_index) = value.unwrap();
-                    //log::debug!("regex:{}, domain_index:{}", regex, domain_index);
+                    //log::debug!(target: "main", "regex:{}, domain_index:{}", regex, domain_index);
 
                     // let regex = Regex::new(regex.as_str())
                     //     .map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;

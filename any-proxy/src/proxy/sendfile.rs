@@ -30,7 +30,7 @@ impl SendFile {
         let file_fd = fd;
         let mut offset: libc::off_t = seek as libc::off_t;
         let count: libc::size_t = size as libc::size_t;
-        log::trace!(
+        log::trace!(target: "main",
             "libc::sendfile socket_fd:{}, file_fd:{}, offset:{}, count:{}",
             socket_fd,
             file_fd,
@@ -58,7 +58,7 @@ impl SendFile {
             match ret {
                 -1 => {
                     let c_err = unsafe { *libc::__errno_location() };
-                    log::trace!("sendfile c_err:{}", c_err);
+                    log::trace!(target: "main", "sendfile c_err:{}", c_err);
                     if c_err == libc::EAGAIN || c_err == libc::EINTR || c_err == libc::EWOULDBLOCK {
                         stream_err = StreamFlowErr::Init;
                         kind = io::ErrorKind::WouldBlock;
@@ -91,7 +91,7 @@ impl SendFile {
                         kind = io::ErrorKind::WouldBlock;
                         return Err(anyhow!("err:sendfile WouldBlock"));
                     }
-                    log::trace!("sendfile copied:{}", copied);
+                    log::trace!(target: "main", "sendfile copied:{}", copied);
                     return Ok(copied as u64);
                 }
             };
@@ -107,7 +107,7 @@ impl SendFile {
                 Err(std::io::Error::new(kind, e))
             }
             Ok(size) => {
-                log::trace!("sendfile write size:{:?}", size);
+                log::trace!(target: "main", "sendfile write size:{:?}", size);
                 if self.info.is_some() {
                     self.info.get_mut().write += size as i64;
                 }
@@ -154,7 +154,7 @@ pub async fn sendfile(
 
     let mut offset: libc::off_t = seek as libc::off_t;
     let count: libc::size_t = size as libc::size_t;
-    log::trace!(
+    log::trace!(target: "main",
         "libc::sendfile socket_fd:{}, file_fd:{}, offset:{}, count:{}, len:{}",
         socket_fd,
         file_fd,
@@ -174,7 +174,7 @@ pub async fn sendfile(
                 let c_err = unsafe { *libc::__errno_location() };
                 use std::ffi::CStr;
                 let error_message = unsafe { CStr::from_ptr(libc::strerror(c_err)) };
-                log::trace!(
+                log::trace!(target: "main",
                     "sendfile c_err:{}, error_message:{:?}",
                     c_err,
                     error_message
@@ -234,7 +234,7 @@ pub async fn sendfile(
                     kind = io::ErrorKind::WouldBlock;
                     return Err(anyhow!("err:sendfile WouldBlock"));
                 }
-                log::trace!("sendfile copied:{}", copied);
+                log::trace!(target: "main", "sendfile copied:{}", copied);
                 return Ok(copied as usize);
             }
         };
@@ -243,11 +243,11 @@ pub async fn sendfile(
 
     match ret {
         Err(e) => {
-            log::trace!("sendfile write kind:{:?}, e:{:?}", kind, e);
+            log::trace!(target: "main", "sendfile write kind:{:?}, e:{:?}", kind, e);
             Err(std::io::Error::new(kind, e))
         }
         Ok(size) => {
-            log::trace!("sendfile write size:{:?}", size);
+            log::trace!(target: "main", "sendfile write size:{:?}", size);
             Ok(size)
         }
     }

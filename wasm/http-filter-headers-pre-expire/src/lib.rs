@@ -1,32 +1,20 @@
 #[allow(warnings)]
 mod bindings;
 mod macros;
+mod service;
+mod util;
 
-use crate::bindings::component::server::wasm_std;
+pub use crate::bindings::component::server::wasm_http;
+pub use crate::bindings::component::server::wasm_log;
+pub use crate::bindings::component::server::wasm_std;
+pub use crate::bindings::component::server::wasm_store;
+pub use crate::bindings::component::server::wasm_tcp;
 use crate::bindings::exports::component::server::wasm_service;
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WasmConf {
-    pub expires: usize,
-}
 
 struct Component;
 impl wasm_service::Guest for Component {
-    fn run(config: String) -> Result<wasm_std::Error, String> {
-        let wasm_conf: WasmConf = toml::from_str(&config).map_err(|e| e.to_string())?;
-        debug!("wasm_conf:{:?}", wasm_conf);
-
-        let cache_control_key = "cache-control";
-        if wasm_conf.expires > 0 && !wasm_std::out_is_header(cache_control_key)? {
-            wasm_std::out_add_header(
-                cache_control_key,
-                &format!("max-age={}", wasm_conf.expires),
-            )?;
-        }
-        Ok(wasm_std::Error::Ok)
+    fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
+        service::run(config)
     }
 }
 

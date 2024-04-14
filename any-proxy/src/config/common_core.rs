@@ -227,7 +227,7 @@ async fn cpu_affinity(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.cpu_affinity = *conf_arg.value.get::<bool>();
-    log::trace!("common_core.rs c.cpu_affinity:{:?}", c.cpu_affinity);
+    log::trace!(target: "main", "common_core.rs c.cpu_affinity:{:?}", c.cpu_affinity);
     return Ok(());
 }
 
@@ -246,7 +246,7 @@ async fn reuseport(
         }
     };
 
-    log::trace!("common_core.rs c.reuseport:{:?}", c.reuseport);
+    log::trace!(target: "main", "common_core.rs c.reuseport:{:?}", c.reuseport);
     return Ok(());
 }
 
@@ -265,7 +265,7 @@ async fn worker_threads(
     if c.worker_threads == 0 {
         c.worker_threads = 1;
     }
-    log::trace!("common_core.rs c.worker_threads:{:?}", c.worker_threads);
+    log::trace!(target: "main", "common_core.rs c.worker_threads:{:?}", c.worker_threads);
     return Ok(());
 }
 
@@ -277,7 +277,7 @@ async fn max_connections(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.max_connections = *conf_arg.value.get::<i32>();
-    log::trace!("common_core.rs c.max_connections:{:?}", c.max_connections);
+    log::trace!(target: "main", "common_core.rs c.max_connections:{:?}", c.max_connections);
     return Ok(());
 }
 
@@ -289,7 +289,7 @@ async fn shutdown_timeout(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.shutdown_timeout = *conf_arg.value.get::<u64>();
-    log::trace!("common_core.rs c.shutdown_timeout:{:?}", c.shutdown_timeout);
+    log::trace!(target: "main", "common_core.rs c.shutdown_timeout:{:?}", c.shutdown_timeout);
     return Ok(());
 }
 
@@ -301,7 +301,7 @@ async fn max_open_file_limit(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.max_open_file_limit = *conf_arg.value.get::<u64>();
-    log::trace!(
+    log::trace!(target: "main",
         "common_core.rs c.debug_is_print_config:{:?}",
         c.max_open_file_limit
     );
@@ -315,7 +315,7 @@ async fn worker_threads_blocking(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.worker_threads_blocking = *conf_arg.value.get::<usize>();
-    log::trace!(
+    log::trace!(target: "main",
         "common_core.rs c.worker_threads_blocking:{:?}",
         c.worker_threads_blocking
     );
@@ -329,7 +329,7 @@ async fn memlock_rlimit_curr(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.memlock_rlimit_curr = *conf_arg.value.get::<u64>();
-    log::trace!(
+    log::trace!(target: "main",
         "common_core.rs c.memlock_rlimit_curr:{:?}",
         c.memlock_rlimit_curr
     );
@@ -343,7 +343,7 @@ async fn memlock_rlimit_max(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.memlock_rlimit_max = *conf_arg.value.get::<u64>();
-    log::trace!(
+    log::trace!(target: "main",
         "common_core.rs c.memlock_rlimit_max:{:?}",
         c.memlock_rlimit_max
     );

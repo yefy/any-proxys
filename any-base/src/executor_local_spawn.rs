@@ -240,7 +240,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub fn send(&self, flag: &str, is_fast_shutdown: bool) {
-        log::debug!(
+        log::debug!(target: "main",
             "send version:{}, flag:{}, is_fast_shutdown:{}",
             self.executors.context.group_version,
             flag,
@@ -254,7 +254,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub async fn wait(&self, flag: &str) -> Result<()> {
-        log::debug!(
+        log::debug!(target: "main",
             "wait version:{}, flag:{}",
             self.executors.context.group_version,
             flag
@@ -279,7 +279,7 @@ impl ExecutorLocalSpawn {
     }
 
     pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
-        log::debug!(
+        log::debug!(target: "main",
             "stop version:{}, flag:{}, is_fast_shutdown:{}, \
         shutdown_timeout:{}, wait_group.count:{}",
             self.executors.context.group_version,
@@ -341,7 +341,7 @@ pub fn _start<S, F>(
     F: Future<Output = Result<()>> + Send + 'static,
 {
     let version = executors.context.group_version;
-    log::debug!(
+    log::debug!(target: "main",
         "start version:{}, worker_threads:{}",
         version,
         executors.context.wait_group_worker.count(),
@@ -361,7 +361,7 @@ pub fn _start<S, F>(
             #[cfg(feature = "anyspawn-count")]
             let name_defer = name.clone();
             scopeguard::defer! {
-                log::debug!("stop executor version:{}", version);
+                log::debug!(target: "main", "stop executor version:{}", version);
                 if wait_group_worker_inner.is_some() {
                     wait_group_worker_inner.unwrap().done();
                 }
@@ -382,7 +382,7 @@ pub fn _start<S, F>(
                     }
                 }
             }
-            log::debug!("start executor version:{}", version);
+            log::debug!(target: "main", "start executor version:{}", version);
 
             #[cfg(feature = "anyspawn-count")]
             {
@@ -435,7 +435,7 @@ where
     F: Future<Output = Result<()>> + 'static,
 {
     if thread_num > 1 {
-        log::trace!("new_multi_thread thread_num:{}", thread_num);
+        log::trace!(target: "main", "new_multi_thread thread_num:{}", thread_num);
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(thread_num)
             .max_blocking_threads(worker_threads_blocking)
@@ -451,7 +451,7 @@ where
             })
             .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
     } else {
-        log::trace!("new_current_thread thread_num:{}", thread_num);
+        log::trace!(target: "main", "new_current_thread thread_num:{}", thread_num);
         let rt = tokio::runtime::Builder::new_current_thread()
             .max_blocking_threads(worker_threads_blocking)
             .enable_all()

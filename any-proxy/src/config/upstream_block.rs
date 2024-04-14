@@ -245,7 +245,7 @@ async fn name(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.name = unsafe { conf_arg.value.take::<String>() };
-    log::trace!("c.name:{:?}", c.name);
+    log::trace!(target: "main", "c.name:{:?}", c.name);
     return Ok(());
 }
 
@@ -257,7 +257,7 @@ async fn balancer(
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
     c.balancer = ArcString::new(conf_arg.value.get_mut::<String>().clone());
-    log::trace!("c.dispatch:{:?}", c.balancer);
+    log::trace!(target: "main", "c.dispatch:{:?}", c.balancer);
     use crate::config::upstream_core_plugin;
     let upstream_core_plugin_conf = upstream_core_plugin::main_conf_mut(&ms).await;
 

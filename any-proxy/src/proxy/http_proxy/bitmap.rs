@@ -138,7 +138,7 @@ pub fn align_bitset_ok(
     let indexs = align_bitset_index(range_start, range_end, slice)?;
     for index in &indexs {
         if !bitmap.get_bit(*index) {
-            //log::debug!("align_bitset_ok false {}:{:?}, range_start:{}, range_end:{}, slice_size:{}, bitmap:{}", index, indexs, range_start, range_end, bitmap.slice_size,bitmap.to_string());
+            //log::debug!(target: "main", "align_bitset_ok false {}:{:?}, range_start:{}, range_end:{}, slice_size:{}, bitmap:{}", index, indexs, range_start, range_end, bitmap.slice_size,bitmap.to_string());
             return Ok(false);
         }
     }
@@ -187,7 +187,7 @@ pub fn update_bitset(
     }
 
     if indexs.len() > 0 {
-        //log::debug!("update_bitset true skip_bitset_index:{}, file_length:{}, {:?}, range_start:{}, range_end:{}, slice_size:{}, bitmap:{}", skip_bitset_index, file_length,indexs, range_start, range_end, bitmap.slice_size,bitmap.to_string());
+        //log::debug!(target: "main", "update_bitset true skip_bitset_index:{}, file_length:{}, {:?}, range_start:{}, range_end:{}, slice_size:{}, bitmap:{}", skip_bitset_index, file_length,indexs, range_start, range_end, bitmap.slice_size,bitmap.to_string());
         return Ok(true);
     }
 

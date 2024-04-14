@@ -70,8 +70,8 @@ pub fn server_config(config: &Config, sni: Option<util::Sni>) -> Result<quinn::S
 
     if !config.quic_default {
         let stream_rwnd: u32 = config.quic_max_stream_bandwidth * config.quic_rtt;
-        log::debug!("config:{:?}", config);
-        log::debug!("server_config stream_rwnd:{}", stream_rwnd);
+        log::debug!(target: "main", "config:{:?}", config);
+        log::debug!(target: "main", "server_config stream_rwnd:{}", stream_rwnd);
 
         transport_config.receive_window(u32::MAX.into());
         if config.quic_send_window > 0 {
@@ -116,8 +116,8 @@ pub fn client_config(config: &Config) -> Result<quinn::ClientConfig> {
 
     if !config.quic_default {
         let stream_rwnd: u32 = config.quic_max_stream_bandwidth * config.quic_rtt;
-        log::debug!("config:{:?}", config);
-        log::debug!("client_config stream_rwnd:{}", stream_rwnd);
+        log::debug!(target: "main", "config:{:?}", config);
+        log::debug!(target: "main", "client_config stream_rwnd:{}", stream_rwnd);
 
         transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(5)));
         transport_config.receive_window(u32::MAX.into());
@@ -237,7 +237,7 @@ pub async fn listen(
                 )
             };
 
-            log::debug!("cookie:{}, fd:{}", cookie, fd);
+            log::debug!(target: "main", "cookie:{}, fd:{}", cookie, fd);
             if ebpf_tx.is_some() {
                 ebpf_tx
                     .as_ref()

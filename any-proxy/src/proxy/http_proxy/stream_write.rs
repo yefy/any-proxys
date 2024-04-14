@@ -36,7 +36,7 @@ impl Stream {
     pub fn write_close(&mut self) {
         let stream_tx = self.stream_tx.take();
         if stream_tx.is_some() {
-            log::debug!("stream write_close");
+            log::debug!(target: "main", "stream write_close");
         }
     }
 }

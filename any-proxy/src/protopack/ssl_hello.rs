@@ -25,7 +25,7 @@ async fn do_read_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<Stri
         .read_u8()
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_u8 => e:{}", e))?;
-    log::trace!("content_type:{}", content_type);
+    log::trace!(target: "main", "content_type:{}", content_type);
     if content_type != 22 {
         return Err(anyhow!("err:content_type => content_type:{}", content_type));
     }
@@ -42,7 +42,7 @@ async fn do_read_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<Stri
         .read_u8()
         .await
         .map_err(|e| anyhow!("err:buf_reader.read_u8 => e:{}", e))?;
-    log::trace!("handshake_type:{}", handshake_type);
+    log::trace!(target: "main", "handshake_type:{}", handshake_type);
     if handshake_type != 1 {
         return Err(anyhow!(
             "err:handshake_type => handshake_type:{}",
@@ -119,7 +119,7 @@ async fn do_read_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<Stri
                     .await
                     .map_err(|e| anyhow!("err:buf_reader.read_u16 => e:{}", e))?;
                 if server_name_type == 0 {
-                    log::trace!("server_name_type == 0");
+                    log::trace!(target: "main", "server_name_type == 0");
                     if server_name_len <= 0 {
                         return Err(anyhow!("err:server_name_len <= 0"));
                     }
@@ -129,7 +129,7 @@ async fn do_read_domain<R: AsyncRead + Unpin>(buf_reader: &mut R) -> Result<Stri
                         .await
                         .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
                     let domain = String::from_utf8_lossy(server_name_data).to_string();
-                    log::trace!("domain:{}", domain);
+                    log::trace!(target: "main", "domain:{}", domain);
                     return Ok(domain);
                 } else {
                     if server_name_len > 0 {

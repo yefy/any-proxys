@@ -240,7 +240,7 @@ impl StreamFlow {
                        info.err = stream_err;
                        info.err_time_millis = Local::now().timestamp_millis();
                    }
-                   log::debug!("read_flow kind:{:?}, e:{:?}", kind, e);
+                   log::debug!(target: "main", "read_flow kind:{:?}, e:{:?}", kind, e);
                    Err(std::io::Error::new(kind, e))
                }
                Ok(usize) => {
@@ -313,7 +313,7 @@ impl StreamFlow {
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
-                log::debug!("read_flow kind:{:?}, e:{:?}", kind, e);
+                log::debug!(target: "main", "read_flow kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {
@@ -373,7 +373,7 @@ impl StreamFlow {
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
-                log::debug!("write_flow kind:{:?}, e:{:?}", kind, e);
+                log::debug!(target: "main", "write_flow kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {
@@ -458,7 +458,7 @@ impl StreamFlow {
                     info.err = stream_err;
                     info.err_time_millis = Local::now().timestamp_millis();
                 }
-                log::debug!("write_flow kind:{:?}, e:{:?}", kind, e);
+                log::debug!(target: "main", "write_flow kind:{:?}, e:{:?}", kind, e);
                 Err(std::io::Error::new(kind, e))
             }
             Ok(usize) => {

@@ -157,7 +157,7 @@ async fn net_server_proxy_http(
     let str = conf_arg.value.get::<String>();
     let proxy_conf: HttpServerProxyConfig =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("net_server_proxy_http proxy_conf:{:?}", proxy_conf);
+    log::trace!(target: "main", "net_server_proxy_http proxy_conf:{:?}", proxy_conf);
     conf.proxy = Arc::new(proxy_conf);
 
     use crate::config::net_server_core_plugin;

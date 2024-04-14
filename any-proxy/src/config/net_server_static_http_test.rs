@@ -172,7 +172,7 @@ async fn net_server_static_http_test(
     let str = conf_arg.value.get::<String>();
     let static_conf: HttpServerStaticConfig =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("net_server_static_http_test static_conf:{:?}", static_conf);
+    log::trace!(target: "main", "net_server_static_http_test static_conf:{:?}", static_conf);
     conf.conf = static_conf;
 
     use crate::config::net_server_core_plugin;

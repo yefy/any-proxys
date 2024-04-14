@@ -167,7 +167,7 @@ async fn net_server_stream_test(
     let str = conf_arg.value.get::<String>();
     let config: HttpServerStreamTestConfig =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("net_server_stream_test:{:?}", config);
+    log::trace!(target: "main", "net_server_stream_test:{:?}", config);
     conf.config = config;
 
     use crate::config::net_server_core_plugin;

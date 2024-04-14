@@ -124,7 +124,7 @@ impl proxy::Stream for HttpStream {
 impl HttpStream {
     async fn do_stream(&mut self, r: Arc<HttpStreamRequest>) -> Result<()> {
         let scc = self.http_arg.stream_info.get().scc.clone();
-        log::trace!("r.request.version:{:?}", r.ctx.get().r_in.version);
+        log::trace!(target: "main", "r.request.version:{:?}", r.ctx.get().r_in.version);
         let is_client_sendfile_version = match &r.ctx.get().r_in.version {
             &Version::HTTP_2 => false,
             &Version::HTTP_3 => false,
@@ -157,7 +157,7 @@ impl HttpStream {
             let r_ctx = &*r.ctx.get();
             let mut name = r_ctx.r_in.uri.path();
 
-            log::trace!("name:{}", name);
+            log::trace!(target: "main", "name:{}", name);
             if name.len() <= 0 || name == "/" {
                 seq = "/";
                 name = &http_server_static_conf.conf.index;

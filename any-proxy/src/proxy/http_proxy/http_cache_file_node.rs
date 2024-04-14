@@ -80,7 +80,7 @@ impl ProxyCacheFileNode {
             content_range.raw_content_length,
             cache_file_info.cache_file_slice,
         )?;
-        log::debug!(
+        log::debug!(target: "main",
             "create bitmap: size:{}, slice_size:{}, str:{}",
             bitmap.size(),
             bitmap.slice_size,
@@ -160,7 +160,7 @@ impl ProxyCacheFileNode {
             body_start = (body_start / page + 1) * page;
         }
 
-        log::debug!(
+        log::debug!(target: "main",
             "create file_head_size:{}, http_head_size:{}, bitmap_size:{}, self.body_star:{}",
             file_head_size,
             http_head_size,
@@ -382,7 +382,7 @@ impl ProxyCacheFileNode {
             content_range.raw_content_length,
             cache_file_info.cache_file_slice,
         )?;
-        log::debug!(
+        log::debug!(target: "main",
             "create bitmap: size:{}, slice_size:{}, str:{}",
             bitmap.size(),
             bitmap.slice_size,
@@ -403,7 +403,7 @@ impl ProxyCacheFileNode {
             .copy_from_slice(&buf.slice(bitmap_start..bitmap_start + bitmap_size));
         bitmap.repair();
 
-        log::debug!(
+        log::debug!(target: "main",
             "read bitmap: size:{}, slice_size:{}, str:{}",
             bitmap.size(),
             bitmap.slice_size,
@@ -417,7 +417,7 @@ impl ProxyCacheFileNode {
         {
             body_start = (body_start / page + 1) * page;
         }
-        log::debug!(
+        log::debug!(target: "main",
             "read file_head_size:{}, http_head_size:{}, bitmap_size:{}, self.body_star:{}",
             file_head_size,
             http_head_size,

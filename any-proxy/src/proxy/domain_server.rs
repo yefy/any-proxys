@@ -47,7 +47,7 @@ impl DomainServer {
     }
 
     pub async fn start(&self) -> Result<()> {
-        log::trace!("domain server start");
+        log::trace!(target: "main", "domain server start");
         let listen_server = self.listen_server.clone();
         let listen_addr = listen_server
             .listen_addr()

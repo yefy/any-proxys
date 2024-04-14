@@ -64,7 +64,7 @@ impl WebsocketServer {
                 .unwrap_or("/")
                 .to_string();
 
-            log::trace!("request.headers:{:?}", request.headers());
+            log::trace!(target: "main", "request.headers:{:?}", request.headers());
             let host_func = |request: &Request| -> Result<String> {
                 let host = request
                     .headers()
@@ -124,7 +124,7 @@ impl WebsocketServer {
         if err.is_some() {
             return Err(err.unwrap());
         }
-        log::debug!("ws_host:{}", ws_host);
+        log::debug!(target: "main", "ws_host:{}", ws_host);
         let (domain, _) = host_and_port(&ws_host);
         let domain = ArcString::new(domain.to_string());
 
@@ -161,7 +161,7 @@ impl WebsocketServer {
 
         let upstream_scheme = if upstream_is_tls { "wss" } else { "ws" };
         let url_string = format!("{}://{}{}", upstream_scheme, upstream_host, req_uri);
-        log::trace!("url_string = {}", url_string);
+        log::trace!(target: "main", "url_string = {}", url_string);
         let uri = url_string
             .parse()
             .map_err(|e| anyhow!("err:parse => e:{}", e))?;

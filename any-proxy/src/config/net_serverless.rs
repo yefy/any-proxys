@@ -178,7 +178,7 @@ async fn wasm_serverless(
     }
 
     c.wasm_plugin_confs = Some(wasm_plugin_confs);
-    log::trace!("c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
+    log::trace!(target: "main", "c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
     return Ok(());
 }
 
@@ -193,7 +193,7 @@ pub async fn do_wasm_serverless(stream_info: Share<StreamInfo>) -> Result<crate:
         return Ok(crate::Error::Ok);
     }
     let scc = stream_info.get().scc.clone();
-    log::trace!(
+    log::trace!(target: "main",
         "session_id:{}, wasm_serverless",
         stream_info.get().session_id
     );

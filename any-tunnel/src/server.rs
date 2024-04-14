@@ -195,7 +195,7 @@ impl Server {
                 #[cfg(feature = "anydebug")]
                 log::info!("accept flag:server, tunnel_hello:{:?}", tunnel_hello);
 
-                log::debug!("server tunnel_hello:{:?}", tunnel_hello);
+                log::debug!(target: "main", "server tunnel_hello:{:?}", tunnel_hello);
                 let session_id = tunnel_hello.session_id.clone();
                 let peer_client = { self.context.get_mut().get(&session_id) };
                 if peer_client.is_some() {

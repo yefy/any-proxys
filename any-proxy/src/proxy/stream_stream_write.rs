@@ -219,9 +219,9 @@ pub async fn do_handle_run(
             };
             let n = w.write_msg(msg_write_buf).await?;
             if rx.is_some() {
-                log::debug!("write wait file start:{}", sss._session_id);
+                log::debug!(target: "main", "write wait file start:{}", sss._session_id);
                 let _ = rx.unwrap().recv().await;
-                log::debug!("write wait file end:{}", sss._session_id);
+                log::debug!(target: "main", "write wait file end:{}", sss._session_id);
             }
             return Ok(n);
         }

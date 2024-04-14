@@ -179,7 +179,7 @@ async fn wasm_access(
     }
 
     c.wasm_plugin_confs = Some(wasm_plugin_confs);
-    log::trace!("c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
+    log::trace!(target: "main", "c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
     return Ok(());
 }
 
@@ -194,7 +194,7 @@ pub async fn do_wasm_access(stream_info: Share<StreamInfo>) -> Result<crate::Err
         return Ok(crate::Error::Ok);
     }
     let scc = stream_info.get().scc.clone().unwrap();
-    log::trace!("session_id:{}, wasm_access", stream_info.get().session_id);
+    log::trace!(target: "main", "session_id:{}, wasm_access", stream_info.get().session_id);
     use crate::config::net_access;
     use crate::config::net_core_wasm;
     let conf = net_access::curr_conf(scc.net_curr_conf());

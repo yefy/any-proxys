@@ -43,7 +43,7 @@ impl Domain {
 #[async_trait]
 impl module::Server for Domain {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
-        log::trace!("domain start");
+        log::trace!(target: "main", "domain start");
         use crate::config::domain_core;
         let domain_core_conf = domain_core::main_conf_mut(&ms).await;
         if domain_core_conf.domain_config_listen_map.is_empty() {

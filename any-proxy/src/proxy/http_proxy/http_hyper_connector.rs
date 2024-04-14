@@ -50,7 +50,7 @@ impl Service<ReqArg2> for HttpHyperConnector {
     }
 
     fn call(&mut self, arg2: ReqArg2) -> Self::Future {
-        log::trace!("http_connector dst:{}", arg2.dst);
+        log::trace!(target: "main", "http_connector dst:{}", arg2.dst);
         let request_id = format!(
             "{}-{}",
             self.request_id,

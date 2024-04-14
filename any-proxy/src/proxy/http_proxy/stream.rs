@@ -52,14 +52,14 @@ impl Stream {
     pub fn read_close(&mut self) {
         let stream_rx = self.stream_rx.take();
         if stream_rx.is_some() {
-            log::debug!("stream read_close");
+            log::debug!(target: "main", "stream read_close");
         }
     }
 
     pub fn write_close(&mut self) {
         let stream_tx = self.stream_tx.take();
         if stream_tx.is_some() {
-            log::debug!("stream write_close");
+            log::debug!(target: "main", "stream write_close");
         }
     }
 

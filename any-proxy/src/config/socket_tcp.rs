@@ -172,7 +172,7 @@ async fn tcp(
     let str = conf_arg.value.get::<String>();
     let tcp_confs: TcpConfigs =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("socket_tcp tcp_confs:{:?}", tcp_confs);
+    log::trace!(target: "main", "socket_tcp tcp_confs:{:?}", tcp_confs);
 
     for tcp_conf in tcp_confs.confs {
         if tcp_conf.tcp_config_name != default_tcp_config_name() {

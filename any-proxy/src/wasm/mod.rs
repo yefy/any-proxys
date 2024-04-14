@@ -19,9 +19,8 @@ use anyhow::Result;
 use component::server::wasm_std;
 use std::sync::Arc;
 use wasmtime::component::ResourceTable;
-use wasmtime::component::*;
 use wasmtime::Store;
-use wasmtime_wasi::preview2::{command, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder, WasiView};
 
 #[derive(Clone)]
 pub struct WasmHost {
@@ -80,20 +79,27 @@ pub async fn run_wasm_plugin(
     plugin: WasmHost,
     wasm_plugin: &WasmPlugin,
 ) -> Result<crate::Error> {
-    let mut linker = Linker::new(&wasm_plugin.engine);
-
-    WasmServer::add_to_linker(&mut linker, ServerWasiView::wasm_host)
-        .map_err(|e| anyhow!("err:WasmServer::add_to_linker => err:{}", e))?;
-
-    // Add the command world (aka WASI CLI) to the linker
-    command::add_to_linker(&mut linker)
-        .map_err(|e| anyhow!("err:command::sync::add_to_linker => err:{}", e))?;
+    //     let mut linker = Linker::new(&wasm_plugin.engine);
+    //
+    //     WasmServer::add_to_linker(&mut linker, ServerWasiView::wasm_host)
+    //         .map_err(|e| anyhow!("err:WasmServer::add_to_linker => err:{}", e))?;
+    //
+    //     // Add the command world (aka WASI CLI) to the linker
+    //     command::add_to_linker(&mut linker)
+    //         .map_err(|e| anyhow!("err:command::sync::add_to_linker => err:{}", e))?;
 
     let wasi_view = ServerWasiView::new(plugin);
     let mut store = Store::new(&wasm_plugin.engine, wasi_view);
-    let (instance, _) = WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &linker)
-        .await
-        .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
+    let (instance, _) =
+        WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &wasm_plugin.linker)
+            .await
+            .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
+
+    let config = if config.len() <= 0 {
+        None
+    } else {
+        Some(config)
+    };
 
     let ret: std::result::Result<wasm_std::Error, String> = instance
         .interface0

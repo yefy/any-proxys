@@ -100,7 +100,7 @@ impl Stream {
     pub fn read_close(&mut self) {
         let stream_rx = self.stream_rx.take();
         if stream_rx.is_some() {
-            log::debug!("stream read_close");
+            log::debug!(target: "main", "stream read_close");
             let stream_rx = stream_rx.unwrap();
             stream_rx.close();
 
@@ -116,7 +116,7 @@ impl Stream {
     pub fn write_close(&mut self) {
         let stream_tx = self.stream_tx.take();
         if stream_tx.is_some() {
-            log::debug!("stream write_close");
+            log::debug!(target: "main", "stream write_close");
             let stream_tx = stream_tx.unwrap();
             {
                 let stream_tx = &mut *stream_tx.get_mut();
@@ -176,7 +176,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         _cx: &mut Context<'_>,
         msg_size: usize,
     ) -> Poll<io::Result<StreamReadMsg>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
+        log::trace!(target: "main", "skip waning is_client:{}", self.is_client);
         let mut stream_msg = StreamReadMsg::new();
 
         loop {
@@ -200,7 +200,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 Ok(tunnel_data) => {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
 
                     let DynamicTunnelData { header: _, datas } = tunnel_data;
                     self.stream_rx_buf.set_bytes(datas);
@@ -221,7 +221,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         _cx: &mut Context<'_>,
         msg_size: usize,
     ) -> Poll<io::Result<StreamReadMsg>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
+        log::trace!(target: "main", "skip waning is_client:{}", self.is_client);
         let mut stream_msg = StreamReadMsg::new();
 
         loop {
@@ -243,7 +243,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                     Ok(tunnel_data) => {
                         self.stream_rx_pack_id
                             .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                        log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                        log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
                         let DynamicTunnelData { header: _, datas } = tunnel_data;
                         self.stream_rx_buf.set_bytes(datas);
                         continue;
@@ -272,7 +272,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 Poll::Ready(Ok(tunnel_data)) => {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
                     let DynamicTunnelData { header: _, datas } = tunnel_data;
                     self.stream_rx_buf.set_bytes(datas);
                     continue;
@@ -299,7 +299,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
         _cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
+        log::trace!(target: "main", "skip waning is_client:{}", self.is_client);
 
         let mut is_read = false;
         loop {
@@ -323,7 +323,7 @@ impl any_base::io::async_read_msg::AsyncReadMsg for Stream {
                 Ok(tunnel_data) => {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
 
                     let DynamicTunnelData { header: _, datas } = tunnel_data;
                     self.stream_rx_buf.set_bytes(datas);
@@ -373,7 +373,7 @@ impl any_base::io::async_write_msg::AsyncWriteMsg for Stream {
             let mut tunnel_data = DynamicTunnelData::from(data);
             tunnel_data.header.pack_id = stream_tx_pack_id;
             tunnel_data.header.pack_size = tunnel_data.datas.len() as u32;
-            log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
+            log::trace!(target: "main", "write tunnel_data.header:{:?}", tunnel_data.header);
 
             let (sender, lock) = {
                 let stream_tx = self.stream_tx.as_ref().unwrap().get();
@@ -434,7 +434,7 @@ impl tokio::io::AsyncRead for Stream {
         _cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        log::trace!("skip waning is_client:{}", self.is_client);
+        log::trace!(target: "main", "skip waning is_client:{}", self.is_client);
         let mut is_read = false;
         loop {
             if self.is_read_close() {
@@ -455,7 +455,7 @@ impl tokio::io::AsyncRead for Stream {
                     Ok(tunnel_data) => {
                         self.stream_rx_pack_id
                             .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                        log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                        log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
                         let DynamicTunnelData { header: _, datas } = tunnel_data;
                         self.stream_rx_buf.set_bytes(datas);
                         continue;
@@ -484,7 +484,7 @@ impl tokio::io::AsyncRead for Stream {
                 Poll::Ready(Ok(tunnel_data)) => {
                     self.stream_rx_pack_id
                         .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                    log::trace!("read tunnel_data.header:{:?}", tunnel_data.header);
+                    log::trace!(target: "main", "read tunnel_data.header:{:?}", tunnel_data.header);
                     let DynamicTunnelData { header: _, datas } = tunnel_data;
                     self.stream_rx_buf.set_bytes(datas);
                     continue;
@@ -525,7 +525,7 @@ impl tokio::io::AsyncWrite for Stream {
             tunnel_data.datas.extend_from_slice(buf);
             tunnel_data.header.pack_id = stream_tx_pack_id;
             tunnel_data.header.pack_size = tunnel_data.datas.len() as u32;
-            log::trace!("write tunnel_data.header:{:?}", tunnel_data.header);
+            log::trace!(target: "main", "write tunnel_data.header:{:?}", tunnel_data.header);
 
             let (sender, lock) = {
                 let stream_tx = self.stream_tx.as_ref().unwrap().get();

@@ -126,7 +126,7 @@ pub async fn do_start(
         let ret = ret.as_ref().unwrap();
         if let Err(e) = ret {
             let stream_info = stream_info.get();
-            log::debug!(
+            log::debug!(target: "main",
                 "session_id:{}, request_id:{}, err:{}",
                 stream_info.session_id,
                 stream_info.request_id,

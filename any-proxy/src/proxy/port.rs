@@ -41,7 +41,7 @@ impl Port {
 #[async_trait]
 impl module::Server for Port {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
-        log::trace!("port start");
+        log::trace!(target: "main", "port start");
         use crate::config::port_core;
         let port_core_conf = port_core::main_conf_mut(&ms).await;
 

@@ -201,7 +201,7 @@ async fn rule(
     let _c = conf.get_mut::<Conf>();
     let str = conf_arg.value.get::<String>();
     let rules: Rules = toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
-    log::trace!("c.rules:{:?}", rules);
+    log::trace!(target: "main", "c.rules:{:?}", rules);
     use crate::config::net_local;
     use crate::config::net_local_core;
     let net_local_conf = net_local::curr_conf(conf_arg.curr_conf());
@@ -237,7 +237,7 @@ async fn rule(
             }
             if v.len() >= 3 && &v[0..2] == "$$" {
                 let v = &v[2..];
-                log::trace!("v:{}", v);
+                log::trace!(target: "main", "v:{}", v);
                 if v == "(.*)" {
                     if net_local_core_conf.full_match_local_rule.is_some() {
                         return Err(anyhow!(
