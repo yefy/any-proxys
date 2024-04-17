@@ -9,12 +9,12 @@ pub struct WasmConf {
     pub name: String,
 }
 
-pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     if config.is_none() {
         return Ok(wasm_std::Error::Ok);
     }
     let wasm_conf: WasmConf = toml::from_str(&config.unwrap()).map_err(|e| e.to_string())?;
-    info!("wasm_conf:{:?}", wasm_conf);
+    info!("run wasm_conf:{:?}", wasm_conf);
 
     // wasm_std::out_del_headers(&vec!["expires".to_string(), "cache-control".to_string()])?;
     //

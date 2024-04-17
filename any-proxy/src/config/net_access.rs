@@ -207,7 +207,7 @@ pub async fn do_wasm_access(stream_info: Share<StreamInfo>) -> Result<crate::Err
     for wasm_plugin_conf in &wasm_plugin_confs.wasm {
         let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
         let plugin = WasmHost::new(stream_info.clone());
-        let ret = run_wasm_plugin(&wasm_plugin_conf.wasm_config, plugin, &wasm_plugin).await;
+        let ret = run_wasm_plugin(wasm_plugin_conf, plugin, &wasm_plugin).await;
         if let Err(e) = &ret {
             log::error!("wasm_access:{}", e);
             continue;

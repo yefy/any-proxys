@@ -1,8 +1,8 @@
 # anyproxy介绍
 ```
-采用rust语言编写高性能、内存安全、高度模块化、插件化、配置化、webassembly脚本热更新的跨平台（Linux、Window、MacOS）多线程的协程框架，
-支持四层反向代理服务（包括TCP、QUIC、SSL、any-tunnel协议互转加速，内核态ebpf加速），
-支持七层反向代理服务（包括HTTP、WebSocket协议，可以配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据），
+采用rust语言编写高性能、内存安全、高度模块化、插件化、配置化、webassembly脚本化、跨平台（Linux、Window、MacOS）多线程无锁并发协程框架，
+支持四层反向代理服务：包括TCP、QUIC、SSL、any-tunnel协议互转加速，内核态ebpf加速，
+支持七层反向代理服务：包括协议（HTTP、WebSocket）over（TCP、QUIC、SSL、any-tunnel），
 支持http文件缓存代理服务、负载均衡，适用于构建高效、脚本热更新、灵活的网络代理和加速服务。
 ```
 # 特点
@@ -15,7 +15,7 @@ WebAssembly热升级脚本插件开发
 支持动态添加模块，启动阶段配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承、配置内容合并和继承(代码参考any-proxys/any-proxy/src/config)        
 可以快速基于tcp、quic、ssl、http、websocket添加插件开发业务  
 支持tcp、quic、ssl、any-tunnel四层代理协议相互转换加速  
-支持http、https、http2.0、https2.0、websocket、websockets七层协议配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据  
+支持七层协议（http、https、http2.0、https2.0、websocket、websockets）over （TCP、QUIC、SSL、any-tunnel）
 支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
 高性能、cpu占用低（和nginx相媲美的性能）    
 内存安全、内存占用低、没有泄漏风险  
@@ -42,14 +42,14 @@ linux reuseport环境支持程序热升级
 ```
 ## 七层反向代理服务
 ```
-支持多种协议（包括http、https、http2.0、https2.0、websocket、websockets), 可以配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据
+支持多种协议（http、https、http2.0、https2.0、websocket、websockets) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
 支持临时文件缓存
 支持配置多主机回源并支持负载均衡
 ```
 ## http文件缓存代理服务（目前处于测试和完善阶段）
 ```
-支持多种协议（包括http、https、http2.0、https2.0), 可以配置基于TCP、QUIC、SSL、any-tunnel协议来传输数据
+支持多种协议（http、https、http2.0、https2.0) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
 支持非缓存情况下开启临时文件缓存
 支持配置多主机回源并支持负载均衡
@@ -65,24 +65,33 @@ linux reuseport环境支持程序热升级
 ```
 ## WebAssembly热升级脚本插件开发
 ```
+WebAssembly脚本插件开发是无锁异步并发
 支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-支持reload热升级
+支持reload热升级，无需重启进程
 支持wasm_http异步http网络库
 支持wasm_log日志
 支持wasm_store全局共享存储
-支持wasm_tcp异步tcp网络库
+支持wasm_socket异步tcp，quic，ssl网络库
 支持wasm_std库与主服务交互，包括预制的变量读取、http数据修改
-支持阶段嵌入脚本开发：
+支持wasm_websocket异步websocket over （tcp quic ssl）库
+支持WebAssembly脚本插件之间进行异步channel通讯
+支持异步定时器
+主程序支持多阶段嵌入脚本开发：
     四层协议TCP、QUIC、SSL、any-tunnel有三个阶段：
-        wasm_access阶段可以开发i防盗链校验、ip限制、防攻击开发
-        wasm_serverless阶段可以解析协议做业务开发
+        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
+        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁异步并发
         wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
     http协议有六个阶段：
-        wasm_access阶段可以开发i防盗链校验、ip限制、防攻击开发
-        wasm_serverless阶段可以解析协议做业务开发
+        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
+        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁并发的
         wasm_http_in_headers阶段可以修改请求的原始http数据
         wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
         wasm_http_filter_headers阶段可以修改响应给客户端http数据
+        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+    websocket协议有四个阶段：
+        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
+        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁异步并发
+        wasm_http_in_headers阶段可以修改请求的原始http数据
         wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
 ```
 ## 负载均衡算法
@@ -91,7 +100,7 @@ linux reuseport环境支持程序热升级
 ```
 ## any-tunnel协议
 ```
-支持TCP、QUIC、SSL的隧道协议
+支持any-tunnel over （TCP、QUIC、SSL）的隧道协议
 支持高延迟网络加速，socket流缓存    
 ```
 # anyproxy doc
@@ -129,10 +138,11 @@ reinit重新创建线程、配置文件热加载、超时断流
 quic支持绑定端口  
 上传下载临时文件缓存、限流  
 proxy_pass和upstream 配置多主机回源并支持负载均衡  
-负载均衡算法--加权轮询,轮询,随机,固定hash, 动态hash,fair加载时间长短智能的进行负载均衡   
+负载均衡算法--加权轮询,轮询,随机,固定hash, 动态hash,fair   
 支持心跳检查  
 支持动态域名解析  
-linux零拷贝技术sendfile和directio文件发送  
+linux零拷贝技术sendfile
+文件directio高速缓存控制
 多线程cpu绑定  
 linux reuseport  
 配置文件支持include、跨平台标识、块注释等    
@@ -150,6 +160,7 @@ sni域名解析
 支持文件io page_size对齐  
 支持openssl ssl和rustls ssl  
 支持any-tunnel包括socket多链接加速，socket流缓存，解决tcp三次握手， ssl多次握手等问题  
+支持net、server、local三级配置  
 支持tcp、quic配置设置  
 支持配置主线程、线程池个数  
 ```

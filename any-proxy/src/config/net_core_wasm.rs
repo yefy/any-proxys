@@ -1,7 +1,7 @@
 use crate::config as conf;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcRwLock, ArcUnsafeAny};
+use any_base::typ::{ArcRwLock, ArcUnsafeAny, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 
+use crate::proxy::stream_info::StreamInfo;
 use crate::wasm::ServerWasiView;
 use crate::wasm::WasmServer;
 use wasmtime::component::*;
@@ -37,6 +38,8 @@ lazy_static! {
         ArcRwLock::new(HashMap::new());
     pub static ref WASH_HASH_HASH: ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>> =
         ArcRwLock::new(HashMap::new());
+    pub static ref WASM_STREAM_INFO_MAP: ArcRwLock<HashMap<u64, Share<StreamInfo>>> =
+        ArcRwLock::new(HashMap::new());
 }
 
 pub struct WasmPlugin {
@@ -51,6 +54,7 @@ pub struct Conf {
 
     pub wash_hash: ArcRwLock<HashMap<String, WasmHashValue>>,
     pub wash_hash_hash: ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>>,
+    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
 }
 
 impl Conf {
@@ -60,6 +64,7 @@ impl Conf {
 
             wash_hash: WASH_HASH.clone(),
             wash_hash_hash: WASH_HASH_HASH.clone(),
+            wasm_stream_info_map: WASM_STREAM_INFO_MAP.clone(),
         }
     }
 

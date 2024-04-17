@@ -42,7 +42,7 @@ pub async fn do_http_filter_pre_headers(r: &Arc<HttpStreamRequest>) -> Result<()
     for wasm_plugin_conf in &wasm_plugin_confs.wasm {
         let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
         let plugin = WasmHost::new(r.http_arg.stream_info.clone());
-        let ret = run_wasm_plugin(&wasm_plugin_conf.wasm_config, plugin, &wasm_plugin).await;
+        let ret = run_wasm_plugin(wasm_plugin_conf, plugin, &wasm_plugin).await;
         if let Err(e) = &ret {
             log::error!("do_http_filter_pre_headers:{}", e);
         }

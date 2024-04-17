@@ -1,4 +1,5 @@
 use crate::util::default_config;
+use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::module::module;
@@ -91,19 +92,14 @@ impl AnyproxyWork {
     ) -> Result<()> {
         log::trace!(target: "main", "anyproxy_work start");
         let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async {
-                    let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-                    let mut ms = module::Modules::new(Some(ms), true);
-                    ms.parse_module_config(&file_name, None)
-                        .await
-                        .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
-                    Ok(ms)
-                })
+            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+                let mut ms = module::Modules::new(Some(ms), true);
+                ms.parse_module_config(&file_name, None)
+                    .await
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+                Ok(ms)
+            })
         })
         .await?;
         let mut ms = ms.unwrap();
@@ -141,23 +137,16 @@ impl AnyproxyWork {
                     }
 
                     let ms = ms.unwrap();
-
-
                     log::trace!(target: "main", "anyproxy_work reload");
                     let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
-                        tokio::runtime::Builder::new_multi_thread()
-                            .worker_threads(1)
-                            .enable_all()
-                            .build()
-                            .unwrap()
-                            .block_on(async {
-                                let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-                                let mut ms = module::Modules::new(Some(ms), true);
-                                ms.parse_module_config(&file_name, None)
-                                    .await
-                                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
-                                Ok(ms)
-                            })
+                        executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                            let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+                            let mut ms = module::Modules::new(Some(ms), true);
+                            ms.parse_module_config(&file_name, None)
+                                .await
+                                .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+                            Ok(ms)
+                            },)
                     })
                     .await?;
                     let ms = ms.unwrap();

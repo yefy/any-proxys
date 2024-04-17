@@ -9,6 +9,7 @@ use hyper::body::HttpBody;
 use hyper::http::{HeaderName, HeaderValue};
 use std::convert::TryFrom;
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[async_trait]
@@ -36,6 +37,105 @@ impl wasm_std::Host for WasmHost {
         }
 
         Ok(Ok(Some(var.unwrap())))
+    }
+
+    async fn sleep(&mut self, time_ms: u64) -> wasmtime::Result<()> {
+        tokio::time::sleep(tokio::time::Duration::from_millis(time_ms)).await;
+        Ok(())
+    }
+
+    async fn curr_session_id(&mut self) -> wasmtime::Result<u64> {
+        let session_id = self.stream_info.get().session_id;
+        Ok(session_id)
+    }
+
+    async fn curr_fd(&mut self) -> wasmtime::Result<u64> {
+        let session_id = self.stream_info.get().session_id;
+        Ok(session_id)
+    }
+
+    async fn new_session_id(&mut self) -> wasmtime::Result<u64> {
+        if self.scc.is_none() {
+            return Ok(0);
+        }
+        let session_id = {
+            use crate::config::common_core;
+            let common_core_conf = common_core::main_conf_mut(self.scc.ms()).await;
+            let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
+            session_id
+        };
+        Ok(session_id)
+    }
+
+    async fn session_send(
+        &mut self,
+        session_id: u64,
+        value: String,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let stream_info = self
+            .stream_info
+            .get_mut()
+            .wasm_stream_info_map
+            .get()
+            .get(&session_id)
+            .cloned();
+        if stream_info.is_none() {
+            return Ok(Err("".to_string()));
+        }
+        let stream_info = stream_info.unwrap();
+        let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+        let ret = wasm_session_sender
+            .send(value)
+            .await
+            .map_err(|e| e.to_string());
+        if let Err(e) = ret {
+            return Ok(Err(e));
+        }
+        Ok(Ok(()))
+    }
+
+    async fn session_recv(&mut self) -> wasmtime::Result<std::result::Result<String, String>> {
+        let wasm_session_receiver = self.stream_info.get().wasm_session_receiver.clone();
+        let ret = wasm_session_receiver.recv().await;
+        if let Err(e) = &ret {
+            return Ok(Err(e.to_string()));
+        }
+        Ok(Ok(ret.unwrap()))
+    }
+
+    async fn add_timer(&mut self, time_ms: u64, key: u64, value: String) -> wasmtime::Result<()> {
+        let stream_info = &mut *self.stream_info.get_mut();
+        stream_info.wasm_timers.insert(key, (time_ms as i64, value));
+        Ok(())
+    }
+
+    async fn del_timer(&mut self, key: u64) -> wasmtime::Result<()> {
+        let stream_info = &mut *self.stream_info.get_mut();
+        stream_info.wasm_timers.remove(&key);
+        Ok(())
+    }
+
+    async fn get_timer_timeout(&mut self, time_ms: u64) -> wasmtime::Result<Vec<String>> {
+        let stream_info = &mut *self.stream_info.get_mut();
+        let mut expire_keys = Vec::with_capacity(10);
+        for (key, (_time_ms, _)) in &mut stream_info.wasm_timers.iter_mut() {
+            *_time_ms -= time_ms as i64;
+            if *_time_ms <= 0 {
+                expire_keys.push(*key);
+            }
+        }
+
+        let mut values = Vec::with_capacity(10);
+        for key in expire_keys {
+            let timer = stream_info.wasm_timers.remove(&key);
+            if timer.is_none() {
+                continue;
+            }
+            let (_, value) = timer.unwrap();
+            values.push(value);
+        }
+
+        Ok(values)
     }
 
     async fn in_add_headers(

@@ -300,7 +300,7 @@ pub fn http_respons_to_vec(response: &Response<Body>) -> Vec<u8> {
     return data;
 }
 
-pub fn get_http_host(request: &mut Request<Body>) -> Result<String> {
+pub fn get_http_host<T>(request: &mut Request<T>) -> Result<String> {
     let version = request.version();
     let host_value = request.headers().get(hyper::http::header::HOST);
     let http_host = match host_value {
@@ -317,8 +317,8 @@ pub fn get_http_host(request: &mut Request<Body>) -> Result<String> {
             (Version::HTTP_2, Some(host), None) => format!("{}", host),
             _ => {
                 return Err(anyhow::anyhow!(
-                    "err:http_host nil => request:{:?}",
-                    request
+                    "err:http_host nil => http_host:{:?}",
+                    http_host
                 ))?
             }
         },
@@ -649,9 +649,9 @@ pub fn http_headers_size(
     size
 }
 
-pub fn copy_request_parts(
+pub fn copy_request_parts<T>(
     stream_info: Share<StreamInfo>,
-    request: &Request<Body>,
+    request: &Request<T>,
 ) -> Result<HttpParts> {
     let scheme = if stream_info.get().server_stream_info.is_tls {
         "https"

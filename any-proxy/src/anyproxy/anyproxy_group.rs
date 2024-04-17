@@ -1,5 +1,6 @@
 use super::anyproxy_work;
 use crate::util::default_config;
+use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::executor_local_spawn::_block_on;
 use any_base::module::module;
@@ -35,11 +36,21 @@ impl AnyproxyGroup {
 
     pub async fn start(&mut self) -> Result<()> {
         log::trace!(target: "main", "anyproxy_group start");
-        let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-        let mut ms = module::Modules::new(Some(self.ms.clone()), false);
-        ms.parse_module_config(&file_name, None)
-            .await
-            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+        let ms = self.ms.clone();
+        let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
+            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+                let mut ms = module::Modules::new(Some(ms), false);
+                ms.parse_module_config(&file_name, None)
+                    .await
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+
+                Ok(ms)
+            })
+        })
+        .await?;
+        let ms = ms.unwrap();
+
         self.ms = ms.clone();
         use crate::config::common_core;
         let common_conf = common_core::main_conf(&ms).await;
@@ -100,14 +111,9 @@ impl AnyproxyGroup {
                     let mut anyproxy_work =
                         anyproxy_work::AnyproxyWork::new(executor, config_tx)
                             .map_err(|e| anyhow!("err:AnyproxyWork::new => e:{}", e))?;
-                    anyproxy_work
-                        .start(async_context, ms)
-                        .await
-                        .map_err(|e| anyhow!("err:anyproxy_work.start => e:{}", e))?;
-                    Ok(())
+                    anyproxy_work.start(async_context, ms).await
                 },
-            )?;
-            Ok(())
+            )
         });
 
         thread_pool_wait_run
@@ -122,14 +128,28 @@ impl AnyproxyGroup {
     }
 
     pub async fn reload(&mut self, _executors: ExecutorsLocal) {
-        let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
-        let file_name = anyproxy_conf_full_path.as_str();
+        let ms = self.ms.clone();
+        let ret = tokio::task::spawn_blocking(move || {
+            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
+                let file_name = anyproxy_conf_full_path.as_str();
 
-        let mut ms = module::Modules::new(Some(self.ms.clone()), false);
-        let ret = ms
-            .parse_module_config(file_name, None)
-            .await
-            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e));
+                let mut ms = module::Modules::new(Some(ms), false);
+                let ret = ms
+                    .parse_module_config(file_name, None)
+                    .await
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e));
+
+                (ret, ms)
+            })
+        })
+        .await;
+        let (ret, ms) = if let Err(e) = ret {
+            (Err(anyhow::anyhow!("{}", e)), None)
+        } else {
+            let (ret, ms) = ret.unwrap();
+            (ret, Some(ms))
+        };
         match ret {
             Err(e) => {
                 log::error!(
@@ -141,6 +161,7 @@ impl AnyproxyGroup {
             }
             _ => {}
         };
+        let ms = ms.unwrap();
         self.ms = ms.clone();
 
         log::info!("reload ok group_version:{}", self.group_version);
@@ -170,14 +191,18 @@ impl AnyproxyGroup {
     }
 
     pub async fn check(group_version: i32, _executors: ExecutorsLocal) -> Result<()> {
-        let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
-        let file_name = anyproxy_conf_full_path.as_str();
+        let ret: Result<()> = tokio::task::spawn_blocking(move || {
+            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
+                let file_name = anyproxy_conf_full_path.as_str();
+                let mut ms = module::Modules::new(None, false);
+                ms.parse_module_config(&file_name, None)
+                    .await
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))
+            })
+        })
+        .await?;
 
-        let mut ms = module::Modules::new(None, false);
-        let ret = ms
-            .parse_module_config(&file_name, None)
-            .await
-            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e));
         match ret {
             Err(e) => {
                 log::error!(

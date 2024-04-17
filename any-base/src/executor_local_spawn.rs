@@ -429,10 +429,10 @@ where
     });
 }
 
-pub fn _block_on<S, F>(thread_num: usize, worker_threads_blocking: usize, service: S) -> Result<()>
+pub fn _block_on<S, F>(thread_num: usize, worker_threads_blocking: usize, service: S) -> F::Output
 where
     S: FnOnce(ExecutorLocalSpawn) -> F + 'static,
-    F: Future<Output = Result<()>> + 'static,
+    F: Future + 'static,
 {
     if thread_num > 1 {
         log::trace!(target: "main", "new_multi_thread thread_num:{}", thread_num);
@@ -445,11 +445,8 @@ where
             .block_on(async {
                 let executor_spawn =
                     ExecutorLocalSpawn::default(Arc::new(Box::new(ThreadRuntime)), false, 0);
-                service(executor_spawn)
-                    .await
-                    .map_err(|e| anyhow!("err:block_on service => e:{}", e))
+                service(executor_spawn).await
             })
-            .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
     } else {
         log::trace!(target: "main", "new_current_thread thread_num:{}", thread_num);
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -458,15 +455,10 @@ where
             .build()
             .unwrap();
         let local = tokio::task::LocalSet::new();
-        local
-            .block_on(&rt, async {
-                let executor_local_spawn =
-                    ExecutorLocalSpawn::default(Arc::new(Box::new(LocalRuntime)), false, 0);
-                service(executor_local_spawn)
-                    .await
-                    .map_err(|e| anyhow!("err:block_on service => e:{}", e))
-            })
-            .map_err(|e| anyhow!("err:_block_on => e:{}", e))?;
+        local.block_on(&rt, async {
+            let executor_local_spawn =
+                ExecutorLocalSpawn::default(Arc::new(Box::new(LocalRuntime)), false, 0);
+            service(executor_local_spawn).await
+        })
     }
-    Ok(())
 }

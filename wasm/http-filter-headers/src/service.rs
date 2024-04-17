@@ -1,6 +1,8 @@
 use crate::wasm_std;
+use crate::info;
 
-pub fn run(_config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(_config: Option<String>) -> Result<wasm_std::Error, String> {
+    info!("{:?}", "http-filter-headers");
     let version = wasm_std::anyproxy_version()?;
     wasm_std::out_add_headers(&vec![("server".to_string(), version)])?;
     wasm_std::out_del_headers(&vec!["expires".to_string(), "cache-control".to_string()])?;

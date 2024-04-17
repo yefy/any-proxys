@@ -119,7 +119,7 @@ impl proxy::Stream for HttpStream {
                 self.arg.clone(),
                 self.http_arg.clone(),
                 session_id,
-                self.header_response.clone(),
+                Some(self.header_response.clone()).into(),
                 part,
                 request,
                 false,

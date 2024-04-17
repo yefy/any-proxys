@@ -168,7 +168,7 @@ impl ProxyCache {
         } else {
             &self.cache_conf.path
         };
-        Self::load_file_full_path(file_full_name, &mut file_full_names)?;
+        Self::load_file_full_path(file_full_name, &mut file_full_names, &vec!["tmp", "temp"])?;
         log::debug!(target: "main", "file_full_names: {:?}", file_full_names);
 
         for file_full_name in file_full_names {
@@ -200,7 +200,7 @@ impl ProxyCache {
     }
 
     pub async fn load_cache_file(file_full_name: ArcString) -> Result<(u64, Bytes, Bytes, u64)> {
-        let file_ext = ProxyCacheFileNode::open_file(file_full_name, 0).await?;
+        let file_ext = ProxyCacheFileNode::open_file(file_full_name.clone(), 0).await?;
         let file_ext = ArcRwLock::new(file_ext);
 
         let file_r = file_ext.get().file.clone();
@@ -232,7 +232,8 @@ impl ProxyCache {
         let mut expires_time = Bytes::new();
 
         let pattern = "\r\n\r\n";
-        let position = bytes_index(&buf, pattern.as_ref()).ok_or(anyhow!("read_head"))?;
+        let position = bytes_index(&buf, pattern.as_ref())
+            .ok_or(anyhow!("read_head file_full_name:{}", file_full_name))?;
         let file_head_size = position + pattern.len();
         let file_head = buf.slice(0..file_head_size);
         let _http_head_start = buf.slice(file_head_size..);
@@ -292,6 +293,7 @@ impl ProxyCache {
     pub fn load_file_full_path(
         file_full_path: &str,
         file_full_names: &mut Vec<String>,
+        filter_dir_names: &Vec<&str>,
     ) -> Result<()> {
         let dir_path = Path::new(file_full_path);
         for entry in fs::read_dir(dir_path)? {
@@ -300,9 +302,19 @@ impl ProxyCache {
             // 判断是否是目录
             if path.is_dir() {
                 let name = path.file_name().unwrap().to_str().unwrap();
+                let mut is_continue = false;
+                for filter_dir_name in filter_dir_names {
+                    if name == *filter_dir_name {
+                        is_continue = true;
+                        break;
+                    }
+                }
+                if is_continue {
+                    continue;
+                }
                 let file_full_path = format!("{}/{}", file_full_path, name);
                 log::debug!(target: "main", "{}", file_full_path);
-                Self::load_file_full_path(&file_full_path, file_full_names)?;
+                Self::load_file_full_path(&file_full_path, file_full_names, filter_dir_names)?;
             } else {
                 let name = path.file_name().unwrap().to_str().unwrap();
                 let file_full_name = format!("{}/{}", file_full_path, name);

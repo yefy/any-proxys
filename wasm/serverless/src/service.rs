@@ -1,4 +1,4 @@
-use crate::wasm_tcp;
+use crate::wasm_socket;
 use crate::wasm_std;
 use crate::info;
 
@@ -10,7 +10,7 @@ pub struct WasmConf {
     pub name: String,
 }
 
-pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     if config.is_none() {
         return Ok(wasm_std::Error::Ok);
     }
@@ -29,14 +29,14 @@ pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
     );
 
     //let fd =
-    //    wasm_tcp::socket_connect(wasm_tcp::SocketType::Tcp, "www.upstream.cn:10001", None)?;
+    //    wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "www.upstream.cn:10001", None)?;
     let fd =
-        wasm_tcp::socket_connect(wasm_tcp::SocketType::Tcp, "192.168.192.139:10001", None)?;
-    wasm_tcp::socket_write_all(fd, &request)?;
-    wasm_tcp::socket_flush(fd)?;
-    let data = wasm_tcp::socket_read(fd, 1024)?;
-    wasm_tcp::socket_flush(fd)?;
-    info!("data:{:?}", data);
+        wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "192.168.192.139:10001", None)?;
+    wasm_socket::socket_write_all(fd, request.as_bytes())?;
+    wasm_socket::socket_flush(fd)?;
+    let data = wasm_socket::socket_read(fd, 1024)?;
+    wasm_socket::socket_flush(fd)?;
+    info!("data:{:?}", unsafe{String::from_utf8_unchecked(data)});
 
     // 响应的内容
     let body = "Hello, serverless!";
@@ -51,10 +51,11 @@ pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
         "{}{}{}{}\r\n{}", // 注意末尾的 \r\n 表示换行
         status_line, content_type, content_length, connection, body
     );
+    let fd = wasm_std::curr_fd();
     // 打印生成的 HTTP 响应字符串
     info!("response:{:?}", response);
-    wasm_tcp::socket_write_all(0, &response)?;
-    wasm_tcp::socket_flush(0)?;
+    wasm_socket::socket_write_all(fd, &response.as_bytes())?;
+    wasm_socket::socket_flush(fd)?;
 
     Ok(wasm_std::Error::Ok)
 }

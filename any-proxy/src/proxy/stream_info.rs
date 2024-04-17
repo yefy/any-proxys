@@ -5,7 +5,7 @@ use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::{ArcMutex, ArcMutexTokio, OptionExt, Share};
+use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionExt, Share};
 use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
@@ -130,6 +130,7 @@ impl ErrStatus200 for ErrStatusUpstream {
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use any_base::stream_flow;
 use std::collections::HashMap;
+use tokio_tungstenite::WebSocketStream;
 
 pub struct ErrStatusInfo {
     pub err: StreamFlowErr,
@@ -239,6 +240,13 @@ pub struct StreamInfo {
     pub http_r: OptionExt<Arc<HttpStreamRequest>>,
     pub wasm_socket_map:
         HashMap<u64, ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>>,
+    pub wasm_websocket_map: HashMap<u64, ArcMutexTokio<WebSocketStream<StreamFlow>>>,
+    pub wasm_websocket_main:
+        ArcMutexTokio<WebSocketStream<any_base::io::buf_stream::BufStream<StreamFlow>>>,
+    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
+    pub wasm_session_sender: async_channel::Sender<String>,
+    pub wasm_session_receiver: async_channel::Receiver<String>,
+    pub wasm_timers: HashMap<u64, (i64, String)>,
 }
 
 impl StreamInfo {
@@ -251,7 +259,9 @@ impl StreamInfo {
         stream_so_singer_time: usize,
         debug_is_open_print: bool,
         session_id: u64,
+        wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
     ) -> StreamInfo {
+        let (wasm_session_sender, wasm_session_receiver) = async_channel::unbounded();
         StreamInfo {
             executors,
             server_stream_info,
@@ -297,6 +307,12 @@ impl StreamInfo {
             session_id,
             http_r: None.into(),
             wasm_socket_map: HashMap::new(),
+            wasm_websocket_map: HashMap::new(),
+            wasm_websocket_main: ArcMutexTokio::default(),
+            wasm_stream_info_map,
+            wasm_session_sender,
+            wasm_session_receiver,
+            wasm_timers: HashMap::new(),
         }
     }
 

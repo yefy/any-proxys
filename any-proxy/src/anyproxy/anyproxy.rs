@@ -192,10 +192,7 @@ impl Anyproxy {
 
         if arg_config.check_config {
             executor_local_spawn::_block_on(1, 1, move |executor| async move {
-                AnyproxyGroup::check(0, executor.executors())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("err:check => e:{}", e))?;
-                Ok(())
+                AnyproxyGroup::check(0, executor.executors()).await
             })?;
             return Ok(true);
         }
@@ -219,12 +216,18 @@ impl Anyproxy {
         Anyproxy::remove_pid_file();
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
-
-        let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-        let mut ms = module::Modules::new(None, false);
-        ms.parse_module_config(&file_name, None)
-            .await
-            .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+        let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
+            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
+                let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
+                let mut ms = module::Modules::new(None, false);
+                ms.parse_module_config(&file_name, None)
+                    .await
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+                Ok(ms)
+            })
+        })
+        .await?;
+        let ms = ms.unwrap();
 
         use crate::config::common_core;
         let common_conf = common_core::main_conf(&ms).await;

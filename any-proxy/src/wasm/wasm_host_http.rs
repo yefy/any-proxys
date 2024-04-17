@@ -1,17 +1,22 @@
 use crate::proxy::http_proxy::http_header_parse::content_length;
+use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
+use crate::proxy::http_proxy::HyperExecutorLocal;
 use crate::wasm::component::server::wasm_http;
-use crate::wasm::WasmHost;
+use crate::wasm::wasm_socket;
+use crate::wasm::{get_socket_connect, wasm_err, WasmHost};
 use anyhow::Result;
 use async_trait::async_trait;
 use hyper::body::HttpBody;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::str::FromStr;
+use tokio::time::Duration;
 
 #[async_trait]
 impl wasm_http::Host for WasmHost {
     async fn handle_http(
         &mut self,
+        typ: wasm_socket::SocketType,
         req: wasm_http::Request,
     ) -> wasmtime::Result<std::result::Result<wasm_http::Response, String>> {
         let http_req: http::Request<hyper::Body> = match req.try_into() {
@@ -25,7 +30,75 @@ impl wasm_http::Host for WasmHost {
             }
         };
 
-        let client = hyper::Client::new();
+        let domain = http_req.uri().host();
+        if domain.is_none() {
+            return Ok(Err("domain.is_none".to_string()));
+        }
+        let domain = domain.unwrap();
+        let port = http_req.uri().port_u16();
+        let http_host = if port.is_none() {
+            match typ {
+                wasm_socket::SocketType::Tcp => {
+                    format!("{}:80", domain)
+                }
+                wasm_socket::SocketType::Ssl => {
+                    format!("{}:443", domain)
+                }
+                wasm_socket::SocketType::Quic => {
+                    format!("{}:443", domain)
+                }
+            }
+        } else {
+            format!("{}:{}", domain, port.unwrap())
+        };
+
+        use crate::util;
+        let address = util::util::lookup_host(tokio::time::Duration::from_secs(30), &http_host)
+            .await
+            .map_err(|e| wasm_err(e.to_string()))?;
+
+        let connect_func = get_socket_connect(
+            typ,
+            domain.to_string().into(),
+            address,
+            Some(domain.to_string()),
+        )
+        .await
+        .map_err(|e| wasm_err(e.to_string()))?;
+
+        let is_http2 = match &http_req.version() {
+            &hyper::http::Version::HTTP_11 => false,
+            &hyper::http::Version::HTTP_2 => true,
+            _ => {
+                return Ok(Err(anyhow::anyhow!(
+                    "err:http version not found => version:{:?}",
+                    http_req.version()
+                )
+                .to_string()));
+            }
+        };
+
+        let executors = self.stream_info.get().executors.clone().unwrap();
+        let ms = self.stream_info.get().scc.ms().clone();
+        let request_id = self.stream_info.get().request_id.clone();
+        use crate::config::common_core;
+        let common_core_conf = common_core::main_conf_mut(&ms).await;
+        let http = HttpHyperConnector::new(
+            request_id,
+            connect_func,
+            common_core_conf.session_id.clone(),
+            executors.context.run_time.clone(),
+        );
+
+        let client = hyper::Client::builder()
+            .executor(HyperExecutorLocal(executors.clone()))
+            .pool_max_idle_per_host(10)
+            .pool_idle_timeout(Duration::from_secs(10))
+            .http2_only(is_http2)
+            //.set_host(false)
+            .build(http);
+
+        //let client = hyper::Client::new();
         let http_resp = client.request(http_req, None).await?;
         let wasn_resp = http_response_to_wasn_response(http_resp).await;
         Ok(Ok(match wasn_resp {

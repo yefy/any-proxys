@@ -18,6 +18,15 @@ interface wasm-std {
 
     anyproxy-version: func() -> result<string, string>;
     variable: func(key: string) -> result<option<string>, string>;
+    sleep: func(time-ms: u64);
+    curr-session-id: func() -> u64;
+    curr-fd: func() -> u64;
+    new-session-id: func() -> u64;
+    session-send: func(session-id: u64, value: string) -> result<_, string>;
+    session-recv: func() -> result<string, string>;
+    add-timer: func(time-ms: u64, key: u64, value: string);
+    del-timer: func(key: u64);
+    get-timer-timeout:func(time-ms: u64) -> list<string>;
 
     in-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     in-add-header: func(key: string, value: string) -> result<_, string>;

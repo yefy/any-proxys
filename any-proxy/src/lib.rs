@@ -20,11 +20,21 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub fn default_wasm_plug_conf_is_open() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WasmPluginConf {
+    #[serde(default = "default_wasm_plug_conf_is_open")]
+    pub is_open: bool,
     pub wasm_path: String,
-    pub wasm_config: String,
+    pub wasm_main_config: String,
+    pub wasm_main_timeout_config: Option<String>,
+    pub wasm_main_ext1_config: Option<String>,
+    pub wasm_main_ext2_config: Option<String>,
+    pub wasm_main_ext3_config: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

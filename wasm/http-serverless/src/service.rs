@@ -1,5 +1,6 @@
 use crate::wasm_http;
 use crate::wasm_std;
+use crate::wasm_socket;
 use crate::info;
 
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ pub struct WasmConf {
     pub name: String,
 }
 
-pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     if config.is_none() {
         return Ok(wasm_std::Error::Ok);
     }
@@ -24,7 +25,7 @@ pub fn run(config: Option<String>) -> Result<wasm_std::Error, String> {
         params: wasm_http::Params::new(),
         body: None,
     };
-    let response = wasm_http::handle_http(&request)?;
+    let response = wasm_http::handle_http(wasm_socket::SocketType::Tcp, &request)?;
 
     info!("response.status:{}", response.status);
     if response.body.is_some() {

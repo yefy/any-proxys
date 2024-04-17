@@ -154,7 +154,14 @@ async fn init_conf(
         .plugin_handle_serverless
         .get_mut()
         .await
-        .push(|stream_info| Box::pin(serverless(stream_info)));
+        .push(|stream_info| Box::pin(serverless(stream_info.clone())));
+
+    net_core_plugin_conf
+        .is_plugin_handle_serverless
+        .get_mut()
+        .await
+        .push(|stream_info| Box::pin(is_serverless(stream_info)));
+
     return Ok(());
 }
 
@@ -180,6 +187,29 @@ async fn wasm_serverless(
     c.wasm_plugin_confs = Some(wasm_plugin_confs);
     log::trace!(target: "main", "c.wasm_plugin_confs:{:?}", c.wasm_plugin_confs);
     return Ok(());
+}
+
+pub async fn is_serverless(stream_info: Share<StreamInfo>) -> Result<bool> {
+    if stream_info.get().scc.is_none() {
+        return Ok(false);
+    }
+    let scc = stream_info.get().scc.clone();
+    log::trace!(target: "main",
+                "session_id:{}, wasm_serverless",
+                stream_info.get().session_id
+    );
+    use crate::config::net_serverless;
+    let conf = net_serverless::curr_conf(scc.net_curr_conf());
+
+    if conf.wasm_plugin_confs.is_none() {
+        return Ok(false);
+    }
+    for wasm_plugin_conf in &conf.wasm_plugin_confs.as_ref().unwrap().wasm {
+        if wasm_plugin_conf.is_open {
+            return Ok(true);
+        }
+    }
+    return Ok(true);
 }
 
 pub async fn serverless(stream_info: Share<StreamInfo>) -> Result<crate::Error> {
@@ -209,7 +239,7 @@ pub async fn do_wasm_serverless(stream_info: Share<StreamInfo>) -> Result<crate:
     for wasm_plugin_conf in &wasm_plugin_confs.wasm {
         let wasm_plugin = net_core_wasm_conf.get_wasm_plugin(&wasm_plugin_conf.wasm_path)?;
         let plugin = WasmHost::new(stream_info.clone());
-        let ret = run_wasm_plugin(&wasm_plugin_conf.wasm_config, plugin, &wasm_plugin).await;
+        let ret = run_wasm_plugin(&wasm_plugin_conf, plugin, &wasm_plugin).await;
         if let Err(e) = &ret {
             log::error!("wasm_serverless:{}", e);
             continue;

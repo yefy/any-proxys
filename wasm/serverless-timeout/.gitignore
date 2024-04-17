@@ -1,0 +1,44 @@
+# IntelliJ project files
+.idea/*
+
+# visual studio code files
+.vscode
+
+# Rust
+target/*
+
+# cargo
+.cargo/
+
+# profile
+flamegraph.*
+perf.*
+
+# tests
+*.stderr
+*.stdout
+*.out
+*.swp
+
+# python
+venv/
+logs
+tmp
+
+*.pid
+*.log
+*.signal
+*.exe
+*.d
+*.o
+ab
+ab.exe
+ab.log
+vmlinux.h
+any-proxy/examples/anyproxy/anyproxy.exe
+any-proxy/examples/anyproxy/anyproxy
+any-proxy/examples/anyproxy/tokio_proxy.exe
+any-proxy/examples/anyproxy/tokio_proxy
+.output
+*.tmp
+*.err

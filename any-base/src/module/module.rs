@@ -949,8 +949,7 @@ impl Modules {
                     };
                     (v)(old_ms, old_main_conf, self.clone(), self.main_confs())
                         .await
-                        .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))
-                        .unwrap();
+                        .map_err(|e| anyhow!("err:merge_old_main_confs_map =>e{}", e))?;
                 }
             }
 
@@ -961,8 +960,7 @@ impl Modules {
                     log::trace!(target: "main", "merge_confs_map main_index:{}, name:{}", main_index, name);
                     (v)(self.clone(), self.main_confs.clone())
                         .await
-                        .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))
-                        .unwrap();
+                        .map_err(|e| anyhow!("err:merge_confs_map =>e{}", e))?;
                 }
             }
         }

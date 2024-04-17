@@ -11,6 +11,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub type IsPluginHandleAccess =
+    fn(Share<StreamInfo>) -> Pin<Box<dyn Future<Output = Result<bool>> + Send>>;
+
 pub type PluginHandleAccess =
     fn(Share<StreamInfo>) -> Pin<Box<dyn Future<Output = Result<crate::Error>> + Send>>;
 
@@ -37,6 +40,7 @@ pub type PluginHttpInSet =
 
 pub struct Conf {
     pub plugin_handle_access: ArcRwLockTokio<Vec<PluginHandleAccess>>,
+    pub is_plugin_handle_serverless: ArcRwLockTokio<Vec<IsPluginHandleAccess>>,
     pub plugin_handle_serverless: ArcRwLockTokio<Vec<PluginHandleAccess>>,
     pub plugin_handle_logs: ArcRwLockTokio<Vec<PluginHandleLog>>,
     pub plugin_handle_stream_cache: ArcRwLockTokio<PluginHandleStream>,
@@ -56,6 +60,7 @@ impl Conf {
     pub fn new() -> Self {
         Conf {
             plugin_handle_access: ArcRwLockTokio::new(Vec::new()),
+            is_plugin_handle_serverless: ArcRwLockTokio::new(Vec::new()),
             plugin_handle_serverless: ArcRwLockTokio::new(Vec::new()),
             plugin_handle_logs: ArcRwLockTokio::new(Vec::new()),
             plugin_handle_stream_cache: ArcRwLockTokio::default(),

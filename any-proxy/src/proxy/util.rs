@@ -4,6 +4,7 @@ use crate::proxy::stream_info::{ErrStatus, StreamInfo};
 use crate::proxy::{stream_var, ServerArg, StreamConfigContext};
 use crate::stream::connect::Connect;
 use crate::util::var::Var;
+use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::{ArcMutexTokio, ArcUnsafeAny, Share};
 use any_base::util::ArcString;
@@ -11,6 +12,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::future::Future;
 use std::sync::Arc;
+use tokio_tungstenite::WebSocketStream;
 
 pub async fn parse_proxy_domain<S, SF, D, DF>(
     arg: &ServerArg,
@@ -266,10 +268,23 @@ pub async fn run_plugin_handle_serverless(
     stream_info: Share<StreamInfo>,
     client_buf_reader: any_base::io_rb::buf_reader::BufReader<StreamFlow>,
 ) -> Result<Option<any_base::io_rb::buf_reader::BufReader<StreamFlow>>> {
-    use crate::config::net_serverless;
-    let conf = net_serverless::curr_conf(scc.net_curr_conf());
+    use crate::config::net_core_plugin;
+    let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
 
-    if conf.wasm_plugin_confs.is_none() {
+    let ret: Result<bool> = async {
+        for is_plugin_handle_serverless in
+            &*net_core_plugin_conf.is_plugin_handle_serverless.get().await
+        {
+            let is_ok = (is_plugin_handle_serverless)(stream_info.clone()).await?;
+            if is_ok {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    .await;
+    let is_ok = ret?;
+    if !is_ok {
         return Ok(Some(client_buf_reader));
     }
 
@@ -278,33 +293,114 @@ pub async fn run_plugin_handle_serverless(
     let client_buf_stream = any_base::io::buf_writer::BufWriter::new(client_buf_reader);
     let client_buf_stream = any_base::io::buf_stream::BufStream::from(client_buf_stream);
     let client_buf_stream = ArcMutexTokio::new(client_buf_stream);
+    let session_id = stream_info.get().session_id;
     stream_info
         .get_mut()
         .wasm_socket_map
-        .insert(0, client_buf_stream);
+        .insert(session_id, client_buf_stream);
 
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .insert(session_id, stream_info.clone());
+
+    let ret: Result<()> = async {
+        for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await
+        {
+            let err = (plugin_handle_serverless)(stream_info.clone()).await?;
+            match err {
+                crate::Error::Ok => {}
+                crate::Error::Break => {}
+                crate::Error::Finish => {
+                    break;
+                }
+                crate::Error::Error => {
+                    return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
+                }
+                crate::Error::Return => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    .await;
+    ret?;
+
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .remove(&session_id);
+    Ok(None)
+}
+
+pub async fn run_plugin_handle_websocket_serverless(
+    scc: Arc<StreamConfigContext>,
+    stream_info: Share<StreamInfo>,
+    client_stream: WebSocketStream<BufStream<StreamFlow>>,
+) -> Result<Option<WebSocketStream<BufStream<StreamFlow>>>> {
     use crate::config::net_core_plugin;
-    //___wait___
-    //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
     let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
 
-    for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await {
-        let err = (plugin_handle_serverless)(stream_info.clone()).await?;
-        match err {
-            crate::Error::Ok => {}
-            crate::Error::Break => {}
-            crate::Error::Finish => {
-                break;
+    let ret: Result<bool> = async {
+        for is_plugin_handle_serverless in
+            &*net_core_plugin_conf.is_plugin_handle_serverless.get().await
+        {
+            let is_ok = (is_plugin_handle_serverless)(stream_info.clone()).await?;
+            if is_ok {
+                return Ok(true);
             }
-            crate::Error::Error => {
-                return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
-            }
-            crate::Error::Return => {
-                break;
-            }
-            _ => {}
         }
+        return Ok(false);
     }
+    .await;
+    let is_ok = ret?;
+    if !is_ok {
+        return Ok(Some(client_stream));
+    }
+
+    let client_stream = ArcMutexTokio::new(client_stream);
+    let session_id = stream_info.get().session_id;
+    stream_info.get_mut().wasm_websocket_main = client_stream;
+
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .insert(session_id, stream_info.clone());
+
+    let ret: Result<()> = async {
+        for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await
+        {
+            let err = (plugin_handle_serverless)(stream_info.clone()).await?;
+            match err {
+                crate::Error::Ok => {}
+                crate::Error::Break => {}
+                crate::Error::Finish => {
+                    break;
+                }
+                crate::Error::Error => {
+                    return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
+                }
+                crate::Error::Return => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    .await;
+    ret?;
+
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .remove(&session_id);
     Ok(None)
 }
 
@@ -312,35 +408,61 @@ pub async fn run_plugin_handle_http_serverless(
     scc: Arc<StreamConfigContext>,
     stream_info: Share<StreamInfo>,
 ) -> Result<bool> {
-    use crate::config::net_serverless;
-    let conf = net_serverless::curr_conf(scc.net_curr_conf());
+    use crate::config::net_core_plugin;
+    let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
 
-    if conf.wasm_plugin_confs.is_none() {
+    let ret: Result<bool> = async {
+        for is_plugin_handle_serverless in
+            &*net_core_plugin_conf.is_plugin_handle_serverless.get().await
+        {
+            let is_ok = (is_plugin_handle_serverless)(stream_info.clone()).await?;
+            if is_ok {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    .await;
+    let is_ok = ret?;
+    if !is_ok {
         return Ok(false);
     }
 
-    use crate::config::net_core_plugin;
-    //___wait___
-    //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
-    let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+    let session_id = stream_info.get().session_id;
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .insert(session_id, stream_info.clone());
 
-    for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await {
-        let err = (plugin_handle_serverless)(stream_info.clone()).await?;
-        match err {
-            crate::Error::Ok => {}
-            crate::Error::Break => {}
-            crate::Error::Finish => {
-                break;
+    let ret: Result<()> = async {
+        for plugin_handle_serverless in &*net_core_plugin_conf.plugin_handle_serverless.get().await
+        {
+            let err = (plugin_handle_serverless)(stream_info.clone()).await?;
+            match err {
+                crate::Error::Ok => {}
+                crate::Error::Break => {}
+                crate::Error::Finish => {
+                    break;
+                }
+                crate::Error::Error => {
+                    return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
+                }
+                crate::Error::Return => {
+                    break;
+                }
+                _ => {}
             }
-            crate::Error::Error => {
-                return Err(anyhow::anyhow!("err:plugin_handle_serverless"));
-            }
-            crate::Error::Return => {
-                break;
-            }
-            _ => {}
         }
+        Ok(())
     }
+    .await;
+    ret?;
+    stream_info
+        .get_mut()
+        .wasm_stream_info_map
+        .get_mut()
+        .remove(&session_id);
     Ok(true)
 }
 

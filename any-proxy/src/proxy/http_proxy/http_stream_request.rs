@@ -250,7 +250,7 @@ pub struct HttpStreamRequestContext {
     pub r_out_main: Option<HttpOut>,
     pub in_body_buf: Option<HttpBodyBufFilter>,
     pub out_body_buf: Option<HttpBodyBufFilter>,
-    pub header_response: Arc<HttpHeaderResponse>,
+    pub header_response: OptionExt<Arc<HttpHeaderResponse>>,
 
     pub client_write_tx: Option<any_base::stream_channel_write::Stream>,
     pub executor_client_write: Option<ExecutorLocalSpawn>,
@@ -294,7 +294,7 @@ impl HttpStreamRequest {
         arg: ServerArg,
         http_arg: ServerArg,
         session_id: u64,
-        header_response: Arc<HttpHeaderResponse>,
+        header_response: OptionExt<Arc<HttpHeaderResponse>>,
         parts: HttpParts,
         request_upstream: Request<Body>,
         mut is_client_sendfile: bool,
