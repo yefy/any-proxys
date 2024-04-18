@@ -11,7 +11,7 @@ apt install pkg-config
 apt install openssl
 apt install libssl-dev
 安装rust，如果安装失败，请看rust官方安装教程
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+安装rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 这里可能需要重启终端
 rustup install 1.74.1
 rustup toolchain list
@@ -20,8 +20,8 @@ rustup default 1.74.1-x86_64-unknown-linux-gnu
 cargo install cargo-component
 
 window:需要安装: 
-openssl
-安装rust，请看rust官方安装教程, 自己下载二进制安装
+安装openssl: 下载Win64OpenSSL-1_1_1k.exe安装
+安装rust: 请看rust官方安装教程, 自己下载二进制安装
 rustup install 1.74.1
 rustup toolchain list
 rustup default 1.74.1-x86_64-unknown-linux-gnu
@@ -31,7 +31,7 @@ cargo install cargo-component
 如果本地没安装openssl建议使用rustls库(程序内嵌，无需安装): 
 cargo build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
 ```
-rust一定要用--release编译， release和debug性能几十倍的差异
+rust一定要用--release编译， release和debug性能几十倍的差异  
 cargo build --release --bin anyproxy  
 cp target/release/anyproxy ./any-proxy/examples/anyproxy  
 cd ./any-proxy/examples/anyproxy  
@@ -73,4 +73,6 @@ anyproxy_edge_to_proxy.conf 文件有对应的curl测试
 cert放置密钥  
 conf放配置文件  
 logs放access_log、anyproxy.log、anyproxy.pid  
+tmp临时文件目录  
+html静态文件目录  
 

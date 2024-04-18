@@ -1,9 +1,11 @@
 # anyproxy介绍
 ```
-采用异步rust语言编写高性能、内存安全、高度模块化、插件化、配置化、脚本化、跨平台（Linux、Window、MacOS）多线程无锁并发协程框架，
+采用异步rust语言编写高性能、内存安全、高度模块化、插件化、配置化、脚本化、跨平台多线程无锁并发协程框架，
 支持四层反向代理服务：包括TCP、QUIC、SSL、any-tunnel协议互转加速，内核态ebpf加速，
-支持七层反向代理服务：包括协议（HTTP、WebSocket）over（TCP、QUIC、SSL、any-tunnel），
-支持http文件缓存代理服务、负载均衡和故障转移策略，优雅的重新加载配置文件，webassembly热更新脚本开发、适用于构建高效、脚本热更新、灵活的网络代理和加速服务。
+支持七层反向代理服务：包括协议（HTTP、HTTP2、WebSocket）over（TCP、QUIC、SSL、any-tunnel），
+支持http文件缓存代理服务、负载均衡和故障转移策略，优雅的热加载配置文件，
+无锁异步webassembly热更新脚本框架，支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
+适用于构建高效、脚本热更新、灵活的网络代理和加速服务。
 ```
 # 特点
 ```
@@ -11,15 +13,15 @@
 Linux reuseport多线程无锁并发  
 没有reuseport平台支持多线程有锁并发  
 支持动态添加模块，能快速添加新协议监听和回源（包括tcp、quic、ssl、srt、kcp、http、websocket等）   
-WebAssembly热升级脚本插件开发   
+无锁异步webassembly热更新脚本框架 
 支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承 
 可以快速基于tcp、quic、ssl、http、websocket添加插件和脚本开发业务  
 支持tcp、quic、ssl、any-tunnel四层代理协议相互转换加速  
-支持七层协议（http、https、http2.0、https2.0、websocket、websockets）over （TCP、QUIC、SSL、any-tunnel）
+支持七层协议（http、https、http2、https2、websocket、websockets）over （TCP、QUIC、SSL、any-tunnel）
 支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
 优雅的配置文件热加载，linux reuseport环境支持程序热升级    
 支持any-tunnel在高延迟网络加速，socket流缓存    
-支持非常详细的access_log、err_log、跨服务器链路日志、详细统计信息     
+支持非常详细的access_log、err_log、跨服务器链路日志 
 纯端口代理模式、域名代理模式（多域名端口复用）  
 支持负载均衡和故障转移策略、心跳检查、动态域名解析  
 支持linux零拷贝技术sendfile和文件directio高速缓存控制
@@ -34,18 +36,25 @@ WebAssembly热升级脚本插件开发
 支持临时文件缓存
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 支持port端口代理模式
-支持domain域名代理模式，多域名端口复用，相同端口可以根据域名找到对应的配置（域名可以解析ssl得到sni、http等协议获取）
+支持domain域名代理模式，多域名端口复用，相同端口可以配置多个域名（域名解析ssl的sni、http协议等获取）
 ```
 ## 七层反向代理服务
 ```
-支持多种协议（http、https、http2.0、https2.0、websocket、websockets) over （TCP、QUIC、SSL、any-tunnel）
+支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
+支持（websocket、websockets) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
 支持临时文件缓存
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 ```
+## http静态文件服务（目前处于测试和完善阶段）
+```
+支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
+支持linux零拷贝技术sendfile和文件directio高速缓存控制
+支持range请求
+```
 ## http文件缓存代理服务（目前处于测试和完善阶段）
 ```
-支持多种协议（http、https、http2.0、https2.0) over （TCP、QUIC、SSL、any-tunnel）
+支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
 支持非缓存情况下开启临时文件缓存
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
@@ -59,20 +68,20 @@ WebAssembly热升级脚本插件开发
 支持异步文件io
 支持文件句柄缓存
 ```
-## WebAssembly热升级脚本插件开发
+## 无锁异步webassembly热更新脚本框架
 ```
-WebAssembly脚本插件无锁异步开发
+支持无锁异步开发
 支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
 支持reload优雅热升级，无需重启进程
-支持wasm_http异步http网络库
-支持wasm_log日志
-支持wasm_store全局共享存储
+支持wasm_http异步http over （tcp quic ssl）网络库
+支持wasm_log打印日志
+支持wasm_store进程内全局共享存储
 支持wasm_socket异步tcp，quic，ssl网络库
 支持wasm_std库与主服务交互，包括预制的变量读取、http数据修改
-支持wasm_websocket异步websocket over （tcp quic ssl）库
-支持WebAssembly脚本插件之间进行异步channel通讯
+支持wasm_websocket异步websocket over （tcp quic ssl）网络库
+支持WebAssembly脚本之间进行异步channel通讯
 支持异步定时器
-主程序支持多阶段嵌入脚本开发：
+主程序支持多阶段嵌入webassembly脚本开发：
     四层协议TCP、QUIC、SSL、any-tunnel有三个阶段：
         wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
         wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁异步并发
@@ -96,8 +105,8 @@ WebAssembly脚本插件无锁异步开发
 ```
 ## any-tunnel协议
 ```
-支持any-tunnel over （TCP、QUIC、SSL）的隧道协议
-支持高延迟网络加速，socket流缓存    
+支持高延迟网络加速，socket流缓存的协议    
+支持any-tunnel over （TCP、QUIC、SSL）
 ```
 # anyproxy doc
 [文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)
@@ -107,7 +116,7 @@ WebAssembly脚本插件无锁异步开发
 ```
 domain代理支持http_v1协议解析获取域名  
 http文件缓存代理服务  
-WebAssembly热升级脚本插件  
+无锁异步webassembly热更新脚本框架  
 支持预制变量和函数数据，可以由配置文件和webassembly脚本使用
 用户态的stream delay，可以减少内存复制和系统调用    
 hyper库支持linux零拷贝技术sendfile文件发送  

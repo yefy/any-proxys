@@ -1,7 +1,6 @@
 #port模式
 ````
 server {
-    stream_cache_size  usize = 131072;
     domain str = "www.example.cn";
     port_listen_tcp raw = r```
         address = "0.0.0.0:10001"
@@ -14,9 +13,6 @@ server {
         address = "0.0.0.0:10011"
         ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem", ssl_domain = "www.example.cn"}
     ```r;
-    proxy_pass_upstream str = "upstream_tcp_http";
-    local {
-    }
 }
 ````
 
@@ -35,16 +31,13 @@ server {
         address = "0.0.0.0:10111"
         ssl = {key = "./cert/www.example.cn.key.pem", cert = "./cert/www.example.cn.cert.pem"}
     ```r;
-    proxy_pass_upstream str = "upstream_tcp_https";
-    local {
-    }
 }
 ````
 
 #启动监听
 ````
-port模式：配置中的domain可以为空， 索引需要多配置 ssl_domain = "www.example.cn" 启动时设置域名和证书， 提供给quic协议获取域名后获取证书
-domain模式：配置中domain支持完整域名和泛域名， 启动时设置域名和证书， 提供给quic协议或ssl获取域名后获取证书
+port模式：配置中domain必须完整域名， domain为空，必须要在协议中能获取到域名，不然监听失效
+domain模式：配置中domain支持完整域名和泛域名， "www.example.cn"  "$$(...).example.cn" "$$(,*)"
 
 protocol hello 在客户端链接后才可能有这个域名无法使用
 ````
