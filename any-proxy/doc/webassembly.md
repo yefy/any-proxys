@@ -23,6 +23,43 @@ wasm_access raw = r```
 ```r;
 ```
 
+#返回值
+```
+每个插件可以配置多个脚本， 可以配置多个插件
+enum error {
+    //继续进行
+    ok,
+    //结束当前循环
+    break,
+    //结束所有循环
+    finish,
+    //错误退出请求
+    error,
+    //退出请求
+    return,
+    ext1,
+    ext2,
+    ext3,
+}
+```
+
+#六个插件阶段
+```
+wasm_access： 支持所有返回值
+wasm_serverless： 支持所有返回值，但是插件结束一定返回return，程序结束
+wasm_access_log： 不支持error，return
+wasm_http_in_headers： 不支持error，return
+wasm_http_filter_headers_pre： 不支持error，return
+wasm_http_filter_headers： 不支持error，return
+
+wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
+wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁并发的
+wasm_http_in_headers阶段可以修改请求的原始http数据
+wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
+wasm_http_filter_headers阶段可以修改响应给客户端http数据
+wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+```
+
 #内置异步接口
 ##/wasm/wit/wasm_server.wit
 ```
