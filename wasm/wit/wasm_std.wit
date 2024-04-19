@@ -15,18 +15,28 @@ interface wasm-std {
         ext2,
         ext3,
     }
-
+    //版本信息
     anyproxy-version: func() -> result<string, string>;
+    //获取预制变量值
     variable: func(key: string) -> result<option<string>, string>;
+    //异步sleep函数
     sleep: func(time-ms: u64);
+    //当前插件在主服务的唯一id，简称session_id, 也是session_send函数参数
     curr-session-id: func() -> u64;
+    //当前链接在主服务的唯一id，简称fd，可以读取客户端流信息
     curr-fd: func() -> u64;
+    //生成唯一session_id
     new-session-id: func() -> u64;
-    session-send: func(session-id: u64, value: string) -> result<_, string>;
-    session-recv: func() -> result<string, string>;
-    add-timer: func(time-ms: u64, key: u64, value: string);
+    //用于插件之间通讯， 根据session_id发送到哪个插件
+    session-send: func(session-id: u64, value: list<u8>) -> result<_, string>;
+    //插件接收信息
+    session-recv: func() -> result<list<u8>, string>;
+    //增加定时器
+    add-timer: func(time-ms: u64, key: u64, value: list<u8>);
+    //删除定时器
     del-timer: func(key: u64);
-    get-timer-timeout:func(time-ms: u64) -> list<string>;
+    //获取过期定时器
+    get-timer-timeout:func(time-ms: u64) -> list<list<u8>>;
 
     in-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     in-add-header: func(key: string, value: string) -> result<_, string>;
@@ -35,7 +45,7 @@ interface wasm-std {
     in-is-header: func(key: string) -> result<bool, string>;
     in-get-header: func(key: string) -> result<option<string>, string>;
     in-get-request: func() -> result<request, string>;
-    in-body-read-exact: func() -> result<string, string>;
+    in-body-read-exact: func() -> result<list<u8>, string>;
 
     out-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     out-add-header: func(key: string, value: string) -> result<_, string>;

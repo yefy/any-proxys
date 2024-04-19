@@ -23,16 +23,18 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     info!("run wasm_conf:{:?}", wasm_conf);
     *WASM_CONF.lock().unwrap() = Some(wasm_conf);
 
-    wasm_std::add_timer(10 * 1000, 0,"serverless-timeout-0");
-    wasm_std::add_timer(3 * 1000, 1,"serverless-timeout-1");
-    wasm_std::add_timer(6 * 1000, 2,"serverless-timeout-2");
+    wasm_std::add_timer(10 * 1000, 0, b"serverless-timeout-0");
+    wasm_std::add_timer(3 * 1000, 1, b"serverless-timeout-1");
+    wasm_std::add_timer(6 * 1000, 2, b"serverless-timeout-2");
     loop {
-        wasm_std::add_timer(3 * 1000, 3, "serverless-timeout-3");
+        wasm_std::add_timer(3 * 1000, 3, b"serverless-timeout-3");
         let value = wasm_std::session_recv()?;
-        info!("new_timer:{}", value);
-        if &value == "serverless-timeout-1" {
+        info!("new_timer:{}", unsafe {
+            String::from_utf8_unchecked(value.clone())
+        });
+        if &value == b"serverless-timeout-1" {
             wasm_std::del_timer(2);
-        } else if &value == "serverless-timeout-0" {
+        } else if &value == b"serverless-timeout-0" {
             break;
         }
     }
@@ -45,7 +47,9 @@ pub fn wasm_main_timeout(_config: Option<String>) -> Result<wasm_std::Error, Str
         wasm_std::sleep(1000);
         let values = wasm_std::get_timer_timeout(1000);
         for value in values {
-            info!("timeout:{}", value);
+            info!("timeout:{}", unsafe {
+                String::from_utf8_unchecked(value.clone())
+            });
             let ret = wasm_std::session_send(session_id, &value);
             if let Err(e) = ret {
                 info!("err: timeout => err:{}", e);

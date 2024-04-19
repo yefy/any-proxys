@@ -244,9 +244,9 @@ pub struct StreamInfo {
     pub wasm_websocket_main:
         ArcMutexTokio<WebSocketStream<any_base::io::buf_stream::BufStream<StreamFlow>>>,
     pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
-    pub wasm_session_sender: async_channel::Sender<String>,
-    pub wasm_session_receiver: async_channel::Receiver<String>,
-    pub wasm_timers: HashMap<u64, (i64, String)>,
+    pub wasm_session_sender: async_channel::Sender<Vec<u8>>,
+    pub wasm_session_receiver: async_channel::Receiver<Vec<u8>>,
+    pub wasm_timers: HashMap<u64, (i64, Vec<u8>)>,
 }
 
 impl StreamInfo {

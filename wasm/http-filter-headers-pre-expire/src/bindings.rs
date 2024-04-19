@@ -794,6 +794,7 @@ pub mod component {
             }
 
             #[allow(unused_unsafe, clippy::all)]
+            /// 版本信息
             pub fn anyproxy_version() -> Result<_rt::String, _rt::String> {
                 unsafe {
                     #[repr(align(4))]
@@ -841,6 +842,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 获取预制变量值
             pub fn variable(key: &str) -> Result<Option<_rt::String>, _rt::String> {
                 unsafe {
                     #[repr(align(4))]
@@ -903,6 +905,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 异步sleep函数
             pub fn sleep(time_ms: u64) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -920,6 +923,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 当前插件在主服务的唯一id，简称session_id, 也是session_send函数参数
             pub fn curr_session_id() -> u64 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -938,6 +942,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 当前链接在主服务的唯一id，简称fd，可以读取客户端流信息
             pub fn curr_fd() -> u64 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -956,6 +961,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 生成唯一session_id
             pub fn new_session_id() -> u64 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -974,7 +980,8 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            pub fn session_send(session_id: u64, value: &str) -> Result<(), _rt::String> {
+            /// 用于插件之间通讯， 根据session_id发送到哪个插件
+            pub fn session_send(session_id: u64, value: &[u8]) -> Result<(), _rt::String> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
@@ -1017,7 +1024,8 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            pub fn session_recv() -> Result<_rt::String, _rt::String> {
+            /// 插件接收信息
+            pub fn session_recv() -> Result<_rt::Vec<u8>, _rt::String> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
@@ -1042,9 +1050,8 @@ pub mod component {
                                 let l2 = *ptr0.add(4).cast::<*mut u8>();
                                 let l3 = *ptr0.add(8).cast::<usize>();
                                 let len4 = l3;
-                                let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
 
-                                _rt::string_lift(bytes4)
+                                _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
                             };
                             Ok(e)
                         }
@@ -1064,7 +1071,8 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            pub fn add_timer(time_ms: u64, key: u64, value: &str) {
+            /// 增加定时器
+            pub fn add_timer(time_ms: u64, key: u64, value: &[u8]) {
                 unsafe {
                     let vec0 = value;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
@@ -1090,6 +1098,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
+            /// 删除定时器
             pub fn del_timer(key: u64) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -1107,7 +1116,8 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            pub fn get_timer_timeout(time_ms: u64) -> _rt::Vec<_rt::String> {
+            /// 获取过期定时器
+            pub fn get_timer_timeout(time_ms: u64) -> _rt::Vec<_rt::Vec<u8>> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
@@ -1136,9 +1146,8 @@ pub mod component {
                             let l3 = *base.add(0).cast::<*mut u8>();
                             let l4 = *base.add(4).cast::<usize>();
                             let len5 = l4;
-                            let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
 
-                            _rt::string_lift(bytes5)
+                            _rt::Vec::from_raw_parts(l3.cast(), len5, len5)
                         };
                         result6.push(e6);
                     }
@@ -1603,7 +1612,7 @@ pub mod component {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            pub fn in_body_read_exact() -> Result<_rt::String, _rt::String> {
+            pub fn in_body_read_exact() -> Result<_rt::Vec<u8>, _rt::String> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 12]);
@@ -1628,9 +1637,8 @@ pub mod component {
                                 let l2 = *ptr0.add(4).cast::<*mut u8>();
                                 let l3 = *ptr0.add(8).cast::<usize>();
                                 let len4 = l3;
-                                let bytes4 = _rt::Vec::from_raw_parts(l2.cast(), len4, len4);
 
-                                _rt::string_lift(bytes4)
+                                _rt::Vec::from_raw_parts(l2.cast(), len4, len4)
                             };
                             Ok(e)
                         }
@@ -6248,8 +6256,8 @@ pub(crate) use __export_wasm_server_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.21.0:wasm-server:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3954] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf0\x1d\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 3971] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x81\x1e\x01A\x02\x01\
 A\x12\x01B\x12\x01m\x03\x03tcp\x03ssl\x04quic\x04\0\x0bsocket-type\x03\0\0\x01ks\
 \x01j\x01w\x01s\x01@\x03\x03typ\x01\x04addrs\x0assl-domain\x02\0\x03\x04\0\x0eso\
 cket-connect\x01\x04\x01p}\x01j\x01\x05\x01s\x01@\x02\x02fdw\x04sizew\0\x06\x04\0\
@@ -6265,83 +6273,84 @@ d\x03\0\x0d\x01k\x05\x01r\x05\x06method\x0e\x03uri\x0c\x07headers\x08\x06params\
 \x04body\x0f\x04\0\x07request\x03\0\x10\x01k\x08\x01r\x03\x06status\x03\x07heade\
 rs\x12\x04body\x0f\x04\0\x08response\x03\0\x13\x01j\x01\x14\x01s\x01@\x02\x03typ\
 \x01\x03req\x11\0\x15\x04\0\x0bhandle-http\x01\x16\x03\x01\x1acomponent:server/w\
-asm-http\x05\x02\x02\x03\0\x01\x08response\x02\x03\0\x01\x07request\x01B8\x02\x03\
+asm-http\x05\x02\x02\x03\0\x01\x08response\x02\x03\0\x01\x07request\x01B<\x02\x03\
 \x02\x01\x03\x04\0\x08response\x03\0\0\x02\x03\x02\x01\x04\x04\0\x07request\x03\0\
 \x02\x01m\x08\x02ok\x05break\x06finish\x05error\x06return\x04ext1\x04ext2\x04ext\
 3\x04\0\x05error\x03\0\x04\x01j\x01s\x01s\x01@\0\0\x06\x04\0\x10anyproxy-version\
 \x01\x07\x01ks\x01j\x01\x08\x01s\x01@\x01\x03keys\0\x09\x04\0\x08variable\x01\x0a\
 \x01@\x01\x07time-msw\x01\0\x04\0\x05sleep\x01\x0b\x01@\0\0w\x04\0\x0fcurr-sessi\
-on-id\x01\x0c\x04\0\x07curr-fd\x01\x0c\x04\0\x0enew-session-id\x01\x0c\x01j\0\x01\
-s\x01@\x02\x0asession-idw\x05values\0\x0d\x04\0\x0csession-send\x01\x0e\x04\0\x0c\
-session-recv\x01\x07\x01@\x03\x07time-msw\x03keyw\x05values\x01\0\x04\0\x09add-t\
-imer\x01\x0f\x01@\x01\x03keyw\x01\0\x04\0\x09del-timer\x01\x10\x01ps\x01@\x01\x07\
-time-msw\0\x11\x04\0\x11get-timer-timeout\x01\x12\x01o\x02ss\x01p\x13\x01@\x01\x07\
-headers\x14\0\x0d\x04\0\x0ein-add-headers\x01\x15\x01@\x02\x03keys\x05values\0\x0d\
-\x04\0\x0din-add-header\x01\x16\x01@\x01\x07headers\x11\0\x0d\x04\0\x0ein-del-he\
-aders\x01\x17\x01@\x01\x03keys\0\x0d\x04\0\x0din-del-header\x01\x18\x01j\x01\x7f\
-\x01s\x01@\x01\x03keys\0\x19\x04\0\x0cin-is-header\x01\x1a\x04\0\x0din-get-heade\
-r\x01\x0a\x01j\x01\x03\x01s\x01@\0\0\x1b\x04\0\x0ein-get-request\x01\x1c\x04\0\x12\
-in-body-read-exact\x01\x07\x04\0\x0fout-add-headers\x01\x15\x04\0\x0eout-add-hea\
-der\x01\x16\x04\0\x0fout-del-headers\x01\x17\x04\0\x0eout-del-header\x01\x18\x04\
-\0\x0dout-is-header\x01\x1a\x04\0\x0eout-get-header\x01\x0a\x01@\x01\x03res\x01\0\
-\x0d\x04\0\x10out-set-response\x01\x1d\x03\x01\x19component:server/wasm-std\x05\x05\
-\x01B\x0b\x01m\x05\x05error\x04warn\x04info\x05debug\x05trace\x04\0\x05level\x03\
-\0\0\x01@\x01\x05level\x01\0\x7f\x04\0\x0blog-enabled\x01\x02\x01j\0\x01s\x01@\x01\
-\x03strs\0\x03\x04\0\x09log-error\x01\x04\x04\0\x08log-warn\x01\x04\x04\0\x08log\
--info\x01\x04\x04\0\x09log-debug\x01\x04\x04\0\x09log-trace\x01\x04\x03\x01\x19c\
-omponent:server/wasm-log\x05\x06\x01B\x83\x01\x01j\0\x01s\x01@\x02\x03keys\x05va\
-lue\x7f\0\0\x04\0\x08set-bool\x01\x01\x01@\x02\x03keys\x05value~\0\0\x04\0\x06se\
-t-s8\x01\x02\x01@\x02\x03keys\x05value|\0\0\x04\0\x07set-s16\x01\x03\x01@\x02\x03\
-keys\x05valuez\0\0\x04\0\x07set-s32\x01\x04\x01@\x02\x03keys\x05valuex\0\0\x04\0\
-\x07set-s64\x01\x05\x01@\x02\x03keys\x05value}\0\0\x04\0\x06set-u8\x01\x06\x01@\x02\
-\x03keys\x05value{\0\0\x04\0\x07set-u16\x01\x07\x01@\x02\x03keys\x05valuey\0\0\x04\
-\0\x07set-u32\x01\x08\x01@\x02\x03keys\x05valuew\0\0\x04\0\x07set-u64\x01\x09\x01\
-@\x02\x03keys\x05valuev\0\0\x04\0\x07set-f32\x01\x0a\x01@\x02\x03keys\x05valueu\0\
-\0\x04\0\x07set-f64\x01\x0b\x01@\x02\x03keys\x05valuet\0\0\x04\0\x08set-char\x01\
-\x0c\x01@\x02\x03keys\x05values\0\0\x04\0\x0aset-string\x01\x0d\x01@\x03\x03keys\
-\x05fields\x05value\x7f\0\0\x04\0\x09hset-bool\x01\x0e\x01@\x03\x03keys\x05field\
-s\x05value~\0\0\x04\0\x07hset-s8\x01\x0f\x01@\x03\x03keys\x05fields\x05value|\0\0\
-\x04\0\x08hset-s16\x01\x10\x01@\x03\x03keys\x05fields\x05valuez\0\0\x04\0\x08hse\
-t-s32\x01\x11\x01@\x03\x03keys\x05fields\x05valuex\0\0\x04\0\x08hset-s64\x01\x12\
-\x01@\x03\x03keys\x05fields\x05value}\0\0\x04\0\x07hset-u8\x01\x13\x01@\x03\x03k\
-eys\x05fields\x05value{\0\0\x04\0\x08hset-u16\x01\x14\x01@\x03\x03keys\x05fields\
-\x05valuey\0\0\x04\0\x08hset-u32\x01\x15\x01@\x03\x03keys\x05fields\x05valuew\0\0\
-\x04\0\x08hset-u64\x01\x16\x01@\x03\x03keys\x05fields\x05valuev\0\0\x04\0\x08hse\
-t-f32\x01\x17\x01@\x03\x03keys\x05fields\x05valueu\0\0\x04\0\x08hset-f64\x01\x18\
-\x01@\x03\x03keys\x05fields\x05valuet\0\0\x04\0\x09hset-char\x01\x19\x01@\x03\x03\
-keys\x05fields\x05values\0\0\x04\0\x0bhset-string\x01\x1a\x01k\x7f\x01j\x01\x1b\x01\
-s\x01@\x01\x03keys\0\x1c\x04\0\x08get-bool\x01\x1d\x01k~\x01j\x01\x1e\x01s\x01@\x01\
-\x03keys\0\x1f\x04\0\x06get-s8\x01\x20\x01k|\x01j\x01!\x01s\x01@\x01\x03keys\0\"\
-\x04\0\x07get-s16\x01#\x01kz\x01j\x01$\x01s\x01@\x01\x03keys\0%\x04\0\x07get-s32\
-\x01&\x01kx\x01j\x01'\x01s\x01@\x01\x03keys\0(\x04\0\x07get-s64\x01)\x01k}\x01j\x01\
-*\x01s\x01@\x01\x03keys\0+\x04\0\x06get-u8\x01,\x01k{\x01j\x01-\x01s\x01@\x01\x03\
-keys\0.\x04\0\x07get-u16\x01/\x01ky\x01j\x010\x01s\x01@\x01\x03keys\01\x04\0\x07\
-get-u32\x012\x01kw\x01j\x013\x01s\x01@\x01\x03keys\04\x04\0\x07get-u64\x015\x01k\
-v\x01j\x016\x01s\x01@\x01\x03keys\07\x04\0\x07get-f32\x018\x01ku\x01j\x019\x01s\x01\
-@\x01\x03keys\0:\x04\0\x07get-f64\x01;\x01kt\x01j\x01<\x01s\x01@\x01\x03keys\0=\x04\
-\0\x08get-char\x01>\x01ks\x01j\x01?\x01s\x01@\x01\x03keys\0\xc0\0\x04\0\x0aget-s\
-tring\x01A\x01@\x02\x03keys\x05fields\0\x1c\x04\0\x09hget-bool\x01B\x01@\x02\x03\
-keys\x05fields\0\x1f\x04\0\x07hget-s8\x01C\x01@\x02\x03keys\x05fields\0\"\x04\0\x08\
-hget-s16\x01D\x01@\x02\x03keys\x05fields\0%\x04\0\x08hget-s32\x01E\x01@\x02\x03k\
-eys\x05fields\0(\x04\0\x08hget-s64\x01F\x01@\x02\x03keys\x05fields\0+\x04\0\x07h\
-get-u8\x01G\x01@\x02\x03keys\x05fields\0.\x04\0\x08hget-u16\x01H\x01@\x02\x03key\
-s\x05fields\01\x04\0\x08hget-u32\x01I\x01@\x02\x03keys\x05fields\04\x04\0\x08hge\
-t-u64\x01J\x01@\x02\x03keys\x05fields\07\x04\0\x08hget-f32\x01K\x01@\x02\x03keys\
-\x05fields\0:\x04\0\x08hget-f64\x01L\x01@\x02\x03keys\x05fields\0=\x04\0\x09hget\
--char\x01M\x01@\x02\x03keys\x05fields\0\xc0\0\x04\0\x0bhget-string\x01N\x03\x01\x1b\
-component:server/wasm-store\x05\x07\x01B\x11\x02\x03\x02\x01\x01\x04\0\x0bsocket\
--type\x03\0\0\x02\x03\x02\x01\x04\x04\0\x07request\x03\0\x02\x01j\x01w\x01s\x01@\
-\x02\x03typ\x01\x07request\x03\0\x04\x04\0\x0esocket-connect\x01\x05\x01p}\x01j\x01\
-\x06\x01s\x01@\x01\x02fdw\0\x07\x04\0\x0bsocket-read\x01\x08\x01j\0\x01s\x01@\x02\
-\x02fdw\x04data\x06\0\x09\x04\0\x0csocket-write\x01\x0a\x01@\x01\x02fdw\0\x09\x04\
-\0\x0csocket-flush\x01\x0b\x04\0\x0csocket-close\x01\x0b\x03\x01\x1fcomponent:se\
-rver/wasm-websocket\x05\x08\x02\x03\0\x02\x05error\x01B\x0a\x02\x03\x02\x01\x09\x04\
-\0\x05error\x03\0\0\x01ks\x01j\x01\x01\x01s\x01@\x01\x06config\x02\0\x03\x04\0\x09\
-wasm-main\x01\x04\x04\0\x11wasm-main-timeout\x01\x04\x04\0\x0ewasm-main-ext1\x01\
-\x04\x04\0\x0ewasm-main-ext2\x01\x04\x04\0\x0ewasm-main-ext3\x01\x04\x04\x01\x1d\
-component:server/wasm-service\x05\x0a\x04\x01\x1ccomponent:server/wasm-server\x04\
-\0\x0b\x11\x01\0\x0bwasm-server\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
-wit-component\x070.201.0\x10wit-bindgen-rust\x060.21.0";
+on-id\x01\x0c\x04\0\x07curr-fd\x01\x0c\x04\0\x0enew-session-id\x01\x0c\x01p}\x01\
+j\0\x01s\x01@\x02\x0asession-idw\x05value\x0d\0\x0e\x04\0\x0csession-send\x01\x0f\
+\x01j\x01\x0d\x01s\x01@\0\0\x10\x04\0\x0csession-recv\x01\x11\x01@\x03\x07time-m\
+sw\x03keyw\x05value\x0d\x01\0\x04\0\x09add-timer\x01\x12\x01@\x01\x03keyw\x01\0\x04\
+\0\x09del-timer\x01\x13\x01p\x0d\x01@\x01\x07time-msw\0\x14\x04\0\x11get-timer-t\
+imeout\x01\x15\x01o\x02ss\x01p\x16\x01@\x01\x07headers\x17\0\x0e\x04\0\x0ein-add\
+-headers\x01\x18\x01@\x02\x03keys\x05values\0\x0e\x04\0\x0din-add-header\x01\x19\
+\x01ps\x01@\x01\x07headers\x1a\0\x0e\x04\0\x0ein-del-headers\x01\x1b\x01@\x01\x03\
+keys\0\x0e\x04\0\x0din-del-header\x01\x1c\x01j\x01\x7f\x01s\x01@\x01\x03keys\0\x1d\
+\x04\0\x0cin-is-header\x01\x1e\x04\0\x0din-get-header\x01\x0a\x01j\x01\x03\x01s\x01\
+@\0\0\x1f\x04\0\x0ein-get-request\x01\x20\x04\0\x12in-body-read-exact\x01\x11\x04\
+\0\x0fout-add-headers\x01\x18\x04\0\x0eout-add-header\x01\x19\x04\0\x0fout-del-h\
+eaders\x01\x1b\x04\0\x0eout-del-header\x01\x1c\x04\0\x0dout-is-header\x01\x1e\x04\
+\0\x0eout-get-header\x01\x0a\x01@\x01\x03res\x01\0\x0e\x04\0\x10out-set-response\
+\x01!\x03\x01\x19component:server/wasm-std\x05\x05\x01B\x0b\x01m\x05\x05error\x04\
+warn\x04info\x05debug\x05trace\x04\0\x05level\x03\0\0\x01@\x01\x05level\x01\0\x7f\
+\x04\0\x0blog-enabled\x01\x02\x01j\0\x01s\x01@\x01\x03strs\0\x03\x04\0\x09log-er\
+ror\x01\x04\x04\0\x08log-warn\x01\x04\x04\0\x08log-info\x01\x04\x04\0\x09log-deb\
+ug\x01\x04\x04\0\x09log-trace\x01\x04\x03\x01\x19component:server/wasm-log\x05\x06\
+\x01B\x83\x01\x01j\0\x01s\x01@\x02\x03keys\x05value\x7f\0\0\x04\0\x08set-bool\x01\
+\x01\x01@\x02\x03keys\x05value~\0\0\x04\0\x06set-s8\x01\x02\x01@\x02\x03keys\x05\
+value|\0\0\x04\0\x07set-s16\x01\x03\x01@\x02\x03keys\x05valuez\0\0\x04\0\x07set-\
+s32\x01\x04\x01@\x02\x03keys\x05valuex\0\0\x04\0\x07set-s64\x01\x05\x01@\x02\x03\
+keys\x05value}\0\0\x04\0\x06set-u8\x01\x06\x01@\x02\x03keys\x05value{\0\0\x04\0\x07\
+set-u16\x01\x07\x01@\x02\x03keys\x05valuey\0\0\x04\0\x07set-u32\x01\x08\x01@\x02\
+\x03keys\x05valuew\0\0\x04\0\x07set-u64\x01\x09\x01@\x02\x03keys\x05valuev\0\0\x04\
+\0\x07set-f32\x01\x0a\x01@\x02\x03keys\x05valueu\0\0\x04\0\x07set-f64\x01\x0b\x01\
+@\x02\x03keys\x05valuet\0\0\x04\0\x08set-char\x01\x0c\x01@\x02\x03keys\x05values\
+\0\0\x04\0\x0aset-string\x01\x0d\x01@\x03\x03keys\x05fields\x05value\x7f\0\0\x04\
+\0\x09hset-bool\x01\x0e\x01@\x03\x03keys\x05fields\x05value~\0\0\x04\0\x07hset-s\
+8\x01\x0f\x01@\x03\x03keys\x05fields\x05value|\0\0\x04\0\x08hset-s16\x01\x10\x01\
+@\x03\x03keys\x05fields\x05valuez\0\0\x04\0\x08hset-s32\x01\x11\x01@\x03\x03keys\
+\x05fields\x05valuex\0\0\x04\0\x08hset-s64\x01\x12\x01@\x03\x03keys\x05fields\x05\
+value}\0\0\x04\0\x07hset-u8\x01\x13\x01@\x03\x03keys\x05fields\x05value{\0\0\x04\
+\0\x08hset-u16\x01\x14\x01@\x03\x03keys\x05fields\x05valuey\0\0\x04\0\x08hset-u3\
+2\x01\x15\x01@\x03\x03keys\x05fields\x05valuew\0\0\x04\0\x08hset-u64\x01\x16\x01\
+@\x03\x03keys\x05fields\x05valuev\0\0\x04\0\x08hset-f32\x01\x17\x01@\x03\x03keys\
+\x05fields\x05valueu\0\0\x04\0\x08hset-f64\x01\x18\x01@\x03\x03keys\x05fields\x05\
+valuet\0\0\x04\0\x09hset-char\x01\x19\x01@\x03\x03keys\x05fields\x05values\0\0\x04\
+\0\x0bhset-string\x01\x1a\x01k\x7f\x01j\x01\x1b\x01s\x01@\x01\x03keys\0\x1c\x04\0\
+\x08get-bool\x01\x1d\x01k~\x01j\x01\x1e\x01s\x01@\x01\x03keys\0\x1f\x04\0\x06get\
+-s8\x01\x20\x01k|\x01j\x01!\x01s\x01@\x01\x03keys\0\"\x04\0\x07get-s16\x01#\x01k\
+z\x01j\x01$\x01s\x01@\x01\x03keys\0%\x04\0\x07get-s32\x01&\x01kx\x01j\x01'\x01s\x01\
+@\x01\x03keys\0(\x04\0\x07get-s64\x01)\x01k}\x01j\x01*\x01s\x01@\x01\x03keys\0+\x04\
+\0\x06get-u8\x01,\x01k{\x01j\x01-\x01s\x01@\x01\x03keys\0.\x04\0\x07get-u16\x01/\
+\x01ky\x01j\x010\x01s\x01@\x01\x03keys\01\x04\0\x07get-u32\x012\x01kw\x01j\x013\x01\
+s\x01@\x01\x03keys\04\x04\0\x07get-u64\x015\x01kv\x01j\x016\x01s\x01@\x01\x03key\
+s\07\x04\0\x07get-f32\x018\x01ku\x01j\x019\x01s\x01@\x01\x03keys\0:\x04\0\x07get\
+-f64\x01;\x01kt\x01j\x01<\x01s\x01@\x01\x03keys\0=\x04\0\x08get-char\x01>\x01ks\x01\
+j\x01?\x01s\x01@\x01\x03keys\0\xc0\0\x04\0\x0aget-string\x01A\x01@\x02\x03keys\x05\
+fields\0\x1c\x04\0\x09hget-bool\x01B\x01@\x02\x03keys\x05fields\0\x1f\x04\0\x07h\
+get-s8\x01C\x01@\x02\x03keys\x05fields\0\"\x04\0\x08hget-s16\x01D\x01@\x02\x03ke\
+ys\x05fields\0%\x04\0\x08hget-s32\x01E\x01@\x02\x03keys\x05fields\0(\x04\0\x08hg\
+et-s64\x01F\x01@\x02\x03keys\x05fields\0+\x04\0\x07hget-u8\x01G\x01@\x02\x03keys\
+\x05fields\0.\x04\0\x08hget-u16\x01H\x01@\x02\x03keys\x05fields\01\x04\0\x08hget\
+-u32\x01I\x01@\x02\x03keys\x05fields\04\x04\0\x08hget-u64\x01J\x01@\x02\x03keys\x05\
+fields\07\x04\0\x08hget-f32\x01K\x01@\x02\x03keys\x05fields\0:\x04\0\x08hget-f64\
+\x01L\x01@\x02\x03keys\x05fields\0=\x04\0\x09hget-char\x01M\x01@\x02\x03keys\x05\
+fields\0\xc0\0\x04\0\x0bhget-string\x01N\x03\x01\x1bcomponent:server/wasm-store\x05\
+\x07\x01B\x11\x02\x03\x02\x01\x01\x04\0\x0bsocket-type\x03\0\0\x02\x03\x02\x01\x04\
+\x04\0\x07request\x03\0\x02\x01j\x01w\x01s\x01@\x02\x03typ\x01\x07request\x03\0\x04\
+\x04\0\x0esocket-connect\x01\x05\x01p}\x01j\x01\x06\x01s\x01@\x01\x02fdw\0\x07\x04\
+\0\x0bsocket-read\x01\x08\x01j\0\x01s\x01@\x02\x02fdw\x04data\x06\0\x09\x04\0\x0c\
+socket-write\x01\x0a\x01@\x01\x02fdw\0\x09\x04\0\x0csocket-flush\x01\x0b\x04\0\x0c\
+socket-close\x01\x0b\x03\x01\x1fcomponent:server/wasm-websocket\x05\x08\x02\x03\0\
+\x02\x05error\x01B\x0a\x02\x03\x02\x01\x09\x04\0\x05error\x03\0\0\x01ks\x01j\x01\
+\x01\x01s\x01@\x01\x06config\x02\0\x03\x04\0\x09wasm-main\x01\x04\x04\0\x11wasm-\
+main-timeout\x01\x04\x04\0\x0ewasm-main-ext1\x01\x04\x04\0\x0ewasm-main-ext2\x01\
+\x04\x04\0\x0ewasm-main-ext3\x01\x04\x04\x01\x1dcomponent:server/wasm-service\x05\
+\x0a\x04\x01\x1ccomponent:server/wasm-server\x04\0\x0b\x11\x01\0\x0bwasm-server\x03\
+\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.201.0\x10wit-\
+bindgen-rust\x060.21.0";
 
 #[inline(never)]
 #[doc(hidden)]

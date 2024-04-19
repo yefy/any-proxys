@@ -70,7 +70,7 @@ impl wasm_std::Host for WasmHost {
     async fn session_send(
         &mut self,
         session_id: u64,
-        value: String,
+        value: Vec<u8>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
         let stream_info = self
             .stream_info
@@ -94,7 +94,7 @@ impl wasm_std::Host for WasmHost {
         Ok(Ok(()))
     }
 
-    async fn session_recv(&mut self) -> wasmtime::Result<std::result::Result<String, String>> {
+    async fn session_recv(&mut self) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
         let wasm_session_receiver = self.stream_info.get().wasm_session_receiver.clone();
         let ret = wasm_session_receiver.recv().await;
         if let Err(e) = &ret {
@@ -103,7 +103,7 @@ impl wasm_std::Host for WasmHost {
         Ok(Ok(ret.unwrap()))
     }
 
-    async fn add_timer(&mut self, time_ms: u64, key: u64, value: String) -> wasmtime::Result<()> {
+    async fn add_timer(&mut self, time_ms: u64, key: u64, value: Vec<u8>) -> wasmtime::Result<()> {
         let stream_info = &mut *self.stream_info.get_mut();
         stream_info.wasm_timers.insert(key, (time_ms as i64, value));
         Ok(())
@@ -115,7 +115,7 @@ impl wasm_std::Host for WasmHost {
         Ok(())
     }
 
-    async fn get_timer_timeout(&mut self, time_ms: u64) -> wasmtime::Result<Vec<String>> {
+    async fn get_timer_timeout(&mut self, time_ms: u64) -> wasmtime::Result<Vec<Vec<u8>>> {
         let stream_info = &mut *self.stream_info.get_mut();
         let mut expire_keys = Vec::with_capacity(10);
         for (key, (_time_ms, _)) in &mut stream_info.wasm_timers.iter_mut() {
@@ -248,7 +248,7 @@ impl wasm_std::Host for WasmHost {
 
     async fn in_body_read_exact(
         &mut self,
-    ) -> wasmtime::Result<std::result::Result<String, String>> {
+    ) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
         let r = self.stream_info.get().http_r.clone();
         if r.is_none() {
             return Ok(Err("r.is_none()".to_string()));
@@ -259,7 +259,7 @@ impl wasm_std::Host for WasmHost {
             body
         };
         if body.is_none() {
-            return Ok(Ok("".to_string()));
+            return Ok(Ok(Vec::new()));
         }
         let mut body = body.unwrap();
 
@@ -276,7 +276,7 @@ impl wasm_std::Host for WasmHost {
             let body = body.unwrap();
             data.extend_from_slice(body.to_bytes().unwrap().as_ref());
         }
-        Ok(Ok(unsafe { String::from_utf8_unchecked(data) }))
+        Ok(Ok(data))
     }
 
     async fn out_add_headers(
