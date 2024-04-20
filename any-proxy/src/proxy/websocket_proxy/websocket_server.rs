@@ -240,7 +240,9 @@ impl WebsocketServer {
                 Some(msg) => {
                     let msg = msg?;
                     match w.send(msg).await {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            let _ = w.flush().await;
+                        }
                         Err(e) => {
                             return Err(anyhow::anyhow!("err:{}", e));
                         }

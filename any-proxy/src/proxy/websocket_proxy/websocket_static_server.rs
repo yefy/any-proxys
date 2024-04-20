@@ -182,6 +182,7 @@ impl WebsocketServer {
                     unsafe { buffer.set_len(size) }
                 }
                 w.send(buffer.into()).await?;
+                let _ = w.flush().await;
             }
             if size != buffer_len {
                 break;

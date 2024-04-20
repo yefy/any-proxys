@@ -144,6 +144,7 @@ impl WebsocketServer {
         };
         let (mut w, _r) = client_stream.split();
         w.send(body.into()).await?;
+        let _ = w.flush().await;
         Ok(())
     }
 }
