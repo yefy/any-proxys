@@ -1,3 +1,4 @@
+use crate::config::net_core::DomainFromHttpV1;
 use crate::protopack::anyproxy::{AnyproxyHello, ANYPROXY_VERSION};
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::stream_info::{ErrStatus, StreamInfo};
@@ -22,7 +23,7 @@ pub async fn parse_proxy_domain<S, SF, D, DF>(
 where
     S: FnOnce() -> SF,
     SF: Future<Output = Result<Option<(AnyproxyHello, usize)>>>,
-    D: FnOnce() -> DF,
+    D: FnOnce(Arc<DomainFromHttpV1>) -> DF,
     DF: Future<Output = Result<ArcString>>,
 {
     arg.stream_info.get_mut().add_work_time1("hello");
@@ -42,7 +43,8 @@ where
                 hello
             }
             None => {
-                let domain = domain_service().await?;
+                let domain =
+                    domain_service(arg.domain_config_listen.domain_from_http_v1.clone()).await?;
                 if arg.server_stream_info.domain.is_some() {
                     arg.stream_info.get_mut().ssl_domain = arg.server_stream_info.domain.clone();
                 } else {
@@ -288,6 +290,9 @@ pub async fn run_plugin_handle_serverless(
         return Ok(Some(client_buf_reader));
     }
 
+    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().is_discard_flow = true;
+    stream_info.get_mut().is_discard_timeout = true;
     let client_buf_reader =
         any_base::io::buf_reader::BufReader::from_rb_buf_reader(client_buf_reader);
     let client_buf_stream = any_base::io::buf_writer::BufWriter::new(client_buf_reader);
@@ -362,6 +367,9 @@ pub async fn run_plugin_handle_websocket_serverless(
         return Ok(Some(client_stream));
     }
 
+    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().is_discard_flow = true;
+    stream_info.get_mut().is_discard_timeout = true;
     let client_stream = ArcMutexTokio::new(client_stream);
     let session_id = stream_info.get().session_id;
     stream_info.get_mut().wasm_websocket_main = client_stream;
@@ -428,6 +436,9 @@ pub async fn run_plugin_handle_http_serverless(
         return Ok(false);
     }
 
+    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().is_discard_flow = true;
+    stream_info.get_mut().is_discard_timeout = true;
     let session_id = stream_info.get().session_id;
     stream_info
         .get_mut()

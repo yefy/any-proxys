@@ -1,4 +1,5 @@
 use super::WEBSOCKET_HELLO_KEY;
+use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::util as proxy_util;
 use crate::proxy::websocket_proxy::stream_parse;
 use crate::proxy::ServerArg;
@@ -37,6 +38,7 @@ impl WebsocketServer {
     }
 
     pub async fn run(&mut self, stream: BufStream<StreamFlow>) -> Result<()> {
+        self.arg.stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
         let value = stream_parse(self.arg.clone(), stream).await?;
         if value.is_none() {
             return Ok(());
@@ -110,6 +112,7 @@ impl WebsocketServer {
                 .await
                 .map_err(|e| anyhow!("err:client_async_with_config => e:{}", e))?;
 
+        self.arg.stream_info.get_mut().err_status = ErrStatus::Ok;
         self.steam_to_stream(client_stream, upstream_stream)
             .await
             .map_err(|e| anyhow!("err:steam_to_stream => e:{}", e))
@@ -163,7 +166,9 @@ impl WebsocketServer {
                 Some(msg) => {
                     let msg = msg?;
                     match w.send(msg).await {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            let _ = w.flush().await;
+                        }
                         Err(e) => {
                             return Err(anyhow::anyhow!("err:{}", e));
                         }

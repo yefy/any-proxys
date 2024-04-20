@@ -18,6 +18,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
+use http::header::CONNECTION;
 use http::HeaderValue;
 use http::Version;
 use hyper::http::{Request, Response};
@@ -72,8 +73,8 @@ impl HttpStream {
 #[async_trait]
 impl proxy::Stream for HttpStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
+        stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
         stream_info.get_mut().add_work_time1("http_static_server");
-        self.http_arg.stream_info.get_mut().err_status = ErrStatus::Ok;
         let scc = self.http_arg.stream_info.get().scc.clone().unwrap();
 
         let session_id = self.http_arg.stream_info.get().session_id;
@@ -225,7 +226,7 @@ impl HttpStream {
             );
 
             if r_ctx.r_in.version == Version::HTTP_2 {
-                r_ctx.r_out.headers.remove("connection");
+                r_ctx.r_out.headers.remove(CONNECTION);
             } else if r_ctx.r_in.version == Version::HTTP_10 {
                 r_ctx.r_out.headers.insert(
                     "Connection",

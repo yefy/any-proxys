@@ -1,7 +1,4 @@
 use crate::config as conf;
-use crate::config::config_toml::default_http_server_proxy_pass_config_pool_idle_timeout;
-use crate::config::config_toml::default_http_server_proxy_pass_config_pool_max_idle_per_host;
-use crate::config::config_toml::default_http_server_proxy_pass_config_version;
 use crate::config::config_toml::HttpServerProxyConfig;
 use crate::config::config_toml::HttpServerProxyPassConfig;
 use any_base::module::module;
@@ -14,21 +11,12 @@ use lazy_static::lazy_static;
 use std::sync::Arc;
 
 pub struct Conf {
-    pub proxy: Arc<HttpServerProxyConfig>,
+    pub proxy: Option<Arc<HttpServerProxyConfig>>,
 }
 
 impl Conf {
     pub fn new() -> Self {
-        Conf {
-            proxy: Arc::new(HttpServerProxyConfig {
-                proxy_pass: HttpServerProxyPassConfig {
-                    version: default_http_server_proxy_pass_config_version(),
-                    pool_max_idle_per_host:
-                        default_http_server_proxy_pass_config_pool_max_idle_per_host(),
-                    pool_idle_timeout: default_http_server_proxy_pass_config_pool_idle_timeout(),
-                },
-            }),
-        }
+        Conf { proxy: None }
     }
 }
 
@@ -120,10 +108,21 @@ async fn merge_conf(
     parent_conf: Option<typ::ArcUnsafeAny>,
     child_conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
+    let child_conf = child_conf.get_mut::<Conf>();
     if parent_conf.is_some() {
-        let mut _parent_conf = parent_conf.unwrap().get_mut::<Conf>();
+        let parent_conf = parent_conf.unwrap();
+        let parent_conf = parent_conf.get_mut::<Conf>();
+        if child_conf.proxy.is_none() {
+            child_conf.proxy = parent_conf.proxy.clone();
+        }
     }
-    let mut _child_conf = child_conf.get_mut::<Conf>();
+
+    if child_conf.proxy.is_none() {
+        child_conf.proxy = Some(Arc::new(HttpServerProxyConfig {
+            proxy_pass: HttpServerProxyPassConfig::new(),
+        }));
+    }
+
     return Ok(());
 }
 
@@ -158,7 +157,7 @@ async fn net_server_proxy_http(
     let proxy_conf: HttpServerProxyConfig =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
     log::trace!(target: "main", "net_server_proxy_http proxy_conf:{:?}", proxy_conf);
-    conf.proxy = Arc::new(proxy_conf);
+    conf.proxy = Some(Arc::new(proxy_conf));
 
     use crate::config::net_server_core_plugin;
     let net_server_core_plugin_conf = net_server_core_plugin::curr_conf_mut(conf_arg.curr_conf());

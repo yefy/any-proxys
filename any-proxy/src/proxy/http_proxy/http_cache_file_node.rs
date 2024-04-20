@@ -56,7 +56,7 @@ pub struct ProxyCacheFileNode {
     //这个是多线程共享锁, 只能做简单的业务
     pub ctx_thread: ArcRwLock<ProxyCacheFileNodeContext>,
     pub fix: Arc<ProxyCacheFileNodeFix>,
-    pub file_ext: ArcRwLock<Arc<FileExt>>,
+    pub file_ext: Arc<FileExt>,
     pub buf_file: MsgReadBufFile,
     pub cache_file_info: Arc<ProxyCacheFileInfo>,
     pub response_info: Arc<HttpResponseInfo>,
@@ -64,7 +64,7 @@ pub struct ProxyCacheFileNode {
 
 impl ProxyCacheFileNode {
     pub fn get_file_ext(&self) -> Arc<FileExt> {
-        self.file_ext.get().clone()
+        self.file_ext.clone()
     }
 
     pub async fn create_file(
@@ -216,7 +216,7 @@ impl ProxyCacheFileNode {
                 async_lock: ArcMutexTokio::new(()),
                 file: ArcMutex::new(file),
                 fix: FileExtFix::new_arc(file_fd, file_uniq),
-                file_path: path.clone(),
+                file_path: ArcRwLock::new(path.clone()),
                 file_len,
             };
 
@@ -281,7 +281,7 @@ impl ProxyCacheFileNode {
                 bitmap_start,
                 body_start,
             }),
-            file_ext: ArcRwLock::new(file_ext),
+            file_ext,
             buf_file,
             cache_file_info,
             response_info,
@@ -458,7 +458,7 @@ impl ProxyCacheFileNode {
                 bitmap_start,
                 body_start,
             }),
-            file_ext: ArcRwLock::new(file_ext),
+            file_ext,
             buf_file,
             cache_file_info,
             response_info: Arc::new(HttpResponseInfo {
@@ -487,7 +487,7 @@ impl ProxyCacheFileNode {
         return Ok(ProxyCacheFileNode {
             ctx_thread: other.ctx_thread.clone(),
             fix: other.fix.clone(),
-            file_ext: ArcRwLock::new(file_ext),
+            file_ext,
             buf_file,
             cache_file_info,
             response_info: other.response_info.clone(),
@@ -499,18 +499,24 @@ impl ProxyCacheFileNode {
         _directio: u64,
     ) -> Result<(FileExt, Bytes, Bytes, usize, u64, i64)> {
         let file_ext = Self::open_file(file_name, 0).await?;
+        let file_len = file_ext.file_len;
         let file_r = file_ext.file.clone();
         let ret: Result<BytesMut> = tokio::task::spawn_blocking(move || {
-            use std::io::Read;
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
-            let mut buf = BytesMut::zeroed(1024 * 16);
+            let read_len = 1024 * 16;
+            let read_len = if file_len < read_len {
+                file_len
+            } else {
+                read_len
+            };
+            let mut buf = BytesMut::zeroed(read_len as usize);
             let file_r = &mut *file_r.get_mut();
             file_r.seek(std::io::SeekFrom::Start(0))?;
-            let size = file_r
-                .read(buf.as_mut())
+            use std::io::Read;
+            file_r
+                .read_exact(buf.as_mut())
                 .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
-            unsafe { buf.set_len(size) };
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -655,7 +661,7 @@ impl ProxyCacheFileNode {
                 async_lock: ArcMutexTokio::new(()),
                 file: ArcMutex::new(file),
                 fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
-                file_path: file_name.clone(),
+                file_path: ArcRwLock::new(file_name.clone()),
                 file_len,
             };
 

@@ -13,7 +13,7 @@ use any_base::util::HttpHeaderExt;
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
-use http::{Extensions, Version};
+use http::Extensions;
 use hyper::http::request::Parts;
 use hyper::http::Request;
 use hyper::{Body, Response};
@@ -128,8 +128,7 @@ pub struct HttpIn {
     pub head_size: usize,
     pub head_upstream_size: usize,
 
-    pub is_version1_upstream: bool,
-
+    //pub is_version1_upstream: bool,
     pub is_load_range: bool,
     pub range: HttpRange,
     pub cache_control_time: i64,
@@ -146,8 +145,8 @@ pub struct HttpIn {
     pub curr_request_count: usize,
     pub http_cache_status: HttpCacheStatus,
     pub main: HttpInMain,
-    pub is_body_nil: bool,
-    pub cur_slice_index: usize,
+    pub curr_slice_index: usize,
+    pub curr_upstream_method: Option<hyper::Method>,
 }
 
 #[derive(Clone)]
@@ -180,6 +179,7 @@ pub struct HttpOut {
     pub is_cache_err: bool,
     pub response_info: Option<Arc<HttpResponseInfo>>,
     pub header_ext: HttpHeaderExt,
+    pub left_content_length: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -305,21 +305,13 @@ impl HttpStreamRequest {
         use crate::util::default_config::PAGE_SIZE;
         let page_size = PAGE_SIZE.load(Ordering::Relaxed);
 
-        let is_version1_upstream = match request_upstream.version() {
-            Version::HTTP_2 => false,
-            _ => true,
-        };
+        // let is_version1_upstream = match request_upstream.version() {
+        //     Version::HTTP_2 => false,
+        //     _ => true,
+        // };
 
         let is_head = request_upstream.method() == &http::Method::HEAD;
         let is_get = request_upstream.method() == &http::Method::GET;
-        let is_body_nil = match request_upstream.method() {
-            &http::Method::GET => true,
-            &http::Method::HEAD => true,
-            &http::Method::OPTIONS => true,
-            &http::Method::DELETE => true,
-            &http::Method::TRACE => true,
-            _ => false,
-        };
 
         let local_cache_req_count = request_upstream.headers().get(LOCAL_CACHE_REQ_KEY);
         let local_cache_req_count = if local_cache_req_count.is_some() {
@@ -401,7 +393,7 @@ impl HttpStreamRequest {
                     version,
                     headers,
 
-                    method_upstream,
+                    method_upstream: method_upstream.clone(),
                     uri_upstream,
                     version_upstream: version_upstream.clone(),
                     headers_upstream,
@@ -409,8 +401,7 @@ impl HttpStreamRequest {
                     body: Some(body),
                     head_size,
                     head_upstream_size: 0,
-                    is_version1_upstream,
-
+                    //is_version1_upstream,
                     is_load_range: false,
                     range: HttpRange::new(),
                     cache_control_time: -1,
@@ -427,8 +418,8 @@ impl HttpStreamRequest {
                     curr_request_count: 0,
                     http_cache_status: HttpCacheStatus::Bypass,
                     main: HttpInMain::new(),
-                    is_body_nil,
-                    cur_slice_index: 0,
+                    curr_slice_index: 0,
+                    curr_upstream_method: None,
                 },
                 r_out: HttpOut {
                     status: http::StatusCode::OK,
@@ -445,6 +436,7 @@ impl HttpStreamRequest {
                     is_cache_err: false,
                     response_info: None,
                     header_ext: HttpHeaderExt::new(),
+                    left_content_length: 0,
                 },
                 r_out_main: None,
                 in_body_buf: None,

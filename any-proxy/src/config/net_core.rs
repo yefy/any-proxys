@@ -5,7 +5,7 @@ use crate::proxy::StreamCloseType;
 use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLockTokio, ArcUnsafeAny};
+use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, ArcRwLockTokio, ArcUnsafeAny};
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -221,8 +221,8 @@ pub struct Conf {
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
-const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_default";
-const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_default";
+pub const TCP_CONFIG_NAME_DEFAULT: &str = "tcp_config_default";
+pub const QUIC_CONFIG_NAME_DEFAULT: &str = "quic_config_default";
 const IS_TMP_FILE_IO_PAGE_DEFAULT: bool = true;
 const READ_BUFFER_PAGE_SIZE_DEFAULT: usize = 8;
 const WRITE_BUFFER_PAGE_SIZE_DEFAULT: usize = 16;
@@ -616,7 +616,7 @@ lazy_static! {
             name: "domain_from_http_v1".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(domain_from_http_v1(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_MAIN,
+            conf_typ: conf::CMD_CONF_TYPE_SERVER,
         },
     ]);
 }
@@ -1614,7 +1614,7 @@ pub fn open_tmp_file_fd(file_name: &str) -> Result<FileExt> {
         async_lock: ArcMutexTokio::new(()),
         file: ArcMutex::new(file),
         fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
-        file_path: file_name.into(),
+        file_path: ArcRwLock::new(file_name.into()),
         file_len: 0,
     };
     file_ext.unlink();

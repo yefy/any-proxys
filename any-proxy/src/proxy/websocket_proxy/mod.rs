@@ -91,7 +91,7 @@ pub async fn stream_parse(
             };
             Ok(hello)
         },
-        || async { Ok(domain) },
+        |_| async { Ok(domain) },
     )
     .await?;
 

@@ -1,3 +1,4 @@
+use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::websocket_proxy::stream_parse;
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
@@ -29,6 +30,7 @@ impl WebsocketServer {
     }
 
     pub async fn run(&mut self, stream: BufStream<StreamFlow>) -> Result<()> {
+        self.arg.stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
         let value = stream_parse(self.arg.clone(), stream).await?;
         if value.is_none() {
             return Ok(());
@@ -49,6 +51,7 @@ impl WebsocketServer {
         let (mut w, _r) = client_stream.split();
         w.send(http_server_echo_websocket_conf.body.clone().into())
             .await?;
+        let _ = w.flush().await;
         Ok(())
     }
 }

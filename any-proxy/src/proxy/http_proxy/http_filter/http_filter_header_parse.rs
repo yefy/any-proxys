@@ -59,6 +59,17 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             }
         }
 
+        let left_content_length = if r_ctx.r_in.curr_upstream_method.is_some() {
+            let curr_upstream_method = r_ctx.r_in.curr_upstream_method.clone().unwrap();
+            if curr_upstream_method == http::method::Method::HEAD {
+                0
+            } else {
+                content_range.content_length as i64
+            }
+        } else {
+            0
+        };
+
         let expires = {
             let net_core_conf = r.scc.net_core_conf();
             net_core_conf.expires
@@ -109,6 +120,7 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             head: r_ctx.r_out.head.clone(),
         });
         r_ctx.r_out.response_info = Some(response_info);
+        r_ctx.r_out.left_content_length = left_content_length;
         is_upstream_cache
     };
 

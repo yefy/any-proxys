@@ -130,10 +130,14 @@ async fn merge_conf(
     parent_conf: Option<typ::ArcUnsafeAny>,
     child_conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
+    let child_conf = child_conf.get_mut::<Conf>();
     if parent_conf.is_some() {
-        let mut _parent_conf = parent_conf.unwrap().get_mut::<Conf>();
+        let parent_conf = parent_conf.unwrap();
+        let parent_conf = parent_conf.get_mut::<Conf>();
+        if child_conf.config.file_name.len() <= 0 {
+            child_conf.config = parent_conf.config.clone();
+        }
     }
-    let mut _child_conf = child_conf.get_mut::<Conf>();
     return Ok(());
 }
 

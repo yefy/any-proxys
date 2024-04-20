@@ -32,6 +32,9 @@ pub async fn response_body_read(
 ) -> Result<Option<HttpBodyBufFilter>> {
     match response_body {
         HttpResponseBody::Body(response_body) => {
+            if r.ctx.get().r_out.left_content_length <= 0 {
+                return Ok(None);
+            }
             let data = response_body.data().await;
             if data.is_none() {
                 return Ok(None);
@@ -43,6 +46,9 @@ pub async fn response_body_read(
                     }
                     Ok(buf) => {
                         let buf = buf.to_bytes().unwrap();
+                        if buf.len() <= 0 {
+                            return Ok(None);
+                        }
                         let seek = r.ctx.get().r_in.curr_slice_start;
                         let size = buf.len() as u64;
                         Ok(Some(HttpBodyBufFilter::from_bytes(
@@ -78,7 +84,7 @@ pub async fn write_cache_file(
 ) -> Result<usize> {
     let _session_id = r.session_id;
     #[cfg(feature = "anyio-file")]
-    let cur_slice_index = r.ctx.get().r_in.cur_slice_index;
+    let curr_slice_index = r.ctx.get().r_in.curr_slice_index;
     tokio::task::spawn_blocking(move || {
         let size = file_cache_bytes.remaining();
         let file = &mut *file.get_mut();
@@ -102,9 +108,9 @@ pub async fn write_cache_file(
 
         #[cfg(feature = "anyio-file")]
         log::debug!(target: "main",
-            "r.session_id:{}, cur_slice_index:{}, data to file elapsed_time:{} => len:{}",
+            "r.session_id:{}, curr_slice_index:{}, data to file elapsed_time:{} => len:{}",
             _session_id,
-            cur_slice_index,
+            curr_slice_index,
             start_time.elapsed().as_millis(),
             size,
         );
@@ -112,9 +118,9 @@ pub async fn write_cache_file(
         #[cfg(feature = "anyio-file")]
         if start_time.elapsed().as_millis() > 100 {
             log::info!(
-                "r.session_id:{}, cur_slice_index:{}, data to file elapsed_time:{} => len:{}",
+                "r.session_id:{}, curr_slice_index:{}, data to file elapsed_time:{} => len:{}",
                 _session_id,
-                cur_slice_index,
+                curr_slice_index,
                 start_time.elapsed().as_millis(),
                 size
             );
@@ -264,11 +270,11 @@ pub async fn write_body_to_client(
                     return Err(anyhow!("err:File client close"));
                 }
             }
-            log::debug!(target: "main", "wait file start:{}", r.local_cache_req_count);
+            log::debug!(target: "main", "wait file start: session_id:{}-{}", r.session_id, r.local_cache_req_count);
             for mut rx in wait_rx {
                 let _ = rx.recv().await;
             }
-            log::debug!(target: "main", "wait file end:{}", r.local_cache_req_count);
+            log::debug!(target: "main", "wait file end:session_id:{}-{}", r.session_id, r.local_cache_req_count);
         }
     }
     Ok(())
@@ -318,7 +324,7 @@ pub async fn create_cache_file(
 
     let is_ok = r
         .http_cache_file
-        .set_cache_file_node(cache_file_node.clone())
+        .set_cache_file_node(&r, cache_file_node.clone())
         .await?;
     if is_ok {
         let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;

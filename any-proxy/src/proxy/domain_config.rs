@@ -18,12 +18,14 @@ pub struct DomainConfigListen {
     pub domain_index: Arc<util::domain_index::DomainIndex>,
     pub sni: Option<util::Sni>,
     pub plugin_handle_protocol: ArcRwLockTokio<PluginHandleProtocol>,
+    pub domain_from_http_v1: Arc<DomainFromHttpV1>,
 }
 
 use std::future::Future;
 use std::pin::Pin;
 type DomainConfigFunc =
     fn(ArcMutex<DomainConfigListenMerge>) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+use crate::config::net_core::DomainFromHttpV1;
 use crate::config::net_server_core_plugin::PluginHandleProtocol;
 use any_base::module::module;
 use any_base::typ::{ArcMutex, ArcRwLockTokio};

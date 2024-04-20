@@ -26,13 +26,13 @@ loggers:
     level: info
     additive: true
   ext:
-    level: debug
+    level: trace
     additive: false
   ext2:
-    level: debug
+    level: trace
     additive: false
   ext3:
-    level: debug
+    level: trace
     additive: false
   wasm:
     level: info
@@ -56,12 +56,12 @@ loggers:
 #错误信息，可以被忽略的错误   log::error!(target: "ext", "ext error");
 #比较少的信息，只有少的情况才会触发的日志， 例如：文件过期了  log::info!(target: "ext", "ext info");
 #比较少的信息，循环打印， 例如：重要基本提示信息        log::debug!(target: "ext", "ext debug");
-#流程信息，调试程序只想到哪里了，循环打印，信息量少  log::trace!(target: "ext", "ext trace");
+#流程信息，循环打印，信息量少  log::trace!(target: "ext", "ext trace");
 
-#流程信息，调试程序只想到哪里了，循环打印，信息量大 例如：运行到哪个函数了  log::debug!(target: "ext2", "ext2 debug");
+#流程信息，循环打印，信息量大  log::debug!(target: "ext2", "ext2 debug");
 #预留  log::trace!(target: "ext2", "ext2 trace");
 
-#流程信息，调试程序只想到哪里了，循环打印，详细日志  例如：http请求 响应信息  log::debug!(target: "ext3", "ext3 debug");
+#流程信息，循环打印，详细日志  例如：http请求 响应信息  log::debug!(target: "ext3", "ext3 debug");
 #调试循环信息，量非常大  log::trace!(target: "ext3", "ext3 trace");
 
 

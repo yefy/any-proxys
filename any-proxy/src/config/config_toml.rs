@@ -1082,3 +1082,13 @@ pub struct HttpServerProxyPassConfig {
     #[serde(default = "default_http_server_proxy_pass_config_pool_idle_timeout")]
     pub pool_idle_timeout: u64,
 }
+
+impl HttpServerProxyPassConfig {
+    pub fn new() -> Self {
+        HttpServerProxyPassConfig {
+            version: default_http_server_proxy_pass_config_version(),
+            pool_max_idle_per_host: default_http_server_proxy_pass_config_pool_max_idle_per_host(),
+            pool_idle_timeout: default_http_server_proxy_pass_config_pool_idle_timeout(),
+        }
+    }
+}

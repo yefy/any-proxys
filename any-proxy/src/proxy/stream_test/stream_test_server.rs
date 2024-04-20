@@ -7,9 +7,8 @@ use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ArcMutex;
 use any_base::typ::ArcMutexTokio;
-use any_base::util::ArcString;
+use any_base::typ::{ArcMutex, ArcRwLock};
 use anyhow::anyhow;
 use anyhow::Result;
 use std::io::Read;
@@ -24,7 +23,7 @@ pub async fn http_server_handle(
     let scc = proxy_util::parse_proxy_domain(
         &arg,
         move || async { Ok(None) },
-        || async { Ok("www.example.cn".into()) },
+        |_| async { Ok("www.example.cn".into()) },
     )
     .await?;
 
@@ -103,7 +102,7 @@ pub async fn http_server_handle(
             async_lock: ArcMutexTokio::new(()),
             file,
             fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
-            file_path: ArcString::new(file_name.to_string()),
+            file_path: ArcRwLock::new(file_name.clone().into()),
             file_len,
         };
         let file_ext = Arc::new(file_ext);

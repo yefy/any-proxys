@@ -1,4 +1,4 @@
-use crate::typ::{ArcMutex, ArcMutexTokio};
+use crate::typ::{ArcMutex, ArcMutexTokio, ArcRwLock};
 use crate::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -7,6 +7,7 @@ use bytes::{Buf, BytesMut};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::IoSlice;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -145,7 +146,7 @@ pub struct FileExt {
     pub async_lock: ArcMutexTokio<()>,
     pub file: ArcMutex<File>,
     pub fix: Arc<FileExtFix>,
-    pub file_path: ArcString,
+    pub file_path: ArcRwLock<ArcString>,
     pub file_len: u64,
 }
 
@@ -159,7 +160,7 @@ impl FileExt {
             async_lock: ArcMutexTokio::default(),
             file: ArcMutex::default(),
             fix: Arc::new(FileExtFix::default()),
-            file_path: ArcString::default(),
+            file_path: ArcRwLock::default(),
             file_len: 0,
         }
     }
@@ -171,7 +172,7 @@ impl FileExt {
             async_lock: ArcMutexTokio::default(),
             file: ArcMutex::default(),
             fix: Arc::new(FileExtFix::new_fd(file_fd)),
-            file_path: ArcString::default(),
+            file_path: ArcRwLock::default(),
             file_len: 0,
         }
     }
@@ -195,10 +196,17 @@ impl FileExt {
 
     pub fn unlink(&self) {
         self.fix.is_del_file.store(false, Ordering::SeqCst);
-        if let Err(e) = unlink(self.file_path.as_str()) {
+        if self.file_path.is_none() {
+            return;
+        }
+        let file_path = self.file_path.get().clone();
+        if !Path::new(file_path.as_str()).exists() {
+            return;
+        }
+        if let Err(e) = unlink(file_path.as_str()) {
             self.fix.is_del_file.store(true, Ordering::SeqCst);
             log::trace!(target: "ext", "err:unlink file(wait count == 1 start remove_file):{} => e:{}",
-                self.file_path.as_str(), e);
+                                file_path.as_str(), e);
         }
     }
     pub fn create_sparse_file(&self, file_size: u64) -> std::io::Result<()> {
@@ -209,20 +217,24 @@ impl FileExt {
 impl Drop for FileExt {
     fn drop(&mut self) {
         if self.fix.is_del_file.load(Ordering::SeqCst) && self.file.strong_count() == 1 {
-            if self.file.is_none() {
-                log::error!(
-                    "err:self.file.is_none => file_path:{}",
-                    self.file_path.as_str()
-                );
+            if self.file_path.is_none() {
                 return;
             }
-            log::trace!(target: "ext", "remove_file:{}", self.file_path.as_str());
+            let file_path = self.file_path.get().clone();
+            if !Path::new(file_path.as_str()).exists() {
+                return;
+            }
+
+            if self.file.is_none() {
+                return;
+            }
+            log::trace!(target: "ext", "remove_file:{}", file_path.as_str());
             let file = unsafe { self.file.take() };
             drop(file);
-            if let Err(e) = std::fs::remove_file(self.file_path.as_str()) {
+            if let Err(e) = std::fs::remove_file(file_path.as_str()) {
                 log::error!(
                     "err:remove_file file => file_path:{}, e:{}",
-                    self.file_path.as_str(),
+                    file_path.as_str(),
                     e
                 );
             }
@@ -286,6 +298,10 @@ impl Drop for FileExt {
  */
 
 pub fn unlink(file_path: &str) -> std::io::Result<()> {
+    if !Path::new(file_path).exists() {
+        return Ok(());
+    }
+
     #[cfg(unix)]
     {
         use libc::c_char;

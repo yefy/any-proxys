@@ -16,7 +16,7 @@ use crate::proxy::http_proxy::bitmap::align_bitset_ok;
 use crate::proxy::http_proxy::http_stream_request::{
     CacheFileStatus, HttpCacheFileRequest, HttpStreamRequest,
 };
-use any_base::file_ext::FileExt;
+use any_base::file_ext::unlink;
 use http::HeaderValue;
 use hyper::{Body, Response};
 use std::fs;
@@ -528,6 +528,7 @@ impl HttpCacheFile {
 
     pub async fn set_cache_file_node(
         &self,
+        r: &Arc<HttpStreamRequest>,
         cache_file_node: Arc<ProxyCacheFileNode>,
     ) -> Result<bool> {
         let (_, cache_file_node_manage) = Self::read_cache_file_node_manage(
@@ -542,6 +543,7 @@ impl HttpCacheFile {
             return Ok(false);
         }
 
+        let cache_file_node_old = cache_file_node_manage.cache_file_node.clone();
         cache_file_node_manage.cache_file_node_version += 1;
         self.ctx_thread.get_mut().cache_file_node_version += 1;
         cache_file_node.ctx_thread.get_mut().cache_file_node_version += 1;
@@ -568,10 +570,30 @@ impl HttpCacheFile {
 
         let proxy_cache_path_ = proxy_cache_path.clone();
 
+        use crate::config::common_core;
+        let common_core_conf = common_core::main_conf(&r.scc.ms).await;
+        let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
+        let session_id = r.session_id;
         let ret: Result<()> = tokio::task::spawn_blocking(move || {
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
+
+            if Path::new(proxy_cache_path.as_str()).exists() {
+                let mut tmp = proxy_cache_path_tmp.to_string();
+                tmp.push_str(&format!("_{}_tmp", tmpfile_id));
+
+                log::info!(target: "ext", "r.session_id:{}, exists rename {},{}",
+                           session_id, proxy_cache_path.as_str(), tmp.as_str());
+                std::fs::rename(proxy_cache_path.as_str(), tmp.as_str())?;
+                let _ = unlink(tmp.as_str());
+                if cache_file_node_old.is_some() {
+                    let cache_file_node_old = cache_file_node_old.unwrap();
+                    cache_file_node_old.file_ext.file_path.set(tmp.into());
+                    cache_file_node_old.file_ext.unlink();
+                }
+            }
             std::fs::rename(proxy_cache_path_tmp.as_str(), proxy_cache_path.as_str())?;
+
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
                 log::info!(
@@ -585,16 +607,7 @@ impl HttpCacheFile {
         .await?;
         ret?;
 
-        let file_ext = cache_file_node.get_file_ext();
-        let file_ext = Arc::new(FileExt {
-            async_lock: file_ext.async_lock.clone(),
-            file: file_ext.file.clone(),
-            fix: file_ext.fix.clone(),
-            file_path: proxy_cache_path_,
-            file_len: file_ext.file_len,
-        });
-        cache_file_node.file_ext.set(file_ext);
-
+        cache_file_node.file_ext.file_path.set(proxy_cache_path_);
         return Ok(true);
     }
 
@@ -856,7 +869,12 @@ impl HttpCacheFile {
             cache_file_info.clone(),
             cache_file_node_manage.cache_file_node_version,
         )
-        .await?;
+        .await;
+        if let Err(e) = &cache_file_node {
+            log::warn!("err:open file => e:{}", e);
+            return Ok((false, None));
+        }
+        let cache_file_node = cache_file_node.unwrap();
         if cache_file_node.is_none() {
             return Ok((false, None));
         }

@@ -28,6 +28,7 @@ use crate::proxy::http_proxy::http_cache_file_node::{
 use crate::proxy::http_proxy::http_filter::http_filter_header_range::get_http_filter_header_range;
 use crate::proxy::http_proxy::http_header_parse::{
     cache_control_time, copy_request_parts, http_headers_size, http_respons_to_vec,
+    is_request_body_nil,
 };
 use crate::proxy::http_proxy::http_server::http_server_run_handle;
 use crate::proxy::http_proxy::http_stream_request::{
@@ -50,7 +51,7 @@ use any_base::stream_nil_write;
 use any_base::util::{ArcString, HttpHeaderExt};
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
-use http::header::HOST;
+use http::header::{CONNECTION, HOST};
 use hyper::client::connect::ReqArg;
 use hyper::http::{HeaderName, HeaderValue, Request, Response};
 use hyper::{Body, Version};
@@ -104,6 +105,7 @@ impl HttpStream {
 #[async_trait]
 impl proxy::Stream for HttpStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
+        stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
         stream_info
             .get_mut()
             .add_work_time1("net_server_proxy_http");
@@ -353,7 +355,7 @@ impl HttpStream {
                 let (cache_control_time, _expires_time, _expires_time_sys) =
                     cache_control_time(&r_in.headers_upstream)?;
 
-                let is_request_cache = if cache_control_time == 0 || !r_in.is_version1_upstream {
+                let is_request_cache = if cache_control_time == 0 /*|| !r_in.is_version1_upstream*/ {
                     false
                 } else {
                     true
@@ -541,10 +543,10 @@ impl HttpStream {
         };
 
         let version = r.ctx.get().r_in.version_upstream;
-        let is_version1_upstream = match version {
-            Version::HTTP_2 => false,
-            _ => true,
-        };
+        // let is_version1_upstream = match version {
+        //     Version::HTTP_2 => false,
+        //     _ => true,
+        // };
 
         let protocol7 = connect_func.protocol7().await;
         let upstream_is_tls = connect_func.is_tls().await;
@@ -562,7 +564,7 @@ impl HttpStream {
         let proxy = {
             use crate::config::net_server_proxy_http;
             let http_server_proxy_conf = net_server_proxy_http::curr_conf(scc.net_curr_conf());
-            http_server_proxy_conf.proxy.clone()
+            http_server_proxy_conf.proxy.clone().unwrap()
         };
 
         let upstream_version = match proxy.proxy_pass.version {
@@ -654,9 +656,9 @@ impl HttpStream {
             let r_in = &mut r_ctx.r_in;
             r_in.uri_upstream = upstream_uri;
             r_in.headers_upstream.remove(HOST);
-            r_in.headers_upstream.remove("connection");
+            r_in.headers_upstream.remove(CONNECTION);
             r_in.version_upstream = upstream_version;
-            r_in.is_version1_upstream = is_version1_upstream;
+            //r_in.is_version1_upstream = is_version1_upstream;
         }
 
         r.http_arg.stream_info.get_mut().http_r.set_nil();
@@ -1172,7 +1174,7 @@ impl HttpStream {
         };
 
         let slice_index = align_bitset_start_index(range_start, r.cache_file_slice)?;
-        r.ctx.get_mut().r_in.cur_slice_index = slice_index;
+        r.ctx.get_mut().r_in.curr_slice_index = slice_index;
         r.ctx.get_mut().r_in.is_slice = true;
         let is_last_upstream_cache = HttpStream::is_last_upstream_cache(&r).await?;
         let mut version = -1;
@@ -1291,6 +1293,10 @@ impl HttpStream {
         } else {
             self.get_or_update_cache_file_node(&r, client.clone())
                 .await?;
+            let cache_file_node = r.http_cache_file.ctx_thread.get().cache_file_node.clone();
+            if cache_file_node.is_none() {
+                r.ctx.get_mut().is_request_cache = false;
+            }
             range_end
         };
 
@@ -1400,8 +1406,11 @@ impl HttpStream {
         ups_request: HttpRequest,
         is_upstream_sendfile: bool,
     ) -> Result<HttpResponse> {
+        r.ctx.get_mut().r_in.curr_upstream_method = None;
         let ups_response = match ups_request {
             HttpRequest::Request(mut ups_request) => {
+                let method = ups_request.method().clone();
+                r.ctx.get_mut().r_in.curr_upstream_method = Some(method.clone());
                 if r.is_local_cache_req {
                     ups_request.headers_mut().insert(
                         LOCAL_CACHE_REQ_KEY,
@@ -1461,34 +1470,34 @@ impl HttpStream {
 
                 r.ctx.get_mut().r_out.head_upstream_size += head.len();
 
-                if r.ctx.get().r_out_main.is_none() {
-                    if log::log_enabled!(target: "main", log::Level::Debug) {
-                        log::debug!(target: "main",
-                            "r.session_id:{}, raw head:{}",
-                            r.session_id,
-                            String::from_utf8_lossy(head.as_ref())
-                        );
-                    }
-
-                    r.ctx.get_mut().r_out.head = Some(head);
+                //if r.ctx.get().r_out_main.is_none() {
+                if log::log_enabled!(target: "main", log::Level::Debug) {
+                    log::debug!(target: "main",
+                        "r.session_id:{}, raw head:{}",
+                        r.session_id,
+                        String::from_utf8_lossy(head.as_ref())
+                    );
                 }
 
-                if !r.ctx.get().r_in.is_body_nil {
-                    let header_ext = if r.ctx.get().r_in.is_version1_upstream {
-                        let header_ext = ups_response
-                            .extensions()
-                            .get::<hyper::AnyProxyRawHttpHeaderExt>();
-                        if header_ext.is_some() {
-                            log::debug!(target: "main", "Response header_ext:{}", r.local_cache_req_count);
-                            let header_ext = header_ext.unwrap();
-                            header_ext.0 .0.clone()
-                        } else {
-                            log::debug!(target: "main", "nil Response header_ext:{}", r.local_cache_req_count);
-                            HttpHeaderExt::new()
-                        }
+                r.ctx.get_mut().r_out.head = Some(head);
+                //}
+
+                if !is_request_body_nil(&method) {
+                    //let header_ext = if r.ctx.get().r_in.is_version1_upstream {
+                    let header_ext = ups_response
+                        .extensions()
+                        .get::<hyper::AnyProxyRawHttpHeaderExt>();
+                    let header_ext = if header_ext.is_some() {
+                        log::debug!(target: "main", "Response header_ext:{}", r.local_cache_req_count);
+                        let header_ext = header_ext.unwrap();
+                        header_ext.0 .0.clone()
                     } else {
+                        log::debug!(target: "main", "nil Response header_ext:{}", r.local_cache_req_count);
                         HttpHeaderExt::new()
                     };
+                    // } else {
+                    //     HttpHeaderExt::new()
+                    // };
                     r.ctx.get_mut().r_out.header_ext = header_ext;
 
                     self.stream_to_upstream(
@@ -1677,12 +1686,18 @@ impl HttpStream {
                     if !r_ctx.r_out.is_cache || r_ctx.r_out.is_cache_err {
                         return Ok(());
                     }
-                    r.http_cache_file
+                    
+                    let cache_file_node = r.http_cache_file
                         .ctx_thread
                         .get()
-                        .cache_file_node
-                        .clone()
-                        .unwrap()
+                        .cache_file_node.clone();
+
+                    if cache_file_node.is_none() {
+                        r.ctx.get_mut().r_out.is_cache_err = true;
+                        log::warn!(target: "ext", "cache_file_node nil, session_id:{}-{}", r.session_id, r.local_cache_req_count);
+                        return Ok(());
+                    }
+                    cache_file_node.unwrap()
                 };
 
                 let is_end = if body_buf.is_some() {

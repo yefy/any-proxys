@@ -6,7 +6,7 @@ use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::stream_stream::StreamStream;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::stream_channel_read;
-use any_base::stream_flow::{StreamFlow, StreamFlowInfo};
+use any_base::stream_flow::{StreamFlow, StreamFlowErr, StreamFlowInfo};
 use any_base::stream_nil_read;
 use any_base::stream_nil_write;
 use any_base::typ::{ArcMutex, ArcRwLockTokio};
@@ -112,7 +112,6 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         if !r_ctx.is_out_status_ok() {
             response.headers_mut().remove(http::header::CONTENT_RANGE);
             response.headers_mut().remove(http::header::CONTENT_LENGTH);
-            return Ok(());
         }
 
         r_ctx.r_out.head_size =
@@ -128,14 +127,24 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         return Err(anyhow!("response_tx.send"));
     }
 
+    let stream_info = r.http_arg.stream_info.clone();
+    stream_info.get_mut().err_status = ErrStatus::Ok;
+
     let r_ctx = &mut *r.ctx.get_mut();
-    if !r_ctx.is_out_status_ok() {
+    if r_ctx.r_in.left_content_length <= 0 {
+        use chrono::Local;
+        let stream_info = stream_info.get();
+        stream_info.upstream_stream_flow_info.get_mut().err = StreamFlowErr::ReadClose;
+        stream_info
+            .upstream_stream_flow_info
+            .get_mut()
+            .err_time_millis = Local::now().timestamp_millis();
+
         log::trace!(target: "ext", "r.session_id:{}-{}, header !r_ctx.is_out_status_ok() disable create body stream",
                     r.session_id, r.local_cache_req_count);
         return Ok(());
     }
 
-    let stream_info = r.http_arg.stream_info.clone();
     let upstream_stream_flow_info = ArcMutex::new(StreamFlowInfo::new());
     let (client_write_tx, client_stream) = {
         let stream_info = stream_info.get();
@@ -156,7 +165,6 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
     };
 
     r_ctx.client_write_tx = Some(client_write_tx);
-    stream_info.get_mut().err_status = ErrStatus::Ok;
     let is_client_sendfile = r_ctx.is_client_sendfile;
     let scc = r.scc.clone();
 
@@ -183,6 +191,13 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
             });
             if let Err(e) = ret {
                 let stream_info = stream_info.get();
+                stream_info.upstream_stream_flow_info.get_mut().err =
+                    upstream_stream_flow_info.get().err.clone();
+                stream_info
+                    .upstream_stream_flow_info
+                    .get_mut()
+                    .err_time_millis = upstream_stream_flow_info.get().err_time_millis;
+
                 let is_close = upstream_stream_flow_info.get().is_close()
                     || stream_info.client_stream_flow_info.get().is_close();
                 if !is_close {

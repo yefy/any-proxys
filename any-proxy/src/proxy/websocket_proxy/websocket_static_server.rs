@@ -1,9 +1,10 @@
+use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::websocket_proxy::stream_parse;
 use crate::proxy::ServerArg;
 use crate::proxy::StreamConfigContext;
 use any_base::io::buf_reader::BufReader;
 use any_base::io::buf_stream::BufStream;
-use any_base::stream_flow::StreamFlow;
+use any_base::stream_flow::{StreamFlow, StreamFlowErr};
 use any_base::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -32,6 +33,7 @@ impl WebsocketServer {
     }
 
     pub async fn run(&mut self, stream: BufStream<StreamFlow>) -> Result<()> {
+        self.arg.stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
         let value = stream_parse(self.arg.clone(), stream).await?;
         if value.is_none() {
             return Ok(());
@@ -39,6 +41,7 @@ impl WebsocketServer {
         let (r, scc, client_stream) = value.unwrap();
         let path = r.ctx.get().r_in.uri.path().to_string();
 
+        self.arg.stream_info.get_mut().err_status = ErrStatus::Ok;
         self.steam_to_stream(client_stream, scc, path).await
     }
 
@@ -90,11 +93,20 @@ impl WebsocketServer {
                     unsafe { buffer.set_len(size) }
                 }
                 w.send(buffer.into()).await?;
+                let _ = w.flush().await;
             }
             if size != buffer_len {
                 break;
             }
         }
+
+        use chrono::Local;
+        let stream_info = self.arg.stream_info.get();
+        stream_info.client_stream_flow_info.get_mut().err = StreamFlowErr::WriteClose;
+        stream_info
+            .client_stream_flow_info
+            .get_mut()
+            .err_time_millis = Local::now().timestamp_millis();
 
         Ok(())
     }

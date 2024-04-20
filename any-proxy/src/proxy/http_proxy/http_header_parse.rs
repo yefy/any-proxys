@@ -273,7 +273,7 @@ pub fn http_respons_to_vec(response: &Response<Body>) -> Vec<u8> {
         match response.version() {
             Version::HTTP_10 => extend(dst, b"HTTP/1.0"),
             Version::HTTP_11 => extend(dst, b"HTTP/1.1"),
-            Version::HTTP_2 => extend(dst, b"HTTP/2.0"),
+            Version::HTTP_2 => extend(dst, b"HTTP/1.1"),
             other => panic!("unexpected request version: {:?}", other),
         }
 
@@ -683,4 +683,15 @@ pub fn copy_request_parts<T>(
         version: request.version().clone(),
         headers: request.headers().clone(),
     })
+}
+
+pub fn is_request_body_nil(method: &http::Method) -> bool {
+    match method {
+        &http::Method::GET => true,
+        &http::Method::HEAD => true,
+        &http::Method::OPTIONS => true,
+        &http::Method::DELETE => true,
+        &http::Method::TRACE => true,
+        _ => false,
+    }
 }

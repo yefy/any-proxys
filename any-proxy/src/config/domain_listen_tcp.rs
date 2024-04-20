@@ -1,10 +1,11 @@
 use crate::config as conf;
 use crate::config::config_toml::TcpListen;
+use crate::config::net_core::{DomainFromHttpV1, TCP_CONFIG_NAME_DEFAULT};
 use crate::proxy::domain_config::DomainConfigListenMerge;
 use crate::tcp::server as tcp_server;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcMutex, ArcUnsafeAny};
+use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -247,14 +248,47 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
     let domain_core_conf = domain_core::main_conf_mut(&ms).await;
 
-    let value = value.get();
-
     let mut domain_config_context_map = HashMap::new();
     let mut index_map = HashMap::new();
     let mut index = 0;
-    for domain_config_context in value.domain_config_contexts.iter() {
+    let mut domain_from_http_v1 = Arc::new(DomainFromHttpV1::new());
+    let mut tcp_config_name = TCP_CONFIG_NAME_DEFAULT.to_string();
+    let mut plugin_handle_protocol = ArcRwLockTokio::default();
+    let domain_config_contexts = value.get().domain_config_contexts.clone();
+    for domain_config_context in domain_config_contexts.iter() {
         let scc = domain_config_context.scc.clone();
         let net_core_conf = net_core::currs_conf(scc.net_server_confs());
+        if net_core_conf.domain_from_http_v1.is_open {
+            if domain_from_http_v1.is_open {
+                log::warn!("domain_from_http_v1 more open :{}", key);
+            } else {
+                domain_from_http_v1 = net_core_conf.domain_from_http_v1.clone();
+            }
+        }
+
+        if &net_core_conf.tcp_config_name != TCP_CONFIG_NAME_DEFAULT {
+            if &tcp_config_name != TCP_CONFIG_NAME_DEFAULT {
+                log::warn!("more tcp_config_name :{}", key);
+            } else {
+                tcp_config_name = net_core_conf.tcp_config_name.clone();
+            }
+        }
+
+        use crate::config::net_server_core_plugin;
+        let net_server_core_plugin_conf =
+            net_server_core_plugin::currs_conf(scc.net_server_confs());
+        if net_server_core_plugin_conf
+            .plugin_handle_protocol
+            .is_some()
+            .await
+        {
+            if plugin_handle_protocol.is_some().await {
+                log::warn!("more plugin_handle_protocol :{}", key);
+            } else {
+                plugin_handle_protocol = net_server_core_plugin_conf.plugin_handle_protocol.clone();
+            }
+        }
+
         index += 1;
         index_map.insert(index, (net_core_conf.domain.clone(), index));
         domain_config_context_map.insert(index, domain_config_context.clone());
@@ -269,26 +303,14 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
             .map_err(|e| anyhow!("err:domain => index_map:{:?}, e:{}", index_map, e))?,
     );
 
-    let tcp_config = {
-        let scc = value.domain_config_contexts[0].scc.clone();
-        let net_core_conf0 = net_core::currs_conf(scc.net_server_confs());
-        upstream_tcp_conf
-            .config(&net_core_conf0.tcp_config_name)
-            .unwrap()
-    };
+    let tcp_config = { upstream_tcp_conf.config(&tcp_config_name).unwrap() };
+
+    let value = value.get();
     let listen_server: Arc<Box<dyn Server>> = Arc::new(Box::new(tcp_server::Server::new(
         value.listen_addr.clone().unwrap(),
         common_core_conf.reuseport,
         tcp_config,
     )?));
-
-    let plugin_handle_protocol = {
-        use crate::config::net_server_core_plugin;
-        let scc = value.domain_config_contexts[0].scc.clone();
-        let net_server_core_plugin_conf0 =
-            net_server_core_plugin::currs_conf(scc.net_server_confs());
-        net_server_core_plugin_conf0.plugin_handle_protocol.clone()
-    };
 
     domain_core_conf.domain_config_listen_map.insert(
         key.clone(),
@@ -298,6 +320,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
             domain_index,
             sni: None,
             plugin_handle_protocol,
+            domain_from_http_v1,
         },
     );
     Ok(())

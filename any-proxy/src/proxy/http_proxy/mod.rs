@@ -285,7 +285,7 @@ pub async fn do_http_handle(
             };
             Ok(hello)
         },
-        || async { Ok(domain) },
+        |_| async { Ok(domain) },
     )
     .await?;
 

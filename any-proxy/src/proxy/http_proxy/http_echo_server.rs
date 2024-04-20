@@ -4,6 +4,7 @@ use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
 use anyhow::Result;
+use http::header::CONNECTION;
 use hyper::http::header::HeaderValue;
 use hyper::http::{Request, Response, StatusCode, Version};
 use hyper::Body;
@@ -93,7 +94,7 @@ impl HttpEchoServer {
             HeaderValue::from_bytes("bytes".as_bytes())?,
         );
         if *self.request.version_mut() == Version::HTTP_2 {
-            response.headers_mut().remove("connection");
+            response.headers_mut().remove(CONNECTION);
         }
 
         if *self.request.version_mut() == Version::HTTP_10 {

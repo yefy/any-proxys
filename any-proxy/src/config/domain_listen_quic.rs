@@ -1,11 +1,12 @@
 use crate::config as conf;
 use crate::config::config_toml::QuicListenDomain;
+use crate::config::net_core::{DomainFromHttpV1, QUIC_CONFIG_NAME_DEFAULT};
 use crate::proxy::domain_config::DomainConfigListenMerge;
 use crate::quic;
 use crate::quic::server as quic_server;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcMutex, ArcUnsafeAny};
+use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -265,13 +266,47 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
     let socket_quic_conf = socket_quic::main_conf(&ms).await;
     let domain_core_conf = domain_core::main_conf_mut(&ms).await;
 
-    let value = value.get();
-
     let mut domain_config_context_map = HashMap::new();
     let mut index_map = HashMap::new();
     let mut index = 0;
-    for domain_config_context in value.domain_config_contexts.iter() {
-        let net_core_conf = net_core::currs_conf(domain_config_context.scc.net_server_confs());
+    let mut domain_from_http_v1 = Arc::new(DomainFromHttpV1::new());
+    let mut quic_config_name = QUIC_CONFIG_NAME_DEFAULT.to_string();
+    let mut plugin_handle_protocol = ArcRwLockTokio::default();
+    let domain_config_contexts = value.get().domain_config_contexts.clone();
+    for domain_config_context in domain_config_contexts.iter() {
+        let scc = domain_config_context.scc.clone();
+        let net_core_conf = net_core::currs_conf(scc.net_server_confs());
+
+        if net_core_conf.domain_from_http_v1.is_open {
+            if domain_from_http_v1.is_open {
+                log::warn!("domain_from_http_v1 more open :{}", key);
+            } else {
+                domain_from_http_v1 = net_core_conf.domain_from_http_v1.clone();
+            }
+        }
+
+        if &net_core_conf.quic_config_name != QUIC_CONFIG_NAME_DEFAULT {
+            if &quic_config_name != QUIC_CONFIG_NAME_DEFAULT {
+                log::warn!("more quic_config_name :{}", key);
+            } else {
+                quic_config_name = net_core_conf.quic_config_name.clone();
+            }
+        }
+
+        use crate::config::net_server_core_plugin;
+        let net_server_core_plugin_conf =
+            net_server_core_plugin::currs_conf(scc.net_server_confs());
+        if net_server_core_plugin_conf
+            .plugin_handle_protocol
+            .is_some()
+            .await
+        {
+            if plugin_handle_protocol.is_some().await {
+                log::warn!("more plugin_handle_protocol :{}", key);
+            } else {
+                plugin_handle_protocol = net_server_core_plugin_conf.plugin_handle_protocol.clone();
+            }
+        }
 
         index += 1;
         index_map.insert(index, (net_core_conf.domain.clone(), index));
@@ -286,15 +321,10 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         util::domain_index::DomainIndex::new(&index_map)
             .map_err(|e| anyhow!("err:domain => index_map:{:?}, e:{}", index_map, e))?,
     );
+    let value = value.get();
     let sni = quic::util::sni(&value.listens)?;
 
-    let quic_config = {
-        let scc = value.domain_config_contexts[0].scc.clone();
-        let net_core_conf0 = net_core::currs_conf(scc.net_server_confs());
-        socket_quic_conf
-            .config(&net_core_conf0.quic_config_name)
-            .unwrap()
-    };
+    let quic_config = { socket_quic_conf.config(&quic_config_name).unwrap() };
     let listen_server: Arc<Box<dyn Server>> = Arc::new(Box::new(quic_server::Server::new(
         value.listen_addr.clone().unwrap(),
         common_core_conf.reuseport,
@@ -304,14 +334,6 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         ebpf_tx,
     )?));
 
-    let plugin_handle_protocol = {
-        use crate::config::net_server_core_plugin;
-        let scc = value.domain_config_contexts[0].scc.clone();
-        let net_server_core_plugin_conf0 =
-            net_server_core_plugin::currs_conf(scc.net_server_confs());
-        net_server_core_plugin_conf0.plugin_handle_protocol.clone()
-    };
-
     domain_core_conf.domain_config_listen_map.insert(
         key.clone(),
         DomainConfigListen {
@@ -320,6 +342,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
             domain_index,
             sni: Some(sni),
             plugin_handle_protocol,
+            domain_from_http_v1,
         },
     );
     Ok(())

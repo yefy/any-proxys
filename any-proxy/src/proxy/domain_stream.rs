@@ -149,11 +149,6 @@ impl proxy::Stream for DomainStream {
         let client_buf_reader_domain = client_buf_reader.clone();
         let client_buf_reader_http_v1 = client_buf_reader.clone();
         let server_stream_info = self.server_stream_info.clone();
-        use crate::config::net_core;
-        let domain_from_http_v1 = net_core::main_conf(&self.ms)
-            .await
-            .domain_from_http_v1
-            .clone();
 
         stream_info.get_mut().add_work_time1("parse_proxy_domain");
         let stream_info_ = stream_info.clone();
@@ -166,7 +161,7 @@ impl proxy::Stream for DomainStream {
                         .map_err(|e| anyhow!("err:anyproxy::read_hello => e:{}", e))?;
                 Ok(hello)
             },
-            move || async move {
+            move |domain_from_http_v1| async move {
                 let domain = protopack::ssl_hello::read_domain(
                     &mut *client_buf_reader_domain.get_mut().await,
                 )
