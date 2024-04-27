@@ -32,9 +32,6 @@ pub async fn http_filter_header_range(r: Arc<HttpStreamRequest>) -> Result<()> {
 pub async fn do_http_filter_header_range(r: &HttpStreamRequest) -> Result<()> {
     let raw_content_length = {
         let r_ctx = &mut *r.ctx.get_mut();
-        if !r_ctx.is_out_status_ok() {
-            return Ok(());
-        }
         r_ctx
             .r_out
             .response_info
@@ -43,7 +40,6 @@ pub async fn do_http_filter_header_range(r: &HttpStreamRequest) -> Result<()> {
             .range
             .raw_content_length
     };
-
     let ret = get_http_filter_header_range(r, raw_content_length).await;
     let r_ctx = &mut *r.ctx.get_mut();
     let res_info_out = r_ctx.r_out.response_info.as_ref().unwrap();
@@ -56,6 +52,14 @@ pub async fn do_http_filter_header_range(r: &HttpStreamRequest) -> Result<()> {
         );
         r_ctx.r_out.status = StatusCode::RANGE_NOT_SATISFIABLE;
     } else {
+        if !r_ctx.is_out_status_ok() {
+            r_ctx.r_out.headers.insert(
+                "Content-Length",
+                HeaderValue::from_bytes(r_ctx.r_in.range.content_length.to_string().as_bytes())?,
+            );
+            return Ok(());
+        }
+
         if r_ctx.r_in.range.is_range {
             r_ctx.r_out.headers.insert(
                 "Content-Range",

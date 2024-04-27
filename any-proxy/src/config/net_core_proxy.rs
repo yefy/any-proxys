@@ -2,6 +2,7 @@ use crate::config as conf;
 use crate::proxy::http_proxy::http_cache_file::ProxyCache;
 use crate::util::var::Var;
 use any_base::module::module;
+use any_base::parking_lot::typ::ArcMutex;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
 use anyhow::anyhow;
@@ -35,8 +36,34 @@ pub struct ProxyCacheConf {
     pub max_size: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyCacheValidConf {
+    pub proxy_cache_valid: Vec<ProxyCacheValid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyCacheValid {
+    pub status: Vec<String>,
+    pub time: u64,
+}
+
 pub const CACHE_FILE_SLISE: u64 = 1024 * 1024;
 const DEFAULT_PROXY_CACHE_KEY: &str = "${http_ups_request_scheme}${http_ups_request_method}${http_ups_request_host}${http_ups_request_uri}";
+lazy_static! {
+    pub static ref CHECK_METHODS_MAP: ArcMutex<HashMap<String, bool>> = {
+        let mut data = HashMap::new();
+        data.insert("get".to_string(), true);
+        data.insert("post".to_string(), true);
+        data.insert("put".to_string(), true);
+        data.insert("delete".to_string(), true);
+        data.insert("patch".to_string(), true);
+        data.insert("head".to_string(), true);
+        data.insert("options".to_string(), true);
+        ArcMutex::new(data)
+    };
+}
 
 pub struct Conf {
     pub proxy_cache_map: HashMap<String, Arc<ProxyCache>>,
@@ -46,6 +73,8 @@ pub struct Conf {
     pub proxy_request_slice: u64,
     pub proxy_cache_key: String,
     pub proxy_cache_key_vars: Var,
+    pub proxy_cache_methods: HashMap<String, bool>,
+    pub proxy_cache_valids: HashMap<u16, u64>,
 }
 
 impl Conf {
@@ -58,6 +87,8 @@ impl Conf {
             proxy_request_slice: 1 * CACHE_FILE_SLISE,
             proxy_cache_key: DEFAULT_PROXY_CACHE_KEY.to_string(),
             proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
+            proxy_cache_methods: HashMap::new(),
+            proxy_cache_valids: HashMap::new(),
         }
     }
 }
@@ -89,6 +120,22 @@ lazy_static! {
         module::Cmd {
             name: "proxy_cache_key".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_key(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "proxy_cache_methods".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_methods(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "proxy_cache_valid".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_valid(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
@@ -194,6 +241,14 @@ async fn merge_conf(
 
         if child_conf.proxy_request_slice == 1 * CACHE_FILE_SLISE {
             child_conf.proxy_request_slice = parent_conf.proxy_request_slice;
+        }
+
+        if child_conf.proxy_cache_methods.is_empty() {
+            child_conf.proxy_cache_methods = parent_conf.proxy_cache_methods.clone();
+        }
+
+        if child_conf.proxy_cache_valids.is_empty() {
+            child_conf.proxy_cache_valids = parent_conf.proxy_cache_valids.clone();
         }
     }
 
@@ -396,5 +451,71 @@ async fn proxy_request_slice(
     }
 
     log::trace!(target: "main", "c.proxy_request_slice:{:?}", c.proxy_request_slice);
+    return Ok(());
+}
+
+async fn proxy_cache_methods(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let proxy_cache_methods = conf_arg.value.get::<Vec<String>>().clone();
+
+    let mut data = HashMap::new();
+    for proxy_cache_method in &proxy_cache_methods {
+        let _proxy_cache_method = proxy_cache_method.to_ascii_lowercase();
+        if CHECK_METHODS_MAP.get().get(&_proxy_cache_method).is_none() {
+            return Err(anyhow::anyhow!(
+                "err:{:?} => {} not find",
+                proxy_cache_methods,
+                proxy_cache_method
+            ));
+        }
+        data.insert(_proxy_cache_method, true);
+    }
+
+    if !data.is_empty() {
+        c.proxy_cache_methods = data;
+        log::trace!(target: "main", "c.proxy_cache_methods:{:?}", c.proxy_cache_methods);
+    }
+    return Ok(());
+}
+
+async fn proxy_cache_valid(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let str = conf_arg.value.get::<String>();
+    let proxy_cache_valid: ProxyCacheValidConf =
+        toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
+
+    let mut data = HashMap::new();
+    for proxy_cache_valid in &proxy_cache_valid.proxy_cache_valid {
+        for status in &proxy_cache_valid.status {
+            let status_num = if status == "any" {
+                0
+            } else {
+                status
+                    .parse::<u16>()
+                    .map_err(|e| anyhow!("err:str {} => e:{}", str, e))?
+            };
+
+            if data.get(&status_num).is_some() {
+                return Err(anyhow::anyhow!("err:status {} exist", status));
+            }
+
+            data.insert(status_num, proxy_cache_valid.time);
+        }
+    }
+
+    if !data.is_empty() {
+        c.proxy_cache_valids = data;
+        log::trace!(target: "main", "c.proxy_cache_valids:{:?}", c.proxy_cache_valids);
+    }
     return Ok(());
 }

@@ -2,6 +2,7 @@ use crate::config::net_core::DomainFromHttpV1;
 use crate::protopack::anyproxy::{AnyproxyHello, ANYPROXY_VERSION};
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::stream_info::{ErrStatus, StreamInfo};
+use crate::proxy::websocket_proxy::WebSocketStreamTrait;
 use crate::proxy::{stream_var, ServerArg, StreamConfigContext};
 use crate::stream::connect::Connect;
 use crate::util::var::Var;
@@ -370,9 +371,13 @@ pub async fn run_plugin_handle_websocket_serverless(
     stream_info.get_mut().err_status = ErrStatus::Ok;
     stream_info.get_mut().is_discard_flow = true;
     stream_info.get_mut().is_discard_timeout = true;
-    let client_stream = ArcMutexTokio::new(client_stream);
+    let client_stream: ArcMutexTokio<Box<dyn WebSocketStreamTrait>> =
+        ArcMutexTokio::new(Box::new(client_stream));
     let session_id = stream_info.get().session_id;
-    stream_info.get_mut().wasm_websocket_main = client_stream;
+    stream_info
+        .get_mut()
+        .wasm_websocket_map
+        .insert(session_id, client_stream);
 
     stream_info
         .get_mut()

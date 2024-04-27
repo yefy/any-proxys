@@ -1617,7 +1617,7 @@ pub fn open_tmp_file_fd(file_name: &str) -> Result<FileExt> {
         file_path: ArcRwLock::new(file_name.into()),
         file_len: 0,
     };
-    file_ext.unlink();
+    file_ext.unlink(None);
 
     Ok(file_ext)
 }

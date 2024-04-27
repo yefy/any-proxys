@@ -52,6 +52,7 @@ use any_base::util::{ArcString, HttpHeaderExt};
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use http::header::{CONNECTION, HOST};
+use http::StatusCode;
 use hyper::client::connect::ReqArg;
 use hyper::http::{HeaderName, HeaderValue, Request, Response};
 use hyper::{Body, Version};
@@ -130,7 +131,6 @@ impl proxy::Stream for HttpStream {
             )
             .await?,
         );
-
         r.http_arg.stream_info.get_mut().http_r = Some(r.clone()).into();
         let ms = scc.ms().clone();
 
@@ -167,10 +167,10 @@ impl proxy::Stream for HttpStream {
             )
         });
         if let Err(_) = &ret {
-            self.stream_end_err(&r).await?;
+            let _ = stream_send_err_head(self.header_response.clone()).await;
         }
+        self.stream_end_err(&r).await?;
         Self::stream_end_free(&r).await?;
-
         self.cache_file_node_to_pool(r.clone()).await?;
         return ret;
     }
@@ -249,8 +249,6 @@ impl HttpStream {
     }
 
     async fn stream_end_err(&mut self, r: &Arc<HttpStreamRequest>) -> Result<()> {
-        let _ = stream_send_err_head(self.header_response.clone()).await;
-
         let (is_upstream, slice_upstream_index) = {
             let r_ctx = r.ctx.get();
             (r_ctx.is_upstream, r_ctx.slice_upstream_index)
@@ -264,14 +262,21 @@ impl HttpStream {
                 .cache_file_node_manage
                 .clone();
             let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
-            cache_file_node_manage.is_upstream = false;
-            let mut upstream_waits = VecDeque::with_capacity(10);
-            swap(
-                &mut upstream_waits,
-                &mut cache_file_node_manage.upstream_waits,
-            );
-            for tx in upstream_waits {
-                let _ = tx.send(());
+            if r.ctx.get().is_upstream_add {
+                r.ctx.get_mut().is_upstream_add = false;
+                cache_file_node_manage.is_upstream = false;
+                cache_file_node_manage
+                    .upstream_count
+                    .fetch_sub(1, Ordering::Relaxed);
+
+                let mut upstream_waits = VecDeque::with_capacity(10);
+                swap(
+                    &mut upstream_waits,
+                    &mut cache_file_node_manage.upstream_waits,
+                );
+                for tx in upstream_waits {
+                    let _ = tx.send(());
+                }
             }
         }
 
@@ -285,14 +290,20 @@ impl HttpStream {
                 let slice_upstream = slice_upstream_map.get().get(&slice_upstream_index).cloned();
                 if slice_upstream.is_some() {
                     let slice_upstream = slice_upstream.unwrap();
-                    slice_upstream.get_mut().is_upstream = false;
-                    let mut upstream_waits = VecDeque::with_capacity(10);
-                    swap(
-                        &mut upstream_waits,
-                        &mut slice_upstream.get_mut().upstream_waits,
-                    );
-                    for tx in upstream_waits {
-                        let _ = tx.send(());
+                    let slice_upstream = &mut *slice_upstream.get_mut();
+
+                    if r.ctx.get().is_slice_upstream_index_add {
+                        r.ctx.get_mut().is_slice_upstream_index_add = false;
+                        slice_upstream.is_upstream = false;
+                        slice_upstream
+                            .upstream_count
+                            .fetch_sub(1, Ordering::Relaxed);
+
+                        let mut upstream_waits = VecDeque::with_capacity(10);
+                        swap(&mut upstream_waits, &mut slice_upstream.upstream_waits);
+                        for tx in upstream_waits {
+                            let _ = tx.send(());
+                        }
                     }
                 }
             }
@@ -303,7 +314,7 @@ impl HttpStream {
     async fn proxy_cache_parse(&mut self, r: &mut Arc<HttpStreamRequest>) -> Result<()> {
         let scc = r.http_arg.stream_info.get().scc.clone();
         let (is_local_cache_req, http_cache_file) = {
-            let (md5, cache_control_time, is_request_cache) = {
+            let (md5_str, cache_control_time, is_request_cache) = {
                 let stream_info = r.http_arg.stream_info.clone();
                 let stream_info = &*stream_info.get();
 
@@ -347,25 +358,43 @@ impl HttpStream {
                     r.session_id,
                     proxy_cache_key
                 );
-                let md5 = proxy_cache_key;
+                let md5_str = proxy_cache_key;
 
                 let r_ctx = &mut r.ctx.get_mut();
                 let r_in = &mut r_ctx.r_in;
 
                 let (cache_control_time, _expires_time, _expires_time_sys) =
                     cache_control_time(&r_in.headers_upstream)?;
-
-                let is_request_cache = if cache_control_time == 0 /*|| !r_in.is_version1_upstream*/ {
+                let is_request_cache = if cache_control_time == 0
+                /*|| !r_in.is_version1_upstream*/
+                {
                     false
                 } else {
-                    true
+                    let proxy_cache_methods = &net_core_proxy_conf.proxy_cache_methods;
+                    if proxy_cache_methods.is_empty() {
+                        true
+                    } else {
+                        if proxy_cache_methods
+                            .get(&r_ctx.r_in.method.as_str().to_ascii_lowercase())
+                            .is_some()
+                        {
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 };
-                (md5, cache_control_time, is_request_cache)
+                (md5_str, cache_control_time, is_request_cache)
             };
 
-            let md5 = md5::compute(&md5);
+            let md5 = md5::compute(&md5_str);
             let md5 = format!("{:x}", md5);
             let crc32 = crc32fast::hash(md5.as_bytes()) as usize;
+            log::debug!(target: "main",
+                        "r.session_id:{}, md5_str:{}, md5:{}",
+                        r.session_id,
+                        md5_str, md5
+            );
 
             log::debug!(target: "main",
                 "r.session_id:{}, is_request_cache:{}",
@@ -458,7 +487,7 @@ impl HttpStream {
             let md5 = Bytes::from(md5);
             if proxy_cache.is_some() {
                 let proxy_cache = proxy_cache.as_ref().unwrap();
-                del_expires_cache_file(&md5, proxy_cache).await?;
+                del_expires_cache_file(&md5, proxy_cache, r.scc.ms()).await?;
             }
 
             let is_request_cache = if proxy_cache.is_none() || !is_request_cache {
@@ -720,7 +749,7 @@ impl HttpStream {
             cache_file_node,
             upstream_count,
             upstream_count_drop,
-        ) = r.http_cache_file.get_cache_file_node().await?;
+        ) = r.http_cache_file.get_cache_file_node(r).await?;
 
         {
             let cache_file_node_manage_ = cache_file_node_manage.get().await;
@@ -749,29 +778,40 @@ impl HttpStream {
                 return Ok(false);
             }
             r_ctx.is_upstream = false;
+            r_ctx.is_upstream_add = false;
         }
 
         let is_slice = false;
         let mut _http_cache_status = HttpCacheStatus::Bypass;
         let (is_ok, upstream_count, upstream_count_drop) = self.get_cache_file_node(&r).await?;
         let cache_file_node = r.http_cache_file.ctx_thread.get().cache_file_node.clone();
-        let ups_request = if is_ok {
-            let cache_file_node = cache_file_node.unwrap();
-            cache_file_node.update_file_node_expires_time_del();
-            let ctx = cache_file_node.ctx_thread.get();
-            if let &CacheFileStatus::Expire = &ctx.cache_file_status {
-                log::trace!(target: "ext", "r.session_id:{}-{}, Expire file to Exist",
-                            r.session_id, r.local_cache_req_count);
-            }
-            log::trace!(target: "ext", "r.session_id:{}-{}, file_response_not_get",
-                            r.session_id, r.local_cache_req_count);
+        let ups_request: Option<HttpRequest> = async {
+            if is_ok {
+                let cache_file_node = cache_file_node.as_ref().unwrap();
+                cache_file_node.update_file_node_expires_time_del();
+                let ctx = cache_file_node.ctx_thread.get();
+                if let &CacheFileStatus::Expire = &ctx.cache_file_status {
+                    log::trace!(target: "ext", "r.session_id:{}-{}, Expire file to Exist",
+                                r.session_id, r.local_cache_req_count);
+                    return None;
+                }
 
-            let request = r.http_cache_file.cache_file_request_not_get();
-            if request.is_none() {
-                return Err(anyhow!("err:request.is_none()"));
+                log::trace!(target: "ext", "r.session_id:{}-{}, file_response_not_get",
+                                r.session_id, r.local_cache_req_count);
+
+                let request = r.http_cache_file.cache_file_request_not_get();
+                if request.is_none() {
+                    return None;
+                }
+                _http_cache_status = HttpCacheStatus::Hit;
+                Some(HttpRequest::CacheFileRequest(request.unwrap()))
+            } else {
+                None
             }
-            _http_cache_status = HttpCacheStatus::Hit;
-            HttpRequest::CacheFileRequest(request.unwrap())
+        }
+        .await;
+        let ups_request = if ups_request.is_some() {
+            ups_request.unwrap()
         } else {
             let request_server = {
                 let r_in = &mut r.ctx.get_mut().r_in;
@@ -788,6 +828,7 @@ impl HttpStream {
             let mut ups_request = {
                 let r_ctx = &mut *r.ctx.get_mut();
                 r_ctx.is_upstream = true;
+                r_ctx.is_upstream_add = true;
                 if upstream_count > r_ctx.max_upstream_count {
                     r_ctx.max_upstream_count = upstream_count;
                 }
@@ -843,6 +884,7 @@ impl HttpStream {
         let is_slice = true;
         let mut http_cache_status = HttpCacheStatus::Bypass;
         r.ctx.get_mut().is_upstream = false;
+        r.ctx.get_mut().is_upstream_add = false;
         let (is_ok, upstream_count, upstream_count_drop) = self.get_cache_file_node(&r).await?;
         let cache_file_node = r.http_cache_file.ctx_thread.get().cache_file_node.clone();
         let ups_request: Result<Option<HttpRequest>> = async {
@@ -865,13 +907,14 @@ impl HttpStream {
                     return Ok(Some(HttpRequest::CacheFileRequest(r.http_cache_file.cache_file_request_head()?)));
                 }
 
-                if r.ctx.get().r_in.is_head {
+                //如果保存的是错误吗，必须先响应头了
+                if r.ctx.get().r_in.is_head || r.ctx.get().r_in.left_content_length <= 0 {
                     log::trace!(target: "ext", "r.session_id:{}-{}, http head, cache_file_request_head",
                                 r.session_id, r.local_cache_req_count);
                     return Ok(Some(HttpRequest::CacheFileRequest(r.http_cache_file.cache_file_request_head()?)));
                 }
                 log::trace!(target: "ext", "r.session_id:{}-{}, http get wait slice start",
-                            r.session_id, r.local_cache_req_count);
+                           r.session_id, r.local_cache_req_count);
                 return Ok(None);
             }
 
@@ -880,6 +923,7 @@ impl HttpStream {
                             r.session_id, r.local_cache_req_count, http_cache_status);
                 let r_ctx = &mut *r.ctx.get_mut();
                 r_ctx.is_upstream = true;
+                r_ctx.is_upstream_add = true;
                 if upstream_count > r_ctx.max_upstream_count {
                     r_ctx.max_upstream_count = upstream_count;
                 }
@@ -1155,6 +1199,8 @@ impl HttpStream {
         let (range_start, range_end, slice_end) = {
             let ctx = &mut *r.ctx.get_mut();
             ctx.slice_upstream_index = -1;
+            ctx.is_slice_upstream_index_add = false;
+
             log::trace!(target: "ext", "r.session_id:{}-{}, left_content_length:{}",
                         r.session_id, r.local_cache_req_count, ctx.r_in.left_content_length);
             if ctx.r_in.left_content_length <= 0 {
@@ -1302,10 +1348,17 @@ impl HttpStream {
 
         let ctx = &mut *r.ctx.get_mut();
         ctx.slice_upstream_index = slice_index as i32;
+        ctx.is_slice_upstream_index_add = true;
         ctx.last_slice_upstream_index = slice_index as i32;
         if upstream_count > ctx.max_upstream_count {
             ctx.max_upstream_count = upstream_count;
         }
+
+        if upstream_count >= 10 {
+            log::warn!("r.session_id:{}-{}, upstream_count, upstream_count:{}, slice_index:{} range_start:{}, range_end:{}, slice_end:{}, url:{}",
+                        r.session_id, r.local_cache_req_count, upstream_count, slice_index, range_start, range_end, slice_end, r.ctx.get().r_in.uri);
+        }
+
         ctx.upstream_count_drop = UpstreamCountDrop::new(upstream_count_drop);
 
         ctx.r_in.http_cache_status = HttpCacheStatus::Miss;
@@ -1365,10 +1418,18 @@ impl HttpStream {
         if cache_file_node_ups.is_some() {
             let cache_file_node_ups = cache_file_node_ups.unwrap();
             let cache_file_node_ups = &mut *cache_file_node_ups.get_mut();
-            let mut upstream_waits = VecDeque::with_capacity(10);
-            swap(&mut upstream_waits, &mut cache_file_node_ups.upstream_waits);
-            for tx in upstream_waits {
-                let _ = tx.send(());
+            if r.ctx.get().is_slice_upstream_index_add {
+                r.ctx.get_mut().is_slice_upstream_index_add = false;
+                cache_file_node_ups.is_upstream = false;
+                cache_file_node_ups
+                    .upstream_count
+                    .fetch_sub(1, Ordering::Relaxed);
+
+                let mut upstream_waits = VecDeque::with_capacity(10);
+                swap(&mut upstream_waits, &mut cache_file_node_ups.upstream_waits);
+                for tx in upstream_waits {
+                    let _ = tx.send(());
+                }
             }
         }
 
@@ -1378,6 +1439,8 @@ impl HttpStream {
             let slice_upstream_map = cache_file_node.ctx_thread.get().slice_upstream_map.clone();
             slice_upstream_map.get_mut().clear();
         }
+
+        self.cache_file_node_to_pool(r.clone()).await?;
 
         Ok(())
     }
@@ -1425,6 +1488,32 @@ impl HttpStream {
                 let (upstream_write, _client_req_body) = Body::channel();
                 let mut ups_request = Request::from_parts(_req_parts, _client_req_body);
 
+                let rx = if is_request_body_nil(&method) {
+                    log::debug!(target: "ext3", "r.session_id:{}-{}, is_request_body_nil ", r.session_id, r.local_cache_req_count);
+                    *ups_request.body_mut() = Body::empty();
+                    None
+                } else {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let r = r.clone();
+                    r.http_arg.executors.clone()._start(
+                        #[cfg(feature = "anyspawn-count")]
+                        None,
+                        move |_executors| async move {
+                            let ret = Self::stream_to_upstream(
+                                r.clone(),
+                                is_upstream_sendfile,
+                                client_read,
+                                upstream_write,
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("err:stream_to_upstream => e:{}", e));
+                            let _ = tx.send(ret);
+                            Ok(())
+                        },
+                    );
+                    Some(rx)
+                };
+
                 let upstream_connect_flow_info = self
                     .http_arg
                     .stream_info
@@ -1448,6 +1537,7 @@ impl HttpStream {
                     ups_response
                 } else {
                     log::debug!(target: "ext3", "r.session_id:{}-{}, slice upstream ups_request:{:#?}", r.session_id, r.local_cache_req_count,ups_request);
+
                     let ups_response = client
                         .request(
                             ups_request,
@@ -1456,9 +1546,21 @@ impl HttpStream {
                             }),
                         )
                         .await
-                        .map_err(|e| anyhow!("err:client.request =>e:{}", e))?;
-                    ups_response
+                        .map_err(|e| anyhow!("err:client.request =>e:{}", e));
+                    if ups_response.is_err() {
+                        Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::default())?
+                    } else {
+                        ups_response.unwrap()
+                    }
                 };
+
+                if rx.is_some() {
+                    let rx = rx.unwrap();
+                    let ret = rx.await?;
+                    ret?;
+                }
 
                 let head = ups_response.extensions().get::<hyper::AnyProxyRawHeaders>();
                 let head = if head.is_some() {
@@ -1482,32 +1584,22 @@ impl HttpStream {
                 r.ctx.get_mut().r_out.head = Some(head);
                 //}
 
-                if !is_request_body_nil(&method) {
-                    //let header_ext = if r.ctx.get().r_in.is_version1_upstream {
-                    let header_ext = ups_response
-                        .extensions()
-                        .get::<hyper::AnyProxyRawHttpHeaderExt>();
-                    let header_ext = if header_ext.is_some() {
-                        log::debug!(target: "main", "Response header_ext:{}", r.local_cache_req_count);
-                        let header_ext = header_ext.unwrap();
-                        header_ext.0 .0.clone()
-                    } else {
-                        log::debug!(target: "main", "nil Response header_ext:{}", r.local_cache_req_count);
-                        HttpHeaderExt::new()
-                    };
-                    // } else {
-                    //     HttpHeaderExt::new()
-                    // };
-                    r.ctx.get_mut().r_out.header_ext = header_ext;
-
-                    self.stream_to_upstream(
-                        r.clone(),
-                        is_upstream_sendfile,
-                        client_read,
-                        upstream_write,
-                    )
-                    .await?;
-                }
+                //let header_ext = if r.ctx.get().r_in.is_version1_upstream {
+                let header_ext = ups_response
+                    .extensions()
+                    .get::<hyper::AnyProxyRawHttpHeaderExt>();
+                let header_ext = if header_ext.is_some() {
+                    log::debug!(target: "main", "session_id:{}-{}, Response header_ext", r.session_id, r.local_cache_req_count);
+                    let header_ext = header_ext.unwrap();
+                    header_ext.0 .0.clone()
+                } else {
+                    log::debug!(target: "main", "session_id:{}-{}, nil Response header_ext", r.session_id ,r.local_cache_req_count);
+                    HttpHeaderExt::new()
+                };
+                // } else {
+                //     HttpHeaderExt::new()
+                // };
+                r.ctx.get_mut().r_out.header_ext = header_ext;
 
                 let (parts, body) = ups_response.into_parts();
                 HttpResponse {
@@ -1630,13 +1722,12 @@ impl HttpStream {
     }
 
     async fn stream_to_upstream(
-        &mut self,
         r: Arc<HttpStreamRequest>,
         is_upstream_sendfile: bool,
         client_read: hyper::body::Body,
         upstream_write: hyper::body::Sender,
     ) -> Result<()> {
-        let stream_info = self.http_arg.stream_info.clone();
+        let stream_info = r.http_arg.stream_info.clone();
         let scc = r.http_arg.stream_info.get().scc.clone().unwrap();
         let upstream_stream = {
             let stream_info = stream_info.get();
@@ -1664,7 +1755,7 @@ impl HttpStream {
         .await
         .map_err(|e| anyhow!("err:stream_single =>  e:{}", e));
         if let Err(e) = ret {
-            if !stream_info.get().upstream_stream_flow_info.get().is_close() {
+            if !stream_info.get().client_stream_flow_info.get().is_close() {
                 return Err(e);
             }
         }
@@ -1686,15 +1777,17 @@ impl HttpStream {
                     if !r_ctx.r_out.is_cache || r_ctx.r_out.is_cache_err {
                         return Ok(());
                     }
-                    
-                    let cache_file_node = r.http_cache_file
-                        .ctx_thread
-                        .get()
-                        .cache_file_node.clone();
+
+                    let cache_file_node =
+                        r.http_cache_file.ctx_thread.get().cache_file_node.clone();
 
                     if cache_file_node.is_none() {
                         r.ctx.get_mut().r_out.is_cache_err = true;
-                        log::warn!(target: "ext", "cache_file_node nil, session_id:{}-{}", r.session_id, r.local_cache_req_count);
+                        log::warn!(
+                            "cache_file_node nil, session_id:{}-{}",
+                            r.session_id,
+                            r.local_cache_req_count
+                        );
                         return Ok(());
                     }
                     cache_file_node.unwrap()

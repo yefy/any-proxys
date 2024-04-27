@@ -25,7 +25,8 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
         params: wasm_http::Params::new(),
         body: None,
     };
-    let response = wasm_http::handle_http(wasm_socket::SocketType::Tcp, &request)?;
+    let timeout_ms = 1000 * 10;
+    let response = wasm_http::handle_http(wasm_socket::SocketType::Tcp, &request, timeout_ms)?;
 
     info!("response.status:{}", response.status);
     if response.body.is_some() {

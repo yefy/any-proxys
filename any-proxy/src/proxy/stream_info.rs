@@ -128,9 +128,9 @@ impl ErrStatus200 for ErrStatusUpstream {
 }
 
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
+use crate::proxy::websocket_proxy::WebSocketStreamTrait;
 use any_base::stream_flow;
 use std::collections::HashMap;
-use tokio_tungstenite::WebSocketStream;
 
 pub struct ErrStatusInfo {
     pub err: StreamFlowErr,
@@ -240,12 +240,19 @@ pub struct StreamInfo {
     pub http_r: OptionExt<Arc<HttpStreamRequest>>,
     pub wasm_socket_map:
         HashMap<u64, ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>>,
-    pub wasm_websocket_map: HashMap<u64, ArcMutexTokio<WebSocketStream<StreamFlow>>>,
-    pub wasm_websocket_main:
-        ArcMutexTokio<WebSocketStream<any_base::io::buf_stream::BufStream<StreamFlow>>>,
+    pub wasm_websocket_map: HashMap<u64, ArcMutexTokio<Box<dyn WebSocketStreamTrait>>>,
     pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
-    pub wasm_session_sender: async_channel::Sender<Vec<u8>>,
-    pub wasm_session_receiver: async_channel::Receiver<Vec<u8>>,
+    pub wasm_session_sender: async_channel::Sender<(
+        u64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_receiver: async_channel::Receiver<(
+        u64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_response_map: HashMap<u64, tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
     pub wasm_timers: HashMap<u64, (i64, Vec<u8>)>,
 }
 
@@ -308,10 +315,10 @@ impl StreamInfo {
             http_r: None.into(),
             wasm_socket_map: HashMap::new(),
             wasm_websocket_map: HashMap::new(),
-            wasm_websocket_main: ArcMutexTokio::default(),
             wasm_stream_info_map,
             wasm_session_sender,
             wasm_session_receiver,
+            wasm_session_response_map: HashMap::new(),
             wasm_timers: HashMap::new(),
         }
     }

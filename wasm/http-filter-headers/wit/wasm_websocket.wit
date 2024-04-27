@@ -2,9 +2,9 @@ interface wasm-websocket {
     use wasm-socket.{socket-type};
     use wasm-http.{request};
 
-    socket-connect: func(typ: socket-type, request: request) -> result<u64, string>;
-    socket-read: func(fd: u64) -> result<list<u8>, string>;
-    socket-write: func(fd: u64, data: list<u8>) -> result<_, string>;
-    socket-flush: func(fd: u64) -> result<_, string>;
-    socket-close: func(fd: u64) -> result<_, string>;
+    socket-connect: func(typ: socket-type, request: request, timeout-ms: u64) -> result<u64, string>;
+    socket-read: func(fd: u64, timeout-ms: u64) -> result<list<u8>, string>;
+    socket-write: func(fd: u64, data: list<u8>, timeout-ms: u64) -> result<_, string>;
+    socket-flush: func(fd: u64, timeout-ms: u64) -> result<_, string>;
+    socket-close: func(fd: u64, timeout-ms: u64) -> result<_, string>;
 }

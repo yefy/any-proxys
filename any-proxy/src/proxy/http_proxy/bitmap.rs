@@ -96,7 +96,7 @@ impl BitMap {
 // u8=8     1=1  8=1    9=2
 pub fn bitmap_size(size: u64, slice: u64) -> Result<(usize, usize)> {
     if size <= 0 {
-        return Err(anyhow!("size <= 0"));
+        return Ok((0, 0));
     }
     let slice_size = (size - 1) / slice + 1;
     let byte_size = (slice_size - 1) / 8 + 1;

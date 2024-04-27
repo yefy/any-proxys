@@ -10,6 +10,7 @@ use anyhow::Result;
 use http::HeaderValue;
 use lazy_static::lazy_static;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 lazy_static! {
     pub static ref HEADER_FILTER_NEXT: ArcRwLockTokio<PluginHttpFilter> = ArcRwLockTokio::default();
@@ -70,16 +71,66 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             0
         };
 
-        let expires = {
-            let net_core_conf = r.scc.net_core_conf();
-            net_core_conf.expires
-        };
+        if r_ctx.is_out_status_ok() {
+            let expires = {
+                let net_core_conf = r.scc.net_core_conf();
+                net_core_conf.expires
+            };
 
-        if expires > 0 && r_ctx.r_out.headers.get("cache-control").is_none() {
-            r_ctx.r_out.headers.insert(
-                "cache-control",
-                HeaderValue::from_bytes(format!("max-age={}", expires).as_bytes())?,
-            );
+            if expires > 0 && r_ctx.r_out.headers.get("cache-control").is_none() {
+                use http::header::CACHE_CONTROL;
+                r_ctx.r_out.headers.insert(
+                    CACHE_CONTROL,
+                    HeaderValue::from_bytes(format!("max-age={}", expires).as_bytes())?,
+                );
+            }
+        } else {
+            use crate::config::net_core_proxy;
+            let net_curr_conf = r.scc.net_curr_conf();
+            let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
+            if !net_core_proxy_conf.proxy_cache_valids.is_empty() {
+                let expires = net_core_proxy_conf
+                    .proxy_cache_valids
+                    .get(&r_ctx.r_out.status.as_u16())
+                    .cloned();
+                let expires = if expires.is_some() {
+                    expires.unwrap()
+                } else {
+                    let expires = net_core_proxy_conf.proxy_cache_valids.get(&0).cloned();
+                    if expires.is_some() {
+                        expires.unwrap()
+                    } else {
+                        0
+                    }
+                };
+
+                if expires > 0 && r_ctx.r_out.headers.get("cache-control").is_none() {
+                    use http::header::CACHE_CONTROL;
+                    r_ctx.r_out.headers.insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_bytes(format!("max-age={}", expires).as_bytes())?,
+                    );
+
+                    use http::header::ETAG;
+                    if r_ctx.r_out.headers.get(ETAG).is_none() {
+                        r_ctx
+                            .r_out
+                            .headers
+                            .insert(ETAG, HeaderValue::from_bytes(b"default")?);
+                    }
+
+                    use http::header::LAST_MODIFIED;
+                    if r_ctx.r_out.headers.get(LAST_MODIFIED).is_none() {
+                        let modified = SystemTime::now();
+                        let last_modified = httpdate::HttpDate::from(modified);
+                        let last_modified = last_modified.to_string();
+                        r_ctx.r_out.headers.insert(
+                            LAST_MODIFIED,
+                            HeaderValue::from_bytes(last_modified.as_bytes())?,
+                        );
+                    }
+                }
+            }
         }
 
         let e_tag = e_tag(&r_ctx.r_out.headers).map_err(|e| anyhow!("err:e_tag =>e:{}", e))?;

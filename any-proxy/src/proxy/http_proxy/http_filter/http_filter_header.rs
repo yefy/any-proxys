@@ -92,7 +92,11 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         r_ctx.r_out_main = Some(r_ctx.r_out.clone());
 
         let (client_write, _res_body) = Body::channel();
-        let mut response = Response::builder().body(_res_body)?;
+        let mut response = if r_ctx.r_in.left_content_length <= 0 {
+            Response::builder().body(Body::empty())?
+        } else {
+            Response::builder().body(_res_body)?
+        };
         *response.version_mut() = r_ctx.r_out.version;
         *response.status_mut() = r_ctx.r_out.status;
         *response.headers_mut() = r_ctx.r_out.headers.clone();
@@ -112,6 +116,10 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         if !r_ctx.is_out_status_ok() {
             response.headers_mut().remove(http::header::CONTENT_RANGE);
             response.headers_mut().remove(http::header::CONTENT_LENGTH);
+            response.headers_mut().remove(http::header::CACHE_CONTROL);
+            response.headers_mut().remove(http::header::ETAG);
+            response.headers_mut().remove(http::header::EXPIRES);
+            response.headers_mut().remove(http::header::LAST_MODIFIED);
         }
 
         r_ctx.r_out.head_size =
@@ -140,7 +148,7 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
             .get_mut()
             .err_time_millis = Local::now().timestamp_millis();
 
-        log::trace!(target: "ext", "r.session_id:{}-{}, header !r_ctx.is_out_status_ok() disable create body stream",
+        log::trace!(target: "ext", "r.session_id:{}-{}, disable create body stream",
                     r.session_id, r.local_cache_req_count);
         return Ok(());
     }

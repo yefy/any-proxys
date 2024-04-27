@@ -33,7 +33,7 @@ Linux reuseport多线程无锁并发
 支持多种协议（包括TCP、QUIC、SSL、any-tunnel）互转加速
 支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
-支持临时文件缓存
+支持临时文件缓存、流量限制
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 支持port端口代理模式
 支持domain域名代理模式，多域名端口复用，相同端口可以配置多个域名（域名解析ssl的sni、http协议等获取）
@@ -43,19 +43,25 @@ Linux reuseport多线程无锁并发
 支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
 支持（websocket、websockets) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
-支持临时文件缓存
+支持临时文件缓存、流量限制
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 ```
 ## http静态文件服务（目前处于测试和完善阶段）
 ```
 支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
+支持异步文件io
 支持linux零拷贝技术sendfile和文件directio高速缓存控制
 支持range请求
+支持流量限制
+支持301状态码
+支持last_modified if-match 412状态码
+支持if-modified-since if-none-match 304状态码
 ```
 ## http文件缓存代理服务（目前处于测试和完善阶段）
 ```
 支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
+支持流量限制
 支持非缓存情况下开启临时文件缓存
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 支持文件缓存、过期文件校验、过期淘汰、缓存文件磁盘大小统计并启用过载淘汰、启动阶段预加载缓存文件
@@ -67,6 +73,11 @@ Linux reuseport多线程无锁并发
 支持linux零拷贝技术sendfile和文件directio高速缓存控制
 支持异步文件io
 支持文件句柄缓存
+支持301状态码
+支持last_modified if-match 412状态码
+支持if-modified-since if-none-match 304状态码
+支持method类型缓存
+支持错误码缓存
 ```
 ## 无锁异步webassembly热更新脚本框架
 ```
@@ -114,6 +125,7 @@ Linux reuseport多线程无锁并发
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
 # 详细技术实现
 ```
+支持socket 高性能writev函数
 domain代理支持http_v1协议解析获取域名  
 http文件缓存代理服务  
 无锁异步webassembly热更新脚本框架  

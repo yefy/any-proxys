@@ -194,7 +194,7 @@ impl FileExt {
         self.fix.is_uniq_and_fd_eq(fix)
     }
 
-    pub fn unlink(&self) {
+    pub fn unlink(&self, file_id: Option<u64>) {
         self.fix.is_del_file.store(false, Ordering::SeqCst);
         if self.file_path.is_none() {
             return;
@@ -203,7 +203,8 @@ impl FileExt {
         if !Path::new(file_path.as_str()).exists() {
             return;
         }
-        if let Err(e) = unlink(file_path.as_str()) {
+
+        if let Err(e) = unlink(file_path.as_str(), file_id) {
             self.fix.is_del_file.store(true, Ordering::SeqCst);
             log::trace!(target: "ext", "err:unlink file(wait count == 1 start remove_file):{} => e:{}",
                                 file_path.as_str(), e);
@@ -225,13 +226,12 @@ impl Drop for FileExt {
                 return;
             }
 
-            if self.file.is_none() {
-                return;
+            if self.file.is_some() {
+                let file = unsafe { self.file.take() };
+                drop(file);
             }
             log::trace!(target: "ext", "remove_file:{}", file_path.as_str());
-            let file = unsafe { self.file.take() };
-            drop(file);
-            if let Err(e) = std::fs::remove_file(file_path.as_str()) {
+            if let Err(e) = unlink(file_path.as_str(), None) {
                 log::error!(
                     "err:remove_file file => file_path:{}, e:{}",
                     file_path.as_str(),
@@ -297,26 +297,41 @@ impl Drop for FileExt {
 
  */
 
-pub fn unlink(file_path: &str) -> std::io::Result<()> {
+pub fn unlink(file_path: &str, file_id: Option<u64>) -> std::io::Result<()> {
     if !Path::new(file_path).exists() {
         return Ok(());
     }
 
-    #[cfg(unix)]
-    {
-        use libc::c_char;
-        log::trace!(target: "ext", "unlink:{}", file_path);
-        let res = unsafe { libc::unlink(file_path.as_ptr() as *const c_char) };
-        if res != 0 {
-            return Err(std::io::Error::last_os_error());
-        } else {
-            Ok(())
+    let file_path_tmp = if file_id.is_some() {
+        format!("{}_{}_tmp", file_path, file_id.unwrap())
+    } else {
+        format!("{}_tmp", file_path)
+    };
+
+    std::fs::rename(file_path, &file_path_tmp)?;
+
+    let ret = {
+        #[cfg(unix)]
+        {
+            use libc::c_char;
+            log::trace!(target: "ext", "unlink:{}", file_path_tmp);
+            let res = unsafe { libc::unlink(file_path_tmp.as_ptr() as *const c_char) };
+            if res != 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         }
+        #[cfg(not(unix))]
+        {
+            std::fs::remove_file(&file_path_tmp)
+        }
+    };
+    if let Err(e) = ret {
+        std::fs::rename(&file_path_tmp, file_path)?;
+        return Err(e);
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::remove_file(file_path)
-    }
+    return Ok(());
 }
 
 pub fn create_sparse_file(file: &File, file_size: u64, _fd: Option<i32>) -> std::io::Result<()> {

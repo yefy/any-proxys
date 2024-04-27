@@ -22,6 +22,7 @@ use std::fs::File;
 use std::io::IoSlice;
 use std::io::Write;
 use std::mem::swap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(feature = "anyio-file")]
 use std::time::Instant;
@@ -312,6 +313,7 @@ pub async fn create_cache_file(
             r.http_cache_file.ctx_thread.get().cache_file_node_version,
         )
     };
+
     let cache_file_node = ProxyCacheFileNode::create_file(
         client_uri.clone(),
         cache_file_info.clone(),
@@ -352,13 +354,17 @@ pub async fn create_cache_file(
 
     r.ctx.get_mut().r_out.is_cache_err = true;
 
+    use crate::config::common_core;
+    let common_core_conf = common_core::main_conf(&r.scc.ms).await;
+    let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
+
     #[cfg(feature = "anyio-file")]
     let session_id = r.session_id;
     let _: Result<()> = tokio::task::spawn_blocking(move || {
         #[cfg(feature = "anyio-file")]
         let start_time = Instant::now();
         let file_ext = cache_file_node.get_file_ext();
-        file_ext.unlink();
+        file_ext.unlink(Some(tmpfile_id));
         #[cfg(feature = "anyio-file")]
         if start_time.elapsed().as_millis() > 100 {
             log::info!(
@@ -407,6 +413,12 @@ pub async fn update_expired_cache_file(
         log::trace!(target: "ext", "r.session_id:{}-{}, Response update Expire",
                     r.session_id, r.local_cache_req_count);
         cache_file_node_manage.is_upstream = false;
+        if r.ctx.get().is_upstream_add {
+            r.ctx.get_mut().is_upstream_add = false;
+            cache_file_node_manage
+                .upstream_count
+                .fetch_sub(1, Ordering::Relaxed);
+        }
         let mut upstream_waits = VecDeque::with_capacity(10);
         swap(
             &mut upstream_waits,
@@ -466,6 +478,12 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
             }
             let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
             cache_file_node_manage.is_upstream = false;
+            if r.ctx.get().is_upstream_add {
+                r.ctx.get_mut().is_upstream_add = false;
+                cache_file_node_manage
+                    .upstream_count
+                    .fetch_sub(1, Ordering::Relaxed);
+            }
             let mut upstream_waits = VecDeque::with_capacity(10);
             swap(
                 &mut upstream_waits,
@@ -508,7 +526,13 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
     return Ok(());
 }
 
-pub async fn del_expires_cache_file(md5: &Bytes, proxy_cache: &Arc<ProxyCache>) -> Result<()> {
+use any_base::module::module::Modules;
+
+pub async fn del_expires_cache_file(
+    md5: &Bytes,
+    proxy_cache: &Arc<ProxyCache>,
+    ms: &Modules,
+) -> Result<()> {
     if proxy_cache.cache_conf.max_size <= 0 {
         return Ok(());
     }
@@ -541,6 +565,11 @@ pub async fn del_expires_cache_file(md5: &Bytes, proxy_cache: &Arc<ProxyCache>) 
     if manage.is_none() {
         return Ok(());
     }
+
+    use crate::config::common_core;
+    let common_core_conf = common_core::main_conf(ms).await;
+    let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
+
     let manage = manage.unwrap();
     let manage = &mut *manage.get_mut().await;
 
@@ -559,11 +588,14 @@ pub async fn del_expires_cache_file(md5: &Bytes, proxy_cache: &Arc<ProxyCache>) 
         }
 
         let file_ext = cache_file_node.get_file_ext();
-        file_ext.unlink();
+        file_ext.unlink(Some(tmpfile_id));
         let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
         proxy_cache_ctx.curr_size -= cache_file_node.response_info.range.raw_content_length as i64;
     } else {
-        if let Err(e) = unlink(cache_file_node_expires.proxy_cache_path.as_str()) {
+        if let Err(e) = unlink(
+            cache_file_node_expires.proxy_cache_path.as_str(),
+            Some(tmpfile_id),
+        ) {
             log::error!(
                 "err:unlink => path:{}, err:{}",
                 cache_file_node_expires.proxy_cache_path.as_str(),

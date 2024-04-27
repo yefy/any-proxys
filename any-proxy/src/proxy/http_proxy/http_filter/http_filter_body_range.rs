@@ -33,10 +33,6 @@ pub async fn do_http_filter_body_range(r: &HttpStreamRequest) -> Result<()> {
     let in_body_buf = r_ctx.in_body_buf.take().unwrap();
     r_ctx.r_in.curr_slice_start += in_body_buf.size;
 
-    if !r_ctx.is_out_status_ok() {
-        return Ok(());
-    }
-
     let seek = in_body_buf.seek;
     let mut range_start = in_body_buf.seek;
     let mut range_end = range_start + in_body_buf.size - 1;

@@ -28,7 +28,7 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     wasm_std::add_timer(6 * 1000, 2, b"serverless-timeout-2");
     loop {
         wasm_std::add_timer(3 * 1000, 3, b"serverless-timeout-3");
-        let value = wasm_std::session_recv()?;
+        let (_fd, _cmd, value) = wasm_std::session_recv()?;
         info!("new_timer:{}", unsafe {
             String::from_utf8_unchecked(value.clone())
         });
@@ -46,11 +46,11 @@ pub fn wasm_main_timeout(_config: Option<String>) -> Result<wasm_std::Error, Str
     loop {
         wasm_std::sleep(1000);
         let values = wasm_std::get_timer_timeout(1000);
-        for value in values {
+        for (key, value) in values {
             info!("timeout:{}", unsafe {
                 String::from_utf8_unchecked(value.clone())
             });
-            let ret = wasm_std::session_send(session_id, &value);
+            let ret = wasm_std::session_send(session_id, key, &value);
             if let Err(e) = ret {
                 info!("err: timeout => err:{}", e);
             }

@@ -1,9 +1,46 @@
+use crate::proxy::stream_info::StreamInfo;
 use crate::wasm::component::server::wasm_socket;
+use crate::wasm::socket_connect;
 use crate::wasm::WasmHost;
-use crate::wasm::{socket_connect, wasm_err};
-use any_base::typ::ArcMutexTokio;
+use any_base::stream_flow::StreamFlow;
+use any_base::typ::{ArcMutexTokio, Share};
+use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::atomic::Ordering;
+
+impl WasmHost {
+    pub fn get_socket_stream(
+        &self,
+        fd: &u64,
+    ) -> Option<(
+        ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>,
+        Share<StreamInfo>,
+    )> {
+        let stream = self.stream_info.get_mut().wasm_socket_map.get(fd).cloned();
+        let stream = if stream.is_none() {
+            let stream_info = self
+                .stream_info
+                .get_mut()
+                .wasm_stream_info_map
+                .get()
+                .get(&fd)
+                .cloned();
+            if stream_info.is_none() {
+                return None;
+            }
+            let stream_info = stream_info.unwrap();
+
+            let stream = stream_info.get_mut().wasm_socket_map.get(fd).cloned();
+            if stream.is_none() {
+                return None;
+            }
+            Some((stream.unwrap(), stream_info.clone()))
+        } else {
+            Some((stream.unwrap(), self.stream_info.clone()))
+        };
+        stream
+    }
+}
 
 #[async_trait]
 impl wasm_socket::Host for WasmHost {
@@ -12,290 +49,259 @@ impl wasm_socket::Host for WasmHost {
         typ: wasm_socket::SocketType,
         addr: String,
         ssl_domain: Option<String>,
+        timeout_ms: u64,
     ) -> wasmtime::Result<std::result::Result<u64, String>> {
-        use crate::util;
-        let address = util::util::lookup_host(tokio::time::Duration::from_secs(30), &addr)
+        let ret: Result<u64> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            use crate::util;
+            let address = util::util::lookup_host(duration, &addr).await?;
+
+            let mut stream = match tokio::time::timeout(
+                duration,
+                socket_connect(typ, addr.into(), address, ssl_domain),
+            )
             .await
-            .map_err(|e| wasm_err(e.to_string()))?;
+            {
+                Ok(data) => data?,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
 
-        let mut stream = socket_connect(typ, addr.into(), address, ssl_domain)
-            .await
-            .map_err(|e| wasm_err(e.to_string()))?;
+            stream.set_stream_info(Some(
+                self.stream_info.get().upstream_stream_flow_info.clone(),
+            ));
+            let stream = any_base::io::buf_stream::BufStream::new(stream);
+            let stream = ArcMutexTokio::new(stream);
+            let session_id = {
+                use crate::config::common_core;
+                let common_core_conf = common_core::main_conf_mut(self.scc.ms()).await;
+                let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
+                session_id
+            };
 
-        stream.set_stream_info(Some(
-            self.stream_info.get().upstream_stream_flow_info.clone(),
-        ));
-        let stream = any_base::io::buf_stream::BufStream::new(stream);
-        let stream = ArcMutexTokio::new(stream);
-        let session_id = {
-            use crate::config::common_core;
-            let common_core_conf = common_core::main_conf_mut(self.scc.ms()).await;
-            let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
-            session_id
-        };
+            self.stream_info
+                .get_mut()
+                .wasm_socket_map
+                .insert(session_id, stream);
 
-        self.stream_info
-            .get_mut()
-            .wasm_socket_map
-            .insert(session_id, stream);
-
-        Ok(Ok(session_id))
+            Ok(session_id)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn socket_read(
         &mut self,
         fd: u64,
         size: u64,
+        timeout_ms: u64,
     ) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
+        let ret: Result<Vec<u8>> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
             if stream.is_none() {
-                return Ok(Err("".to_string()));
+                return Err(anyhow::anyhow!("stream.is_none"));
             }
-            stream.unwrap()
-        } else {
-            stream.unwrap()
-        };
+            let (stream, _) = stream.unwrap();
+            let stream = &mut *stream.get_mut().await;
+            use tokio::io::AsyncReadExt;
+            let mut data = vec![0; size as usize];
+            let size = match tokio::time::timeout(duration, stream.read(data.as_mut_slice())).await
+            {
+                Ok(data) => data,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+            if size.is_err() {
+                let is_close = self
+                    .stream_info
+                    .get()
+                    .upstream_stream_flow_info
+                    .get()
+                    .is_close();
+                if !is_close {
+                    size?;
+                }
+                return Ok(Vec::new());
+            }
+            let size = size.unwrap();
 
-        let stream = &mut *stream.get_mut().await;
-        use tokio::io::AsyncReadExt;
-        let mut data = vec![0; size as usize];
-        let size = stream.read(data.as_mut_slice()).await;
-        if size.is_err() {
-            let is_close = self
-                .stream_info
-                .get()
-                .upstream_stream_flow_info
-                .get()
-                .is_close();
-            if !is_close {
-                size?;
-            }
-            return Ok(Ok(Vec::new()));
+            unsafe { data.set_len(size) };
+
+            Ok(data)
         }
-        let size = size.unwrap();
-
-        unsafe { data.set_len(size) };
-
-        Ok(Ok(data))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn socket_read_exact(
         &mut self,
         fd: u64,
         size: u64,
+        timeout_ms: u64,
     ) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
+        let ret: Result<Vec<u8>> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
             if stream.is_none() {
-                return Ok(Err("".to_string()));
+                return Err(anyhow::anyhow!("stream.is_none"));
             }
-            stream.unwrap()
-        } else {
-            stream.unwrap()
-        };
-        let stream = &mut *stream.get_mut().await;
-        use tokio::io::AsyncReadExt;
-        let mut data = vec![0; size as usize];
-        let size = stream.read_exact(data.as_mut_slice()).await;
-        if size.is_err() {
-            let is_close = self
-                .stream_info
-                .get()
-                .upstream_stream_flow_info
-                .get()
-                .is_close();
-            if !is_close {
-                size?;
+            let (stream, _) = stream.unwrap();
+            let stream = &mut *stream.get_mut().await;
+            use tokio::io::AsyncReadExt;
+            let mut data = vec![0; size as usize];
+            let size = match tokio::time::timeout(duration, stream.read_exact(data.as_mut_slice()))
+                .await
+            {
+                Ok(data) => data,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+            if size.is_err() {
+                let is_close = self
+                    .stream_info
+                    .get()
+                    .upstream_stream_flow_info
+                    .get()
+                    .is_close();
+                if !is_close {
+                    size?;
+                }
+                return Ok(Vec::new());
             }
-            return Ok(Ok(Vec::new()));
+            let size = size.unwrap();
+
+            unsafe { data.set_len(size) };
+
+            Ok(data)
         }
-        let size = size.unwrap();
-
-        unsafe { data.set_len(size) };
-
-        Ok(Ok(data))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn socket_write(
         &mut self,
         fd: u64,
         data: Vec<u8>,
+        timeout_ms: u64,
     ) -> wasmtime::Result<std::result::Result<u64, String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
+        let ret: Result<u64> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
             if stream.is_none() {
-                return Ok(Err("".to_string()));
+                return Err(anyhow::anyhow!("stream.is_none"));
             }
-            stream.unwrap()
-        } else {
-            stream.unwrap()
-        };
-        let stream = &mut *stream.get_mut().await;
-        use tokio::io::AsyncWriteExt;
-        let size = stream.write(data.as_slice()).await;
-        if size.is_err() {
-            let is_close = self
-                .stream_info
-                .get()
-                .upstream_stream_flow_info
-                .get()
-                .is_close();
-            if !is_close {
-                size?;
+            let (stream, _) = stream.unwrap();
+            let stream = &mut *stream.get_mut().await;
+            use tokio::io::AsyncWriteExt;
+            let size = match tokio::time::timeout(duration, stream.write(data.as_slice())).await {
+                Ok(data) => data,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+            if size.is_err() {
+                let is_close = self
+                    .stream_info
+                    .get()
+                    .upstream_stream_flow_info
+                    .get()
+                    .is_close();
+                if !is_close {
+                    size?;
+                }
+                return Ok(0);
             }
-            return Ok(Ok(0));
-        }
-        let size = size.unwrap();
+            let size = size.unwrap();
 
-        Ok(Ok(size as u64))
+            Ok(size as u64)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn socket_write_all(
         &mut self,
         fd: u64,
         data: Vec<u8>,
+        timeout_ms: u64,
     ) -> wasmtime::Result<std::result::Result<u64, String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
+        let ret: Result<u64> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
             if stream.is_none() {
-                return Ok(Err("".to_string()));
+                return Err(anyhow::anyhow!("stream.is_none"));
             }
-            stream.unwrap()
-        } else {
-            stream.unwrap()
-        };
-        let stream = &mut *stream.get_mut().await;
-        use tokio::io::AsyncWriteExt;
-        let ret = stream.write_all(data.as_slice()).await;
-        if ret.is_err() {
-            let is_close = self
-                .stream_info
-                .get()
-                .upstream_stream_flow_info
-                .get()
-                .is_close();
-            if !is_close {
-                ret?;
-            }
-            return Ok(Ok(0));
-        }
-
-        Ok(Ok(data.len() as u64))
-    }
-
-    async fn socket_flush(&mut self, fd: u64) -> wasmtime::Result<std::result::Result<(), String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-            if stream.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            stream.unwrap()
-        } else {
-            stream.unwrap()
-        };
-        let stream = &mut *stream.get_mut().await;
-        use tokio::io::AsyncWriteExt;
-        stream.flush().await?;
-
-        Ok(Ok(()))
-    }
-
-    async fn socket_close(&mut self, fd: u64) -> wasmtime::Result<std::result::Result<(), String>> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-        let (stream, stream_info) = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
-            if stream_info.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            let stream_info = stream_info.unwrap();
-
-            let stream = stream_info.get_mut().wasm_socket_map.get(&fd).cloned();
-            if stream.is_none() {
-                return Ok(Err("".to_string()));
-            }
-            (stream.unwrap(), stream_info.clone())
-        } else {
-            (stream.unwrap(), self.stream_info.clone())
-        };
-        {
+            let (stream, _) = stream.unwrap();
             let stream = &mut *stream.get_mut().await;
             use tokio::io::AsyncWriteExt;
-            stream.flush().await?;
-        }
+            let ret = match tokio::time::timeout(duration, stream.write_all(data.as_slice())).await
+            {
+                Ok(data) => data,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+            if ret.is_err() {
+                let is_close = self
+                    .stream_info
+                    .get()
+                    .upstream_stream_flow_info
+                    .get()
+                    .is_close();
+                if !is_close {
+                    ret?;
+                }
+                return Ok(0);
+            }
 
-        stream_info.get_mut().wasm_socket_map.remove(&fd);
-        Ok(Ok(()))
+            Ok(data.len() as u64)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn socket_flush(
+        &mut self,
+        fd: u64,
+        timeout_ms: u64,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
+            if stream.is_none() {
+                return Err(anyhow::anyhow!("stream.is_none"));
+            }
+            let (stream, _) = stream.unwrap();
+            let stream = &mut *stream.get_mut().await;
+            use tokio::io::AsyncWriteExt;
+            match tokio::time::timeout(duration, stream.flush()).await {
+                Ok(data) => data?,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+
+            Ok(())
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn socket_close(
+        &mut self,
+        fd: u64,
+        timeout_ms: u64,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            let duration = tokio::time::Duration::from_millis(timeout_ms);
+            let stream = self.get_socket_stream(&fd);
+            if stream.is_none() {
+                return Err(anyhow::anyhow!("stream.is_none"));
+            }
+            let (stream, stream_info) = stream.unwrap();
+            let stream = &mut *stream.get_mut().await;
+            use tokio::io::AsyncWriteExt;
+            match tokio::time::timeout(duration, stream.flush()).await {
+                Ok(data) => data?,
+                Err(_e) => return Err(anyhow::anyhow!("timeout")),
+            };
+            stream_info.get_mut().wasm_socket_map.remove(&fd);
+
+            Ok(())
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 }

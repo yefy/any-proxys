@@ -42,5 +42,5 @@ interface wasm-http {
     }
 
     use wasm-socket.{socket-type};
-    handle-http: func(typ: socket-type, req: request) -> result<response, string>;
+    handle-http: func(typ: socket-type, req: request, timeout-ms: u64) -> result<response, string>;
 }

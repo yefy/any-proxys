@@ -28,14 +28,15 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
         line, host, user_agent, accept
     );
 
+    let timeout_ms = 1000 * 10;
     //let fd =
-    //    wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "www.upstream.cn:10001", None)?;
+    //    wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "www.upstream.cn:10001", None, timeout_ms)?;
     let fd =
-        wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "192.168.192.139:10001", None)?;
-    wasm_socket::socket_write_all(fd, request.as_bytes())?;
-    wasm_socket::socket_flush(fd)?;
-    let data = wasm_socket::socket_read(fd, 1024)?;
-    wasm_socket::socket_flush(fd)?;
+        wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "192.168.192.139:10001", None, timeout_ms)?;
+    wasm_socket::socket_write_all(fd, request.as_bytes(), timeout_ms)?;
+    wasm_socket::socket_flush(fd, timeout_ms)?;
+    let data = wasm_socket::socket_read(fd, 1024, timeout_ms)?;
+    wasm_socket::socket_flush(fd, timeout_ms)?;
     info!("data:{:?}", unsafe{String::from_utf8_unchecked(data)});
 
     // 响应的内容
@@ -54,8 +55,8 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     let fd = wasm_std::curr_fd();
     // 打印生成的 HTTP 响应字符串
     info!("response:{:?}", response);
-    wasm_socket::socket_write_all(fd, &response.as_bytes())?;
-    wasm_socket::socket_flush(fd)?;
+    wasm_socket::socket_write_all(fd, &response.as_bytes(), timeout_ms)?;
+    wasm_socket::socket_flush(fd, timeout_ms)?;
 
     Ok(wasm_std::Error::Ok)
 }

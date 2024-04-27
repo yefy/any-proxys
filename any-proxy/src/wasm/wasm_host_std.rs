@@ -1,15 +1,15 @@
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
+use crate::proxy::util::http_serverless;
 use crate::util::default_config;
 use crate::wasm::component::server::wasm_http;
 use crate::wasm::component::server::wasm_std;
-use crate::wasm::{wasm_err, WasmHost};
+use crate::wasm::WasmHost;
 use anyhow::Result;
 use async_trait::async_trait;
 use hyper::body::HttpBody;
 use hyper::http::{HeaderName, HeaderValue};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[async_trait]
@@ -55,52 +55,112 @@ impl wasm_std::Host for WasmHost {
     }
 
     async fn new_session_id(&mut self) -> wasmtime::Result<u64> {
-        if self.scc.is_none() {
-            return Ok(0);
-        }
-        let session_id = {
-            use crate::config::common_core;
-            let common_core_conf = common_core::main_conf_mut(self.scc.ms()).await;
-            let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
-            session_id
-        };
+        use crate::config::common_core::get_session_id;
+        let session_id = get_session_id();
         Ok(session_id)
     }
 
     async fn session_send(
         &mut self,
         session_id: u64,
+        cmd: u64,
         value: Vec<u8>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let stream_info = self
-            .stream_info
-            .get_mut()
-            .wasm_stream_info_map
-            .get()
-            .get(&session_id)
-            .cloned();
-        if stream_info.is_none() {
-            return Ok(Err("".to_string()));
+        let ret: Result<()> = async {
+            let stream_info = self
+                .stream_info
+                .get_mut()
+                .wasm_stream_info_map
+                .get()
+                .get(&session_id)
+                .cloned();
+            if stream_info.is_none() {
+                return Err(anyhow::anyhow!("stream_info.is_none"));
+            }
+            let stream_info = stream_info.unwrap();
+            let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+            wasm_session_sender.send((cmd, value, None)).await?;
+            Ok(())
         }
-        let stream_info = stream_info.unwrap();
-        let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
-        let ret = wasm_session_sender
-            .send(value)
-            .await
-            .map_err(|e| e.to_string());
-        if let Err(e) = ret {
-            return Ok(Err(e));
-        }
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
-    async fn session_recv(&mut self) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
-        let wasm_session_receiver = self.stream_info.get().wasm_session_receiver.clone();
-        let ret = wasm_session_receiver.recv().await;
-        if let Err(e) = &ret {
-            return Ok(Err(e.to_string()));
+    async fn session_request(
+        &mut self,
+        session_id: u64,
+        cmd: u64,
+        value: Vec<u8>,
+    ) -> wasmtime::Result<std::result::Result<Option<Vec<u8>>, String>> {
+        let ret: Result<Option<Vec<u8>>> = async {
+            let stream_info = self
+                .stream_info
+                .get_mut()
+                .wasm_stream_info_map
+                .get()
+                .get(&session_id)
+                .cloned();
+            if stream_info.is_none() {
+                return Err(anyhow::anyhow!("stream_info.is_none"));
+            }
+            let stream_info = stream_info.unwrap();
+            let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            wasm_session_sender.send((cmd, value, Some(tx))).await?;
+            let data = rx.await?;
+            Ok(data)
         }
-        Ok(Ok(ret.unwrap()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn session_response(
+        &mut self,
+        fd: u64,
+        value: Option<Vec<u8>>,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            let wasm_session_response = self
+                .stream_info
+                .get_mut()
+                .wasm_session_response_map
+                .remove(&fd);
+            if wasm_session_response.is_none() {
+                return Err(anyhow::anyhow!("wasm_session_response.is_none"));
+            }
+            let wasm_session_response = wasm_session_response.unwrap();
+            wasm_session_response
+                .send(value)
+                .map_err(|_e| anyhow::anyhow!("err:send"))?;
+            Ok(())
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn session_recv(
+        &mut self,
+    ) -> wasmtime::Result<std::result::Result<(u64, u64, Vec<u8>), String>> {
+        let ret: Result<(u64, u64, Vec<u8>)> = async {
+            let wasm_session_receiver = self.stream_info.get().wasm_session_receiver.clone();
+            let (cmd, data, tx) = wasm_session_receiver.recv().await?;
+            let fd = if tx.is_some() {
+                let fd = self
+                    .new_session_id()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                self.stream_info
+                    .get_mut()
+                    .wasm_session_response_map
+                    .insert(fd, tx.unwrap());
+                fd
+            } else {
+                0
+            };
+            Ok((fd, cmd, data))
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn add_timer(&mut self, time_ms: u64, key: u64, value: Vec<u8>) -> wasmtime::Result<()> {
@@ -115,7 +175,7 @@ impl wasm_std::Host for WasmHost {
         Ok(())
     }
 
-    async fn get_timer_timeout(&mut self, time_ms: u64) -> wasmtime::Result<Vec<Vec<u8>>> {
+    async fn get_timer_timeout(&mut self, time_ms: u64) -> wasmtime::Result<Vec<(u64, Vec<u8>)>> {
         let stream_info = &mut *self.stream_info.get_mut();
         let mut expire_keys = Vec::with_capacity(10);
         for (key, (_time_ms, _)) in &mut stream_info.wasm_timers.iter_mut() {
@@ -132,7 +192,7 @@ impl wasm_std::Host for WasmHost {
                 continue;
             }
             let (_, value) = timer.unwrap();
-            values.push(value);
+            values.push((key, value));
         }
 
         Ok(values)
@@ -142,18 +202,22 @@ impl wasm_std::Host for WasmHost {
         &mut self,
         headers: Vec<(String, String)>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            for (k, v) in headers {
+                r_ctx.r_in.headers_upstream.insert(
+                    HeaderName::from_str(k.as_str())?,
+                    HeaderValue::from_str(&v)?,
+                );
+            }
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        for (k, v) in headers {
-            r_ctx.r_in.headers_upstream.insert(
-                HeaderName::from_str(k.as_str())?,
-                HeaderValue::from_str(&v)?,
-            );
-        }
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_add_header(
@@ -161,140 +225,170 @@ impl wasm_std::Host for WasmHost {
         k: String,
         v: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            r_ctx.r_in.headers_upstream.insert(
+                HeaderName::from_str(k.as_str())?,
+                HeaderValue::from_str(&v)?,
+            );
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        r_ctx.r_in.headers_upstream.insert(
-            HeaderName::from_str(k.as_str())?,
-            HeaderValue::from_str(&v)?,
-        );
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_del_headers(
         &mut self,
         headers: Vec<String>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            for k in headers {
+                r_ctx.r_in.headers_upstream.remove(k.as_str());
+            }
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        for k in headers {
-            r_ctx.r_in.headers_upstream.remove(k.as_str());
-        }
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_del_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            r_ctx.r_in.headers_upstream.remove(k.as_str());
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        r_ctx.r_in.headers_upstream.remove(k.as_str());
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_is_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<bool, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<bool> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            let is_ok = r_ctx.r_in.headers_upstream.get(k.as_str()).is_some();
+            Ok(is_ok)
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        let is_ok = r_ctx.r_in.headers_upstream.get(k.as_str()).is_some();
-        Ok(Ok(is_ok))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_get_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<Option<String>, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<Option<String>> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            let v = r_ctx.r_in.headers_upstream.get(k.as_str());
+            if v.is_none() {
+                return Ok(None);
+            }
+            let v = v.unwrap();
+            let v = v.to_str()?;
+            Ok(Some(v.to_string()))
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        let v = r_ctx.r_in.headers_upstream.get(k.as_str());
-        if v.is_none() {
-            return Ok(Ok(None));
-        }
-        let v = v.unwrap();
-        let v = v.to_str()?;
-        Ok(Ok(Some(v.to_string())))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_get_request(
         &mut self,
     ) -> wasmtime::Result<std::result::Result<wasm_std::Request, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<wasm_std::Request> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r = r.unwrap();
+            let wasm_req = in_to_wasm_request(r).await?;
+            Ok(wasm_req)
         }
-        let r = r.unwrap();
-        let wasm_req = in_to_wasm_request(r)
-            .await
-            .map_err(|e| wasm_err(e.to_string()))?;
-        Ok(Ok(wasm_req))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn in_body_read_exact(
         &mut self,
     ) -> wasmtime::Result<std::result::Result<Vec<u8>, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
-        }
-        let body = {
-            let r_ctx = &mut *r.ctx.get_mut();
-            let body = r_ctx.r_in.body.take();
-            body
-        };
-        if body.is_none() {
-            return Ok(Ok(Vec::new()));
-        }
-        let mut body = body.unwrap();
-
-        let mut data = Vec::with_capacity(1024);
-        loop {
-            let body = body.data().await;
+        let ret: Result<Vec<u8>> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let body = {
+                let r_ctx = &mut *r.ctx.get_mut();
+                let body = r_ctx.r_in.body.take();
+                body
+            };
             if body.is_none() {
-                break;
+                return Ok(Vec::new());
             }
-            let body = body.unwrap();
-            if body.is_err() {
-                break;
+            let mut body = body.unwrap();
+
+            let mut data = Vec::with_capacity(1024);
+            loop {
+                let body = body.data().await;
+                if body.is_none() {
+                    break;
+                }
+                let body = body.unwrap();
+                if body.is_err() {
+                    break;
+                }
+                let body = body.unwrap();
+                data.extend_from_slice(body.to_bytes().unwrap().as_ref());
             }
-            let body = body.unwrap();
-            data.extend_from_slice(body.to_bytes().unwrap().as_ref());
+            Ok(data)
         }
-        Ok(Ok(data))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_add_headers(
         &mut self,
         headers: Vec<(String, String)>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            for (k, v) in headers {
+                r_ctx.r_out.headers.insert(
+                    HeaderName::from_str(k.as_str())?,
+                    HeaderValue::from_str(&v)?,
+                );
+            }
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        for (k, v) in headers {
-            r_ctx.r_out.headers.insert(
-                HeaderName::from_str(k.as_str())?,
-                HeaderValue::from_str(&v)?,
-            );
-        }
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_add_header(
@@ -302,89 +396,136 @@ impl wasm_std::Host for WasmHost {
         k: String,
         v: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            r_ctx.r_out.headers.insert(
+                HeaderName::from_str(k.as_str())?,
+                HeaderValue::from_str(&v)?,
+            );
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        r_ctx.r_out.headers.insert(
-            HeaderName::from_str(k.as_str())?,
-            HeaderValue::from_str(&v)?,
-        );
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_del_headers(
         &mut self,
         headers: Vec<String>,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            for k in headers {
+                r_ctx.r_out.headers.remove(k.as_str());
+            }
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        for k in headers {
-            r_ctx.r_out.headers.remove(k.as_str());
-        }
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_del_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            r_ctx.r_out.headers.remove(k.as_str());
+            Ok(())
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        r_ctx.r_out.headers.remove(k.as_str());
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_is_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<bool, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<bool> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            let is_ok = r_ctx.r_out.headers.get(k.as_str()).is_some();
+            Ok(is_ok)
         }
-        let r_ctx = &mut *r.ctx.get_mut();
-        let is_ok = r_ctx.r_out.headers.get(k.as_str()).is_some();
-        Ok(Ok(is_ok))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_get_header(
         &mut self,
         k: String,
     ) -> wasmtime::Result<std::result::Result<Option<String>, String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
-        }
-        let r_ctx = &mut *r.ctx.get_mut();
-        let v = r_ctx.r_out.headers.get(k.as_str());
+        let ret: Result<Option<String>> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r_ctx = &mut *r.ctx.get_mut();
+            let v = r_ctx.r_out.headers.get(k.as_str());
 
-        if v.is_none() {
-            return Ok(Ok(None));
+            if v.is_none() {
+                return Ok(None);
+            }
+            let v = v.unwrap();
+            let v = v.to_str()?;
+            Ok(Some(v.to_string()))
         }
-        let v = v.unwrap();
-        let v = v.to_str()?;
-        Ok(Ok(Some(v.to_string())))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 
     async fn out_set_response(
         &mut self,
         wasm_res: wasm_std::Response,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        let r = self.stream_info.get().http_r.clone();
-        if r.is_none() {
-            return Ok(Err("r.is_none()".to_string()));
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r = r.unwrap();
+            wasn_response_to_out(r, wasm_res)?;
+            Ok(())
         }
-        let r = r.unwrap();
-        wasn_response_to_out(r, wasm_res).map_err(|e| wasm_err(e.to_string()))?;
-        Ok(Ok(()))
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn out_response(
+        &mut self,
+        wasm_res: wasm_std::Response,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            let r = self.stream_info.get().http_r.clone();
+            if r.is_none() {
+                return Err(anyhow::anyhow!("r.is_none"));
+            }
+            let r = r.unwrap();
+            let scc = self.scc.clone();
+            if scc.is_none() {
+                return Err(anyhow::anyhow!("scc.is_none"));
+            }
+            let scc = scc.unwrap();
+            wasn_response_to_out(r.clone(), wasm_res)?;
+            http_serverless(r, scc).await?;
+            Ok(())
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
     }
 }
 

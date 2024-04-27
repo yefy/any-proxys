@@ -35,8 +35,9 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
         params: wasm_http::Params::new(),
         body: None,
     };
-    let fd = wasm_websocket::socket_connect(wasm_socket::SocketType::Tcp, &request)?;
-    let msg = wasm_websocket::socket_read(fd)?;
+    let timeout_ms = 1000 * 10;
+    let fd = wasm_websocket::socket_connect(wasm_socket::SocketType::Tcp, &request, timeout_ms)?;
+    let msg = wasm_websocket::socket_read(fd, timeout_ms)?;
 
     info!(
         "msg:{}",
@@ -44,8 +45,8 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     );
 
     let session_id = wasm_std::curr_session_id();
-    wasm_websocket::socket_write(session_id, msg.as_slice())?;
-    wasm_websocket::socket_flush(session_id)?;
-    wasm_websocket::socket_close(session_id)?;
+    wasm_websocket::socket_write(session_id, msg.as_slice(), timeout_ms)?;
+    wasm_websocket::socket_flush(session_id, timeout_ms)?;
+    wasm_websocket::socket_close(session_id, timeout_ms)?;
     Ok(wasm_std::Error::Ok)
 }

@@ -4,7 +4,7 @@ use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
 use anyhow::Result;
 use lazy_static::lazy_static;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 lazy_static! {
@@ -12,6 +12,10 @@ lazy_static! {
 }
 lazy_static! {
     pub static ref TMPFILE_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(123456));
+}
+
+pub fn get_session_id() -> u64 {
+    SESSION_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct Conf {

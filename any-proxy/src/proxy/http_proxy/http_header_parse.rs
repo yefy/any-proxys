@@ -475,6 +475,10 @@ pub fn get_http_range(
         return Ok(data);
     }
 
+    if raw_content_length <= 0 {
+        return Ok(data);
+    }
+
     let range = range.unwrap().to_str();
     if range.is_err() {
         return Ok(data);

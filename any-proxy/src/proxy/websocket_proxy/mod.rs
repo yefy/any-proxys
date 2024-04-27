@@ -20,9 +20,23 @@ use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::util::{
     find_local, run_plugin_handle_access, run_plugin_handle_websocket_serverless,
 };
+use futures_core::Stream;
+use futures_sink::Sink;
 use hyper::Body;
 use lazy_static::lazy_static;
 use std::sync::Arc;
+use tokio_tungstenite::tungstenite::error::Error;
+use tokio_tungstenite::tungstenite::Message;
+
+pub trait WebSocketStreamTrait:
+    Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin + Sync + Send
+{
+}
+impl<
+        T: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin + Sync + Send,
+    > WebSocketStreamTrait for T
+{
+}
 
 lazy_static! {
     pub static ref WEBSOCKET_HELLO_KEY: String = "websocket_hello".to_string();

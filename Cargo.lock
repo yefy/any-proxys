@@ -194,6 +194,7 @@ dependencies = [
  "dynamic-pool",
  "fs_extra",
  "futures-core",
+ "futures-sink",
  "futures-util",
  "http",
  "httparse",
