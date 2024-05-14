@@ -45,6 +45,24 @@ impl UpstreamHeartbeatServer {
     }
 
     pub async fn start(&self) -> Result<()> {
+        let (ups_heartbeat, _ups_config_name) = {
+            let ups_data = self.ups_data.get_mut();
+
+            let ups_heartbeat = ups_data.ups_heartbeats_map.get(&self.index).cloned();
+            if ups_heartbeat.is_none() {
+                return Err(anyhow!("err:ups_heartbeats_map => index:{}", self.index));
+            }
+            (ups_heartbeat.unwrap(), ups_data.ups_config.name.clone())
+        };
+
+        if ups_heartbeat.get().http_heartbeat.is_some() {
+            self.http_heartbeat().await
+        } else {
+            self.raw_heartbeat().await
+        }
+    }
+
+    pub async fn raw_heartbeat(&self) -> Result<()> {
         let (ups_heartbeat, ups_config_name) = {
             let ups_data = self.ups_data.get_mut();
 
@@ -197,6 +215,144 @@ impl UpstreamHeartbeatServer {
                                 ups_heartbeat.index,
                                 ups_heartbeat.addr
                             );
+                    }
+                    log::error!("err:upstream_heartbeat_server.rs => e:{}", e);
+                }
+            }
+        }
+    }
+
+    pub async fn http_heartbeat(&self) -> Result<()> {
+        let (ups_heartbeat, ups_config_name) = {
+            let ups_data = self.ups_data.get_mut();
+
+            let ups_heartbeat = ups_data.ups_heartbeats_map.get(&self.index).cloned();
+            if ups_heartbeat.is_none() {
+                return Err(anyhow!("err:ups_heartbeats_map => index:{}", self.index));
+            }
+            (ups_heartbeat.unwrap(), ups_data.ups_config.name.clone())
+        };
+
+        scopeguard::defer! {
+            log::info!("stop upstream_heartbeat_server ups_name:[{}], addr:{}",
+                ups_config_name,
+                ups_heartbeat.get().addr
+            );
+        }
+
+        log::debug!(target: "main",
+                    "start upstream_heartbeat_server ups_name:[{}], addr:{}",
+                    ups_config_name,
+                    ups_heartbeat.get().addr
+        );
+
+        let (interval, timeout, fail, (req, client), mut shutdown_heartbeat_rx) = {
+            let tmp_ups_heartbeat = ups_heartbeat.get();
+            let heartbeat = tmp_ups_heartbeat.heartbeat.as_ref().unwrap();
+            (
+                heartbeat.interval,
+                heartbeat.timeout,
+                heartbeat.fail,
+                ups_heartbeat.get().http_heartbeat.clone().unwrap(),
+                ups_heartbeat.get().shutdown_heartbeat_tx.subscribe(),
+            )
+        };
+
+        let mut shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval as u64)) => {
+                }
+                 _ =  shutdown_heartbeat_rx.recv() => {
+                    return Ok(());
+                }
+                _ =  shutdown_thread_rx.recv() => {
+                    return Ok(());
+                }
+                else => {
+                    return Err(anyhow!("err:select"));
+                }
+            }
+
+            let ret: Result<()> = async {
+                let heartbeat_time = Instant::now();
+
+                let mut http_req = http::Request::builder().body(hyper::Body::empty())?;
+                *http_req.method_mut() = req.method().clone();
+                *http_req.version_mut() = req.version().clone();
+                *http_req.uri_mut() = req.uri().clone();
+                *http_req.headers_mut() = req.headers().clone();
+
+                let duration = tokio::time::Duration::from_secs(timeout as u64);
+                let http_resp =
+                    match tokio::time::timeout(duration, client.request(http_req, None)).await {
+                        Ok(data) => data.map_err(|e| anyhow!("err:http_heartbeat => e:{}", e))?,
+                        Err(_e) => return Err(anyhow::anyhow!("http_heartbeat timeout")),
+                    };
+
+                if !http_resp.status().is_success() {
+                    return Err(anyhow!("err:connect.connect => e:heartbeat_r nil"));
+                }
+
+                {
+                    let heartbeat_time_elapsed = heartbeat_time.elapsed().as_millis();
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    ups_heartbeat.total_elapsed += heartbeat_time_elapsed;
+                    ups_heartbeat.count_elapsed += 1;
+                    ups_heartbeat.avg_elapsed =
+                        ups_heartbeat.total_elapsed / ups_heartbeat.count_elapsed as u128;
+
+                    {
+                        self.ups_data.get_mut().is_sort_heartbeats_active = true;
+                    }
+
+                    log::debug!(target: "main",
+                                "heartbeat name:{}, index:{}, domain_index:{}, index:{}, addr:{}",
+                                ups_config_name,
+                                self.index,
+                                ups_heartbeat.domain_index,
+                                ups_heartbeat.index,
+                                ups_heartbeat.addr,
+                    );
+                }
+                Ok(())
+            }
+            .await;
+            match ret {
+                Ok(_) => {
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    if ups_heartbeat.disable {
+                        self.ups_data.get_mut().is_heartbeat_change = true;
+                        ups_heartbeat.curr_fail = 0;
+                        ups_heartbeat.disable = false;
+                        log::info!(
+                            "heartbeat name:{}, index:{}, domain_index:{}, index:{}, open addr:{}",
+                            ups_config_name,
+                            self.index,
+                            ups_heartbeat.domain_index,
+                            ups_heartbeat.index,
+                            ups_heartbeat.addr
+                        );
+                    }
+                }
+                Err(e) => {
+                    let mut ups_heartbeat = ups_heartbeat.get_mut();
+                    ups_heartbeat.curr_fail += 1;
+                    ups_heartbeat.effective_weight =
+                        ups_heartbeat.weight / ups_heartbeat.curr_fail as i64;
+                    if ups_heartbeat.curr_fail > fail && !ups_heartbeat.disable {
+                        self.ups_data.get_mut().is_heartbeat_change = true;
+                        ups_heartbeat.disable = true;
+                        log::info!(
+                            "heartbeat name:{}, index:{}, domain_index:{}, index:{}, disable addr:{}",
+                            ups_config_name,
+                            self.index,
+                            ups_heartbeat.domain_index,
+                            ups_heartbeat.index,
+                            ups_heartbeat.addr
+                        );
                     }
                     log::error!("err:upstream_heartbeat_server.rs => e:{}", e);
                 }

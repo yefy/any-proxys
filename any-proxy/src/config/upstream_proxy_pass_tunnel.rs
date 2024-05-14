@@ -252,7 +252,9 @@ impl HeartbeatTcp {
     }
 }
 
+use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
 use async_trait::async_trait;
+
 #[async_trait]
 impl upstream_core::HeartbeatI for HeartbeatTcp {
     async fn heartbeat(
@@ -285,7 +287,7 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
         let connect = Box::new(tunnel_connect::Connect::new(
             client.unwrap(),
             Box::new(tunnel_connect::PeerStreamConnectTcp::new(
-                host,
+                host.clone(),
                 addr.clone(),
                 tcp_config.unwrap(),
                 self.tcp.tunnel.max_stream_size,
@@ -310,6 +312,19 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
 
         let weight = if weight.is_some() { weight.unwrap() } else { 1 };
 
+        let http_heartbeat = if heartbeat.is_some() {
+            let heartbeat = heartbeat.clone().unwrap();
+            if heartbeat.http.is_some() {
+                let http = heartbeat.http.as_ref().unwrap();
+                let http_heartbeat = http_heartbeat(host.into(), addr.clone(), &ms, http).await?;
+                Some(http_heartbeat)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let (shutdown_heartbeat_tx, _) = broadcast::channel(100);
         let ups_heartbeat = UpstreamHeartbeatData {
             domain_index,
@@ -327,6 +342,7 @@ impl upstream_core::HeartbeatI for HeartbeatTcp {
             weight,
             effective_weight: weight,
             current_weight: 0,
+            http_heartbeat,
         };
 
         Ok(ShareRw::new(ups_heartbeat))
@@ -375,7 +391,7 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
         let connect = Box::new(tunnel_connect::Connect::new(
             client.unwrap(),
             Box::new(tunnel_connect::PeerStreamConnectSsl::new(
-                host,
+                host.clone(),
                 addr.clone(),
                 self.ssl.ssl_domain.clone(),
                 tcp_config.unwrap(),
@@ -402,6 +418,19 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
 
         let weight = if weight.is_some() { weight.unwrap() } else { 1 };
 
+        let http_heartbeat = if heartbeat.is_some() {
+            let heartbeat = heartbeat.clone().unwrap();
+            if heartbeat.http.is_some() {
+                let http = heartbeat.http.as_ref().unwrap();
+                let http_heartbeat = http_heartbeat(host.into(), addr.clone(), &ms, http).await?;
+                Some(http_heartbeat)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let (shutdown_heartbeat_tx, _) = broadcast::channel(100);
         let ups_heartbeat = UpstreamHeartbeatData {
             domain_index,
@@ -419,6 +448,7 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
             weight,
             effective_weight: weight,
             current_weight: 0,
+            http_heartbeat,
         };
 
         Ok(ShareRw::new(ups_heartbeat))
@@ -472,7 +502,7 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
         let connect = Box::new(tunnel_connect::Connect::new(
             client.unwrap(),
             Box::new(tunnel_connect::PeerStreamConnectQuic::new(
-                host,
+                host.clone(),
                 addr.clone(),
                 self.quic.ssl_domain.clone(),
                 endpoints,
@@ -500,6 +530,18 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
 
         let weight = if weight.is_some() { weight.unwrap() } else { 1 };
 
+        let http_heartbeat = if heartbeat.is_some() {
+            let heartbeat = heartbeat.clone().unwrap();
+            if heartbeat.http.is_some() {
+                let http = heartbeat.http.as_ref().unwrap();
+                let http_heartbeat = http_heartbeat(host.into(), addr.clone(), &ms, http).await?;
+                Some(http_heartbeat)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (shutdown_heartbeat_tx, _) = broadcast::channel(100);
         let ups_heartbeat = UpstreamHeartbeatData {
             domain_index,
@@ -517,6 +559,7 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
             weight,
             effective_weight: weight,
             current_weight: 0,
+            http_heartbeat,
         };
 
         Ok(ShareRw::new(ups_heartbeat))

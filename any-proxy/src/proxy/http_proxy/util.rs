@@ -1,6 +1,7 @@
 use crate::proxy::http_proxy::bitmap::update_bitset;
 use crate::proxy::http_proxy::http_cache_file::{
-    ProxyCache, ProxyCacheFileNodeExpires, ProxyCacheFileNodeManage,
+    HttpCacheFile, ProxyCache, ProxyCacheFileNodeData, ProxyCacheFileNodeExpires,
+    ProxyCacheFileNodeManage,
 };
 use crate::proxy::http_proxy::http_cache_file_node::ProxyCacheFileNode;
 use crate::proxy::http_proxy::http_stream_request::{
@@ -281,15 +282,16 @@ pub async fn write_body_to_client(
     Ok(())
 }
 
-pub async fn create_cache_file(
-    r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
-    raw_content_length: u64,
-) -> Result<()> {
+pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u64) -> Result<()> {
+    use crate::config::net_core_proxy;
+    //当前可能是main  server local， ProxyCache必须到main_conf中读取
+    let net_core_proxy = net_core_proxy::main_conf(r.scc.ms()).await;
+
     log::trace!(target: "ext", "r.session_id:{}-{}, Response create file",
                 r.session_id, r.local_cache_req_count);
     let (
         add_cache_file_size,
+        client_method,
         client_uri,
         cache_file_info,
         response_info,
@@ -306,6 +308,7 @@ pub async fn create_cache_file(
             response_info.range.raw_content_length as i64 - raw_content_length as i64;
         (
             add_cache_file_size,
+            r_ctx.r_in.method.clone(),
             r_ctx.r_in.uri.clone(),
             r.http_cache_file.cache_file_info.clone(),
             response_info,
@@ -314,42 +317,64 @@ pub async fn create_cache_file(
         )
     };
 
+    let proxy_cache_name = r.http_cache_file.proxy_cache.as_ref().unwrap().name.clone();
     let cache_file_node = ProxyCacheFileNode::create_file(
+        client_method.clone(),
         client_uri.clone(),
         cache_file_info.clone(),
         response_info.clone(),
         response,
         cache_file_node_version,
+        proxy_cache_name,
     )
     .await?;
     let cache_file_node = Arc::new(cache_file_node);
-
-    let is_ok = r
-        .http_cache_file
-        .set_cache_file_node(&r, cache_file_node.clone())
-        .await?;
-    if is_ok {
+    let cache_file_node_data = Arc::new(ProxyCacheFileNodeData::new(None));
+    {
+        let (_, cache_file_node_manage) = HttpCacheFile::read_cache_file_node_manage(
+            r.http_cache_file.proxy_cache.as_ref().unwrap(),
+            &r.http_cache_file.cache_file_info.md5,
+            net_core_proxy.cache_file_node_queue.clone(),
+        );
+        let cache_file_node_manage_ = cache_file_node_manage.clone();
         let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
-        cache_file_node_manage.version_expires += 1;
 
-        let version_expires = cache_file_node_manage.version_expires;
-        let md5 = cache_file_node.cache_file_info.md5.clone();
-        let proxy_cache_path = cache_file_node.cache_file_info.proxy_cache_path.clone();
-        let proxy_cache = r.http_cache_file.proxy_cache.as_ref().unwrap();
-        let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        proxy_cache_ctx.curr_size += add_cache_file_size;
-        proxy_cache_ctx
-            .cache_file_node_expires
-            .push_back(ProxyCacheFileNodeExpires::new(
-                md5,
-                version_expires,
-                proxy_cache_path,
-                client_uri,
-                response_info.range.raw_content_length,
-                response_info.expires_time,
-            ));
-        r.http_cache_file.ctx_thread.get_mut().cache_file_node = Some(cache_file_node);
-        return Ok(());
+        let is_ok = r
+            .http_cache_file
+            .set_cache_file_node(&r, cache_file_node.clone(), cache_file_node_manage)
+            .await?;
+        if is_ok {
+            cache_file_node_manage.version_expires += 1;
+            let cache_file_node_head = cache_file_node_manage.cache_file_node_head.as_ref();
+
+            let version_expires = cache_file_node_manage.version_expires;
+            let cache_file_node_version = cache_file_node_manage.cache_file_node_version;
+            let md5 = cache_file_node_head.md5.clone();
+            let trie_url = cache_file_node_head.trie_url.clone();
+            let proxy_cache = r.http_cache_file.proxy_cache.as_ref().unwrap();
+
+            let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
+            proxy_cache_ctx.curr_size += add_cache_file_size;
+            proxy_cache_ctx
+                .cache_file_node_expires
+                .push_back(ProxyCacheFileNodeExpires::new(
+                    md5.clone(),
+                    version_expires,
+                    cache_file_node_version,
+                    cache_file_node_head.clone(),
+                ));
+            net_core_proxy.trie_insert(trie_url, md5.clone())?;
+            net_core_proxy.index_insert(md5, proxy_cache.cache_conf.name.clone());
+
+            r.http_cache_file.ctx_thread.get_mut().cache_file_node = Some(cache_file_node);
+            r.http_cache_file.ctx_thread.get_mut().cache_file_node_data =
+                Some(cache_file_node_data);
+            r.http_cache_file
+                .ctx_thread
+                .get_mut()
+                .cache_file_node_manage = cache_file_node_manage_;
+            return Ok(());
+        }
     }
 
     r.ctx.get_mut().r_out.is_cache_err = true;
@@ -399,7 +424,7 @@ pub async fn update_expired_cache_file(
         }
         log::trace!(target: "ext", "r.session_id:{}-{}, Response Expire",
                     r.session_id, r.local_cache_req_count);
-        let expires_time = cache_file_node_ctx.expires_time;
+        let expires_time = cache_file_node_manage.cache_file_node_head.expires_time();
         if !(cache_file_node_response_info.last_modified_time
             == out_response_info.last_modified_time
             && cache_file_node_response_info.last_modified == out_response_info.last_modified
@@ -407,6 +432,138 @@ pub async fn update_expired_cache_file(
             && cache_file_node_response_info.range.raw_content_length
                 == out_response_info.range.raw_content_length
             && out_response_info.expires_time > expires_time)
+        {
+            if log::log_enabled!(target: "is_ups", log::Level::Trace) {
+                log::trace!(target: "is_ups", "session_id:{}, r_in url:{}", r.session_id, r.ctx.get().r_in.uri.to_string());
+                log::trace!(target: "is_ups", "session_id:{}, r_in method:{}", r.session_id, r.ctx.get().r_in.method);
+                log::trace!(target: "is_ups", "session_id:{}, r_in curr_upstream_method:{:?}", r.session_id, r.ctx.get().r_in.curr_upstream_method);
+                log::trace!(target: "is_ups", "session_id:{}, r_out status:{}", r.session_id, r.ctx.get().r_out.status.as_u16());
+                log::trace!(target: "is_ups", "session_id:{}, cache_file_node_response_info: last_modified_time:{}, last_modified:{}, e_tag:{}, raw_content_length:{}, expires_time:{}", r.session_id,
+                            cache_file_node_response_info.last_modified_time,
+                            cache_file_node_response_info.last_modified.to_str()?,
+                            cache_file_node_response_info.e_tag.to_str()?,
+                            cache_file_node_response_info.range.raw_content_length,
+                            expires_time);
+                log::trace!(target: "is_ups", "session_id:{}, out_response_info: last_modified_time:{}, last_modified:{}, e_tag:{}, raw_content_length:{}, expires_time:{}", r.session_id,
+                            out_response_info.last_modified_time,
+                            out_response_info.last_modified.to_str()?,
+                            out_response_info.e_tag.to_str()?,
+                            out_response_info.range.raw_content_length,
+                            out_response_info.expires_time);
+            }
+            return Ok(false);
+        }
+        log::trace!(target: "ext", "r.session_id:{}-{}, Response update Expire",
+                    r.session_id, r.local_cache_req_count);
+        cache_file_node_manage.is_upstream = false;
+        if r.ctx.get().is_upstream_add {
+            r.ctx.get_mut().is_upstream_add = false;
+            cache_file_node_manage
+                .upstream_count
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+        let mut upstream_waits = VecDeque::with_capacity(10);
+        swap(
+            &mut upstream_waits,
+            &mut cache_file_node_manage.upstream_waits,
+        );
+        for tx in upstream_waits {
+            let _ = tx.send(());
+        }
+
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_cache_control_time(out_response_info.cache_control_time);
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_expires_time(out_response_info.expires_time);
+        cache_file_node_ctx.cache_file_status = CacheFileStatus::Exist;
+    }
+
+    let file_head_time = ProxyCacheFileNode::get_file_head_time_str(
+        out_response_info.cache_control_time,
+        out_response_info.expires_time,
+    );
+    let file = cache_file_node.get_file_ext().file.clone();
+    #[cfg(feature = "anyio-file")]
+    let session_id = r.session_id;
+    let ret: Result<()> = tokio::task::spawn_blocking(move || {
+        use std::io::Seek;
+        //更新文件时间头
+        let file = &mut *file.get_mut();
+        #[cfg(feature = "anyio-file")]
+        let start_time = Instant::now();
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.write_all(file_head_time.as_slice())?;
+
+        #[cfg(feature = "anyio-file")]
+        if start_time.elapsed().as_millis() > 100 {
+            log::info!(
+                "r.session_id:{}, update file head time:{}",
+                session_id,
+                start_time.elapsed().as_millis()
+            );
+        }
+        Ok(())
+    })
+    .await?;
+    ret?;
+    return Ok(true);
+}
+
+pub async fn check_miss(
+    r: &Arc<HttpStreamRequest>,
+    _cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node: &Arc<ProxyCacheFileNode>,
+) -> Result<bool> {
+    let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
+    {
+        let cache_file_node_response_info = &cache_file_node.response_info;
+        log::trace!(target: "ext", "r.session_id:{}-{}, check_miss",
+                    r.session_id, r.local_cache_req_count);
+        if !(cache_file_node_response_info.last_modified_time
+            == out_response_info.last_modified_time
+            && cache_file_node_response_info.last_modified == out_response_info.last_modified
+            && cache_file_node_response_info.e_tag == out_response_info.e_tag
+            && cache_file_node_response_info.range.raw_content_length
+                == out_response_info.range.raw_content_length)
+        {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
+pub async fn update_expired_cache_file_304(
+    r: &Arc<HttpStreamRequest>,
+    cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node: &Arc<ProxyCacheFileNode>,
+    ups_response: &http::Response<Body>,
+) -> Result<bool> {
+    let e_tag = e_tag(ups_response.headers()).map_err(|e| anyhow!("err:e_tag =>e:{}", e))?;
+    let (last_modified, last_modified_time) = last_modified(ups_response.headers())
+        .map_err(|e| anyhow!("err:last_modified =>e:{}", e))?;
+    let (cache_control_time, expires_time, _) = cache_control_time(ups_response.headers())
+        .map_err(|e| anyhow!("err:cache_control_time =>e:{}", e))?;
+
+    {
+        let cache_file_node_response_info = &cache_file_node.response_info;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
+        let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
+        match &cache_file_node_ctx.cache_file_status {
+            &CacheFileStatus::Expire => {}
+            &CacheFileStatus::Exist => {
+                return Ok(true);
+            }
+        }
+        log::trace!(target: "ext", "r.session_id:{}-{}, Response Expire",
+                    r.session_id, r.local_cache_req_count);
+
+        let _expires_time = cache_file_node_manage.cache_file_node_head.expires_time();
+        if !(cache_file_node_response_info.last_modified_time == last_modified_time
+            && cache_file_node_response_info.last_modified == last_modified
+            && cache_file_node_response_info.e_tag == e_tag
+            && expires_time > _expires_time)
         {
             return Ok(false);
         }
@@ -428,15 +585,17 @@ pub async fn update_expired_cache_file(
             let _ = tx.send(());
         }
 
-        cache_file_node_ctx.cache_control_time = out_response_info.cache_control_time;
-        cache_file_node_ctx.expires_time = out_response_info.expires_time;
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_cache_control_time(cache_control_time);
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_expires_time(expires_time);
         cache_file_node_ctx.cache_file_status = CacheFileStatus::Exist;
     }
 
-    let file_head_time = ProxyCacheFileNode::get_file_head_time_str(
-        out_response_info.cache_control_time,
-        out_response_info.expires_time,
-    );
+    let file_head_time =
+        ProxyCacheFileNode::get_file_head_time_str(cache_control_time, expires_time);
     let file = cache_file_node.get_file_ext().file.clone();
     #[cfg(feature = "anyio-file")]
     let session_id = r.session_id;
@@ -498,23 +657,53 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
         (
             r.ctx.get().r_in.http_cache_status.clone(),
             req_cache_file_ctx.cache_file_node_manage.clone(),
-            req_cache_file_ctx.cache_file_node.clone(),
+            req_cache_file_ctx.cache_file_node(),
         )
     };
     match http_cache_status {
         HttpCacheStatus::Create => {
-            create_cache_file(&r, &cache_file_node_manage, 0).await?;
+            log::trace!(target: "is_ups", "session_id:{}, cache_file_node Create", r.session_id);
+            create_cache_file(&r, 0).await?;
         }
         HttpCacheStatus::Expired => {
             let cache_file_node = cache_file_node.unwrap();
             if update_expired_cache_file(&r, &cache_file_node_manage, &cache_file_node).await? {
+                log::trace!(target: "is_ups", "session_id:{}, cache_file_node Expired", r.session_id);
                 return Ok(());
             }
+
+            {
+                let r_ctx = &mut *r.ctx.get_mut();
+                if r_ctx.r_out.status.is_server_error() {
+                    r_ctx.r_out.is_cache_err = true;
+                    log::trace!(target: "is_ups", "session_id:{}, cache_file_node Expired is_cache_err", r.session_id);
+                    return Ok(());
+                }
+            }
+
+            log::trace!(target: "is_ups", "session_id:{}, cache_file_node Expired to create", r.session_id);
             let raw_content_length = cache_file_node.response_info.range.raw_content_length;
-            create_cache_file(&r, &cache_file_node_manage, raw_content_length).await?;
+            create_cache_file(&r, raw_content_length).await?;
         }
         HttpCacheStatus::Miss => {
-            return Ok(());
+            let cache_file_node = cache_file_node.unwrap();
+            if check_miss(&r, &cache_file_node_manage, &cache_file_node).await? {
+                log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss", r.session_id);
+                return Ok(());
+            }
+
+            {
+                let r_ctx = &mut *r.ctx.get_mut();
+                if r_ctx.r_out.status.is_server_error() {
+                    r_ctx.r_out.is_cache_err = true;
+                    log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss is_cache_err", r.session_id);
+                    return Ok(());
+                }
+            }
+
+            log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss to create", r.session_id);
+            let raw_content_length = cache_file_node.response_info.range.raw_content_length;
+            create_cache_file(&r, raw_content_length).await?;
         }
         HttpCacheStatus::Hit => {
             return Ok(());
@@ -526,25 +715,54 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
     return Ok(());
 }
 
+pub async fn update_or_create_cache_file_304(
+    r: &Arc<HttpStreamRequest>,
+    ups_response: &http::Response<Body>,
+) -> Result<bool> {
+    let (http_cache_status, cache_file_node_manage, cache_file_node) = {
+        let req_cache_file_ctx = r.http_cache_file.ctx_thread.get();
+        (
+            r.ctx.get().r_in.http_cache_status.clone(),
+            req_cache_file_ctx.cache_file_node_manage.clone(),
+            req_cache_file_ctx.cache_file_node(),
+        )
+    };
+    match http_cache_status {
+        HttpCacheStatus::Create => {}
+        HttpCacheStatus::Expired => {
+            let cache_file_node = cache_file_node.unwrap();
+            if update_expired_cache_file_304(
+                &r,
+                &cache_file_node_manage,
+                &cache_file_node,
+                ups_response,
+            )
+            .await?
+            {
+                return Ok(true);
+            }
+        }
+        HttpCacheStatus::Miss => {}
+        HttpCacheStatus::Hit => {}
+        HttpCacheStatus::Bypass => {}
+    }
+    return Ok(false);
+}
+
+use crate::proxy::http_proxy::http_header_parse::{cache_control_time, e_tag, last_modified};
 use any_base::module::module::Modules;
+use std::path::Path;
 
 pub async fn del_expires_cache_file(
     md5: &Bytes,
     proxy_cache: &Arc<ProxyCache>,
     ms: &Modules,
 ) -> Result<()> {
-    if proxy_cache.cache_conf.max_size <= 0 {
-        return Ok(());
-    }
-
-    let cache_file_node_expires = {
+    let mut cache_file_node_expires = {
         let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        if proxy_cache_ctx.curr_size < proxy_cache.cache_conf.max_size {
-            return Ok(());
-        }
+
         let cache_file_node_expires = proxy_cache_ctx.cache_file_node_expires.pop_front();
         if cache_file_node_expires.is_none() {
-            log::warn!("cache_file_node_expires.is_none()");
             return Ok(());
         }
         let cache_file_node_expires = cache_file_node_expires.unwrap();
@@ -566,50 +784,180 @@ pub async fn del_expires_cache_file(
         return Ok(());
     }
 
+    let manage = manage.unwrap();
+    let manage = &mut *manage.get_mut().await;
+
+    if cache_file_node_expires.cache_file_node_version != manage.cache_file_node_version {
+        return Ok(());
+    }
+
+    if cache_file_node_expires.version_expires != manage.version_expires {
+        cache_file_node_expires.version_expires = manage.version_expires;
+        let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
+        proxy_cache_ctx
+            .cache_file_node_expires
+            .push_back(cache_file_node_expires);
+        return Ok(());
+    }
+
+    if manage.cache_file_node_head.is_none() || !manage.cache_file_node_head.is_expires() {
+        if proxy_cache.cache_conf.max_size <= 0 {
+            let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
+            proxy_cache_ctx
+                .cache_file_node_expires
+                .push_front(cache_file_node_expires);
+            return Ok(());
+        }
+
+        {
+            let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
+            if proxy_cache_ctx.curr_size < proxy_cache.cache_conf.max_size {
+                proxy_cache_ctx
+                    .cache_file_node_expires
+                    .push_front(cache_file_node_expires);
+                return Ok(());
+            }
+        }
+    }
+
+    del_cache_file(manage, proxy_cache, ms).await?;
+
+    return Ok(());
+}
+
+pub async fn del_md5(ms: &Modules) -> Result<()> {
+    use crate::config::net_core_proxy;
+    //当前可能是main  server local， ProxyCache必须到main_conf中读取
+    let net_core_proxy = net_core_proxy::main_conf(ms).await;
+    let md5 = net_core_proxy.del_md5.get_mut().pop_front();
+    if md5.is_none() {
+        return Ok(());
+    }
+    let md5 = md5.unwrap();
+    let proxy_cache_names = net_core_proxy
+        .proxy_cache_index_map
+        .get()
+        .get(&md5)
+        .cloned();
+    if proxy_cache_names.is_none() {
+        return Ok(());
+    }
+    let proxy_cache_names = proxy_cache_names.unwrap();
+    let proxy_cache_names = proxy_cache_names
+        .get()
+        .iter()
+        .map(|data| data.clone())
+        .collect::<Vec<String>>();
+    for proxy_cache_name in proxy_cache_names {
+        let proxy_cache = net_core_proxy
+            .proxy_cache_map
+            .get(&proxy_cache_name)
+            .cloned();
+        if proxy_cache.is_none() {
+            continue;
+        }
+        let proxy_cache = proxy_cache.unwrap();
+
+        log::trace!(target: "ext",
+                    "del_cache_file md5:{}",
+                   String::from_utf8_lossy(md5.as_ref()));
+
+        let manage = proxy_cache.cache_file_node_map.get().get(&md5).cloned();
+        if manage.is_none() {
+            return Ok(());
+        }
+        let manage = manage.unwrap();
+        let manage = &mut *manage.get_mut().await;
+        del_cache_file(manage, &proxy_cache, ms).await?;
+    }
+
+    return Ok(());
+}
+
+pub async fn del_cache_file(
+    manage: &mut ProxyCacheFileNodeManage,
+    proxy_cache: &Arc<ProxyCache>,
+    ms: &Modules,
+) -> Result<()> {
+    if manage.cache_file_node_head.is_none() {
+        return Ok(());
+    }
+    let cache_file_node_head = manage.cache_file_node_head.clone();
+    let proxy_cache_path = cache_file_node_head.proxy_cache_path.clone();
+    let proxy_cache_path_tmp = cache_file_node_head.proxy_cache_path_tmp.clone();
+    let cache_file_node_old = manage.cache_file_node.clone();
+
     use crate::config::common_core;
     let common_core_conf = common_core::main_conf(ms).await;
     let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
 
-    let manage = manage.unwrap();
-    let manage = &mut *manage.get_mut().await;
+    if Path::new(proxy_cache_path.as_str()).exists() {
+        let mut tmp = proxy_cache_path_tmp.to_string();
+        tmp.push_str(&format!("_{}_tmp", tmpfile_id));
 
-    if cache_file_node_expires.version_expires != manage.version_expires {
-        return Ok(());
-    }
-    if manage.cache_file_node.is_some() {
-        let cache_file_node = manage.cache_file_node.as_ref().unwrap();
-        if !cache_file_node.is_file_node_expires_del() {
-            proxy_cache
-                .ctx
-                .get_mut()
-                .cache_file_node_expires
-                .push_back(cache_file_node_expires);
-            return Ok(());
+        log::info!(target: "ext", "del_cache_file exists rename {},{}",
+                   proxy_cache_path.as_str(), tmp.as_str());
+        std::fs::rename(proxy_cache_path.as_str(), tmp.as_str())?;
+        let _ = unlink(tmp.as_str(), None);
+        if cache_file_node_old.is_some() {
+            let cache_file_node_old = cache_file_node_old.unwrap();
+            cache_file_node_old.file_ext.file_path.set(tmp.into());
+            cache_file_node_old.file_ext.unlink(None);
         }
 
-        let file_ext = cache_file_node.get_file_ext();
-        file_ext.unlink(Some(tmpfile_id));
         let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        proxy_cache_ctx.curr_size -= cache_file_node.response_info.range.raw_content_length as i64;
-    } else {
-        if let Err(e) = unlink(
-            cache_file_node_expires.proxy_cache_path.as_str(),
-            Some(tmpfile_id),
-        ) {
-            log::error!(
-                "err:unlink => path:{}, err:{}",
-                cache_file_node_expires.proxy_cache_path.as_str(),
-                e
-            );
-        }
-        let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        proxy_cache_ctx.curr_size -= cache_file_node_expires.raw_content_length as i64;
+        proxy_cache_ctx.curr_size -= cache_file_node_head.raw_content_length as i64;
     }
+
     proxy_cache
         .cache_file_node_map
         .get_mut()
-        .remove(&cache_file_node_expires.md5);
-    log::debug!(target: "ext", "del file uri:{}, path:{}", cache_file_node_expires.uri, cache_file_node_expires.proxy_cache_path);
+        .remove(&cache_file_node_head.md5);
+    manage.cache_file_node_queue_clear();
+    log::debug!(target: "ext", "del file uri:{}, path:{}", cache_file_node_head.uri, cache_file_node_head.proxy_cache_path);
+
+    use crate::config::net_core_proxy;
+    //当前可能是main  server local， ProxyCache必须到main_conf中读取
+    let net_core_proxy = net_core_proxy::main_conf(ms).await;
+    net_core_proxy.trie_del(&cache_file_node_head.trie_url, &cache_file_node_head.md5);
+    net_core_proxy.index_del(&cache_file_node_head.md5, &proxy_cache.cache_conf.name);
+
+    return Ok(());
+}
+
+pub async fn del_max_open_cache_file(ms: &Modules) -> Result<()> {
+    use crate::config::net_core_proxy;
+    let net_core_proxy_main_conf = net_core_proxy::main_conf(ms).await;
+    if net_core_proxy_main_conf.proxy_max_open_file <= 0 {
+        return Ok(());
+    }
+    let len = net_core_proxy_main_conf
+        .cache_file_node_queue
+        .get_mut()
+        .len();
+    if len <= net_core_proxy_main_conf.proxy_max_open_file {
+        return Ok(());
+    }
+
+    let data = net_core_proxy_main_conf
+        .cache_file_node_queue
+        .get_mut()
+        .pop_front();
+    if data.is_none() {
+        return Ok(());
+    }
+    let data = data.unwrap();
+
+    if data.count.load(Ordering::Relaxed) > 0 {
+        data.count.store(0, Ordering::Relaxed);
+        net_core_proxy_main_conf
+            .cache_file_node_queue
+            .get_mut()
+            .push_back(data);
+        return Ok(());
+    }
+
+    data.node.set_nil();
 
     return Ok(());
 }

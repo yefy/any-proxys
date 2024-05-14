@@ -1,18 +1,22 @@
 use crate::config as conf;
-use crate::proxy::http_proxy::http_cache_file::ProxyCache;
+use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeData};
 use crate::util::var::Var;
 use any_base::module::module;
 use any_base::parking_lot::typ::ArcMutex;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
+use any_base::typ::{ArcRwLock, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
+use bytes::Bytes;
 use lazy_static::lazy_static;
+use radix_trie::Trie;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 fn default_proxy_cache_conf_is_open() -> bool {
     true
@@ -49,8 +53,55 @@ pub struct ProxyCacheValid {
     pub time: u64,
 }
 
+fn proxy_hot_file_is_open() -> bool {
+    false
+}
+fn proxy_hot_file_hot_interval_time() -> u64 {
+    60 * 5
+}
+
+fn proxy_hot_file_hot_top_count() -> u64 {
+    50
+}
+
+fn proxy_hot_file_hot_read_min_count() -> u64 {
+    100
+}
+
+fn proxy_hot_file_hot_io_percent() -> u64 {
+    80
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyHotFile {
+    #[serde(default = "proxy_hot_file_is_open")]
+    pub is_open: bool,
+    #[serde(default = "proxy_hot_file_hot_interval_time")]
+    pub hot_interval_time: u64,
+    #[serde(default = "proxy_hot_file_hot_top_count")]
+    pub hot_top_count: u64,
+    #[serde(default = "proxy_hot_file_hot_read_min_count")]
+    pub hot_read_min_count: u64,
+    #[serde(default = "proxy_hot_file_hot_io_percent")]
+    pub hot_io_percent: u64,
+}
+
+impl ProxyHotFile {
+    pub fn new() -> Self {
+        ProxyHotFile {
+            is_open: proxy_hot_file_is_open(),
+            hot_interval_time: proxy_hot_file_hot_interval_time(),
+            hot_top_count: proxy_hot_file_hot_top_count(),
+            hot_read_min_count: proxy_hot_file_hot_read_min_count(),
+            hot_io_percent: proxy_hot_file_hot_io_percent(),
+        }
+    }
+}
+
+pub const DEFAULT_PROXY_EXPIRES_FILE_TIMER: u64 = 10;
 pub const CACHE_FILE_SLISE: u64 = 1024 * 1024;
-const DEFAULT_PROXY_CACHE_KEY: &str = "${http_ups_request_scheme}${http_ups_request_method}${http_ups_request_host}${http_ups_request_uri}";
+const DEFAULT_PROXY_CACHE_KEY: &str = "${http_ups_request_method}${http_ups_request_scheme}${http_ups_request_host}${http_ups_request_uri}";
 lazy_static! {
     pub static ref CHECK_METHODS_MAP: ArcMutex<HashMap<String, bool>> = {
         let mut data = HashMap::new();
@@ -66,15 +117,27 @@ lazy_static! {
 }
 
 pub struct Conf {
-    pub proxy_cache_map: HashMap<String, Arc<ProxyCache>>,
-    pub proxy_caches: Vec<Arc<ProxyCache>>,
-    pub proxy_cache_confs: Vec<ProxyCacheConf>,
     pub proxy_cache_names: Vec<String>,
-    pub proxy_request_slice: u64,
     pub proxy_cache_key: String,
     pub proxy_cache_key_vars: Var,
+    pub proxy_cache_purge: bool,
+    pub proxy_request_slice: u64,
     pub proxy_cache_methods: HashMap<String, bool>,
     pub proxy_cache_valids: HashMap<u16, u64>,
+    pub proxy_cache_confs: Vec<ProxyCacheConf>,
+    pub proxy_caches: Vec<Arc<ProxyCache>>,
+    pub proxy_expires_file_timer: u64,
+    pub proxy_hot_file: ProxyHotFile,
+    pub proxy_max_open_file: usize,
+
+    pub proxy_cache_map: HashMap<String, Arc<ProxyCache>>,
+    pub proxy_cache_index_map: ArcRwLock<HashMap<Bytes, ArcRwLock<HashSet<String>>>>,
+    pub uri_trie: ArcRwLock<Trie<String, ArcRwLock<std::collections::HashSet<Bytes>>>>,
+    pub del_md5: ArcRwLock<VecDeque<Bytes>>,
+    pub proxy_expires_file_timer_instant: ArcRwLock<Instant>,
+    pub hot_io_percent_map: ArcRwLock<HashMap<String, u64>>,
+    pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
+    pub is_check: Arc<AtomicBool>,
 }
 
 impl Conf {
@@ -89,7 +152,145 @@ impl Conf {
             proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
             proxy_cache_methods: HashMap::new(),
             proxy_cache_valids: HashMap::new(),
+            proxy_cache_index_map: ArcRwLock::new(HashMap::new()),
+            proxy_cache_purge: false,
+            uri_trie: ArcRwLock::new(Trie::new()),
+            del_md5: ArcRwLock::new(VecDeque::with_capacity(100)),
+            proxy_expires_file_timer: DEFAULT_PROXY_EXPIRES_FILE_TIMER,
+            proxy_expires_file_timer_instant: ArcRwLock::new(Instant::now()),
+            proxy_hot_file: ProxyHotFile::new(),
+            hot_io_percent_map: ArcRwLock::new(HashMap::new()),
+            cache_file_node_queue: ArcMutex::new(VecDeque::new()),
+            proxy_max_open_file: 0,
+            is_check: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn is_expires_file_timer(&self) -> bool {
+        let curr = Instant::now();
+        let elapsed = {
+            let expires_file_timer_instant = &*self.proxy_expires_file_timer_instant.get();
+            let elapsed = curr - *expires_file_timer_instant;
+            elapsed.as_secs()
+        };
+        if elapsed >= self.proxy_expires_file_timer {
+            *self.proxy_expires_file_timer_instant.get_mut() = curr;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn trie_insert(&self, url: String, md5: Bytes) -> Result<()> {
+        let value = self.uri_trie.get().get(&url).cloned();
+        let value = if value.is_none() {
+            let value = ArcRwLock::new(std::collections::HashSet::new());
+            self.uri_trie.get_mut().insert(url, value.clone());
+            value
+        } else {
+            value.unwrap()
+        };
+        value.get_mut().insert(md5);
+        return Ok(());
+    }
+
+    pub fn trie_del(&self, url: &String, md5: &Bytes) {
+        let value = self.uri_trie.get().get(url).cloned();
+        if value.is_none() {
+            return;
+        }
+        let value = value.unwrap();
+        let value = &mut *value.get_mut();
+        value.remove(md5);
+        if value.len() <= 0 {
+            self.uri_trie.get_mut().remove(url);
+        }
+        return;
+    }
+
+    pub fn index_insert(&self, md5: Bytes, proxy_cache_name: String) {
+        let value = self.proxy_cache_index_map.get().get(&md5).cloned();
+        let value = if value.is_none() {
+            let value = ArcRwLock::new(HashSet::new());
+            self.proxy_cache_index_map
+                .get_mut()
+                .insert(md5, value.clone());
+            value
+        } else {
+            value.unwrap()
+        };
+        value.get_mut().insert(proxy_cache_name);
+    }
+
+    pub fn index_del(&self, md5: &Bytes, proxy_cache_name: &String) {
+        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        if value.is_none() {
+            return;
+        }
+        let value = value.unwrap();
+        value.get_mut().remove(proxy_cache_name);
+    }
+
+    pub fn index_get_rand(&self, md5: &Bytes) -> Option<String> {
+        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        if value.is_none() {
+            return None;
+        }
+        let value = value.unwrap();
+        let value = &*value.get();
+        if value.is_empty() {
+            return None;
+        }
+        use rand::Rng;
+        let values = value.iter().map(|data| data).collect::<Vec<&String>>();
+        let index: usize = rand::thread_rng().gen();
+        let index = index % values.len();
+        Some(values[index].to_string())
+    }
+
+    pub fn index_get(&self, md5: &Bytes) -> Option<Vec<String>> {
+        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        if value.is_none() {
+            return None;
+        }
+        let value = value.unwrap();
+        let value = &*value.get();
+        if value.is_empty() {
+            return None;
+        }
+        let values = value
+            .iter()
+            .map(|data| data.clone())
+            .collect::<Vec<String>>();
+        Some(values)
+    }
+
+    pub fn index_contains(&self, md5: &Bytes, proxy_cache_name: &String) -> bool {
+        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        if value.is_none() {
+            return false;
+        }
+        let value = value.unwrap();
+        let value = value.get();
+        if value.is_none() {
+            return false;
+        }
+        value.contains(proxy_cache_name)
+    }
+
+    pub fn is_hot_io_percent(&self, name: &String, hot_io_percent: u64) -> bool {
+        let value = {
+            let value = self.hot_io_percent_map.get().get(name).cloned();
+            if value.is_none() {
+                0
+            } else {
+                value.unwrap()
+            }
+        };
+        if value >= hot_io_percent {
+            return true;
+        }
+        false
     }
 }
 
@@ -126,6 +327,12 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
         module::Cmd {
+            name: "proxy_cache_purge".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_purge(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
             name: "proxy_cache_methods".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_methods(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
@@ -140,6 +347,30 @@ lazy_static! {
             conf_typ: conf::CMD_CONF_TYPE_MAIN
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "proxy_expires_file_timer".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_expires_file_timer(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "proxy_hot_file".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_hot_file(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "proxy_max_open_file".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_max_open_file(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
         },
     ]);
 }
@@ -239,6 +470,10 @@ async fn merge_conf(
             child_conf.proxy_cache_key = parent_conf.proxy_cache_key.clone();
         }
 
+        if !child_conf.proxy_cache_purge {
+            child_conf.proxy_cache_purge = parent_conf.proxy_cache_purge.clone();
+        }
+
         if child_conf.proxy_request_slice == 1 * CACHE_FILE_SLISE {
             child_conf.proxy_request_slice = parent_conf.proxy_request_slice;
         }
@@ -249,6 +484,18 @@ async fn merge_conf(
 
         if child_conf.proxy_cache_valids.is_empty() {
             child_conf.proxy_cache_valids = parent_conf.proxy_cache_valids.clone();
+        }
+
+        if child_conf.proxy_expires_file_timer == DEFAULT_PROXY_EXPIRES_FILE_TIMER {
+            child_conf.proxy_expires_file_timer = parent_conf.proxy_expires_file_timer.clone();
+        }
+
+        if !child_conf.proxy_hot_file.is_open {
+            child_conf.proxy_hot_file = parent_conf.proxy_hot_file.clone();
+        }
+
+        if child_conf.proxy_max_open_file == 0 {
+            child_conf.proxy_max_open_file = parent_conf.proxy_max_open_file.clone();
         }
     }
 
@@ -300,11 +547,26 @@ async fn merge_old_conf(
     _old_ms: Option<module::Modules>,
     _old_main_conf: Option<typ::ArcUnsafeAny>,
     mut old_conf: Option<typ::ArcUnsafeAny>,
-    _ms: module::Modules,
+    ms: module::Modules,
     _main_conf: typ::ArcUnsafeAny,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let conf = conf.get_mut::<Conf>();
+    if old_conf.is_some() {
+        let old_conf = old_conf.as_mut().unwrap().get_mut::<Conf>();
+        conf.proxy_cache_index_map = old_conf.proxy_cache_index_map.clone();
+        conf.uri_trie = old_conf.uri_trie.clone();
+        conf.del_md5 = old_conf.del_md5.clone();
+        conf.proxy_expires_file_timer_instant = old_conf.proxy_expires_file_timer_instant.clone();
+        conf.hot_io_percent_map = old_conf.hot_io_percent_map.clone();
+        conf.cache_file_node_queue = old_conf.cache_file_node_queue.clone();
+        conf.is_check = old_conf.is_check.clone();
+    }
+
+    use super::net_core_proxy;
+    //当前可能是main  server local， ProxyCache必须到main_conf中读取
+    let net_core_proxy = net_core_proxy::main_conf(&ms).await;
+
     for proxy_cache_conf in &conf.proxy_cache_confs {
         if !proxy_cache_conf.is_open {
             continue;
@@ -316,19 +578,19 @@ async fn merge_old_conf(
                 .proxy_cache_map
                 .get(&proxy_cache_conf.name)
                 .cloned();
-            if proxy_cache.is_none() {
+            if proxy_cache.is_some() {
+                let proxy_cache = proxy_cache.unwrap();
+                conf.proxy_cache_map
+                    .insert(proxy_cache_conf.name.clone(), proxy_cache);
                 continue;
             }
-            let proxy_cache = proxy_cache.unwrap();
-            conf.proxy_cache_map
-                .insert(proxy_cache_conf.name.clone(), proxy_cache);
-            continue;
         }
 
-        let mut proxy_cache = ProxyCache::new(proxy_cache_conf.clone())?;
-        proxy_cache.load().await?;
+        let proxy_cache = ProxyCache::new(proxy_cache_conf.clone())?;
+        let proxy_cache = Arc::new(proxy_cache);
+        proxy_cache.load(net_core_proxy).await?;
         conf.proxy_cache_map
-            .insert(proxy_cache_conf.name.clone(), Arc::new(proxy_cache));
+            .insert(proxy_cache_conf.name.clone(), proxy_cache);
     }
     return Ok(());
 }
@@ -437,6 +699,19 @@ async fn proxy_cache_key(
     return Ok(());
 }
 
+async fn proxy_cache_purge(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.proxy_cache_purge = conf_arg.value.get::<bool>().clone();
+
+    log::trace!(target: "main", "c.proxy_cache_purge:{:?}", c.proxy_cache_purge);
+    return Ok(());
+}
+
 async fn proxy_request_slice(
     _ms: module::Modules,
     conf_arg: module::ConfArg,
@@ -517,5 +792,47 @@ async fn proxy_cache_valid(
         c.proxy_cache_valids = data;
         log::trace!(target: "main", "c.proxy_cache_valids:{:?}", c.proxy_cache_valids);
     }
+    return Ok(());
+}
+
+async fn proxy_expires_file_timer(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let proxy_expires_file_timer = conf_arg.value.get::<u64>().clone();
+    if proxy_expires_file_timer > 0 {
+        c.proxy_expires_file_timer = proxy_expires_file_timer;
+        log::trace!(target: "main", "c.proxy_expires_file_timer:{:?}", c.proxy_expires_file_timer);
+    }
+    return Ok(());
+}
+
+async fn proxy_hot_file(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let str = conf_arg.value.get::<String>();
+    let proxy_hot_file: ProxyHotFile =
+        toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
+    c.proxy_hot_file = proxy_hot_file;
+    log::trace!(target: "main", "c.proxy_hot_file:{:?}", c.proxy_hot_file);
+    return Ok(());
+}
+
+async fn proxy_max_open_file(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.proxy_max_open_file = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.proxy_max_open_file:{:?}", c.proxy_max_open_file);
     return Ok(());
 }

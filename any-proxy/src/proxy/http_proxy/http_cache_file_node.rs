@@ -1,5 +1,7 @@
 use crate::proxy::http_proxy::bitmap::BitMap;
-use crate::proxy::http_proxy::http_cache_file::ProxyCacheFileInfo;
+use crate::proxy::http_proxy::http_cache_file::{
+    ProxyCache, ProxyCacheFileInfo, ProxyCacheFileNodeHead,
+};
 use crate::proxy::http_proxy::http_header_parse::http_parse;
 use crate::proxy::http_proxy::http_header_parse::{
     content_length, content_range, e_tag, last_modified,
@@ -8,10 +10,9 @@ use crate::proxy::http_proxy::http_stream_request::{CacheFileStatus, HttpRespons
 use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock};
-use any_base::util::{bytes_index, bytes_split, bytes_split_once, ArcString};
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
 use http::{Response, Uri};
 use hyper::Body;
 use std::collections::{HashMap, VecDeque};
@@ -44,12 +45,7 @@ pub struct ProxyCacheFileNodeContext {
     pub cache_file_node_version: u64,
     pub bitmap: ArcRwLock<BitMap>,
     pub bitmap_to_file: VecDeque<ArcRwLock<BitMap>>,
-    pub cache_control_time: i64,
-    //文件实际过期时间，会被更新
-    pub expires_time: u64,
     pub slice_upstream_map: ArcRwLock<HashMap<usize, ArcMutex<ProxyCacheFileNodeUpstream>>>,
-    //每次访问更新时间， 不能删除
-    pub expires_time_del: u64,
 }
 
 pub struct ProxyCacheFileNode {
@@ -60,6 +56,14 @@ pub struct ProxyCacheFileNode {
     pub buf_file: MsgReadBufFile,
     pub cache_file_info: Arc<ProxyCacheFileInfo>,
     pub response_info: Arc<HttpResponseInfo>,
+    pub cache_file_node_head: Arc<ProxyCacheFileNodeHead>,
+    pub proxy_cache_name: ArcString,
+}
+
+impl Drop for ProxyCacheFileNode {
+    fn drop(&mut self) {
+        //println!("___test___ drop ProxyCacheFileNode");
+    }
 }
 
 impl ProxyCacheFileNode {
@@ -68,11 +72,13 @@ impl ProxyCacheFileNode {
     }
 
     pub async fn create_file(
+        client_method: http::method::Method,
         client_uri: Uri,
         cache_file_info: Arc<ProxyCacheFileInfo>,
         response_info: Arc<HttpResponseInfo>,
         response: Response<Body>,
         curr_file_node_version: u64,
+        proxy_cache_name: ArcString,
     ) -> Result<ProxyCacheFileNode> {
         let _directio = cache_file_info.directio;
         let content_range = &response_info.range;
@@ -117,6 +123,14 @@ impl ProxyCacheFileNode {
         head.extend_from_slice(cache_file_info.md5.as_ref());
         head.extend_from_slice("\r\n".as_bytes());
 
+        head.extend_from_slice("md5_str:".as_bytes());
+        head.extend_from_slice(cache_file_info.md5_str.as_ref());
+        head.extend_from_slice("\r\n".as_bytes());
+
+        head.extend_from_slice("client_method:".as_bytes());
+        head.extend_from_slice(client_method.as_str().as_bytes());
+        head.extend_from_slice("\r\n".as_bytes());
+
         head.extend_from_slice("crc32:".as_bytes());
         head.extend_from_slice((cache_file_info.crc32 as u64).to_be_bytes().as_slice());
         head.extend_from_slice("\r\n".as_bytes());
@@ -145,6 +159,10 @@ impl ProxyCacheFileNode {
 
         head.extend_from_slice("directio:".as_bytes());
         head.extend_from_slice(_directio.to_be_bytes().as_slice());
+        head.extend_from_slice("\r\n".as_bytes());
+
+        head.extend_from_slice("trie_url:".as_bytes());
+        head.extend_from_slice(cache_file_info.trie_url.as_bytes());
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("\r\n".as_bytes());
@@ -263,16 +281,28 @@ impl ProxyCacheFileNode {
             content_range.raw_content_length,
         );
 
+        let cache_file_node_head = ProxyCacheFileNodeHead::new(
+            cache_file_info.md5.clone(),
+            cache_file_info.md5_str.clone(),
+            cache_file_info.proxy_cache_path.clone(),
+            cache_file_info.proxy_cache_path_tmp.clone(),
+            client_uri,
+            client_method,
+            content_range.raw_content_length,
+            response_info.expires_time,
+            cache_file_info.trie_url.clone(),
+            cache_file_info.directio,
+            cache_file_info.cache_file_slice,
+            response_info.cache_control_time,
+        );
+
         return Ok(ProxyCacheFileNode {
             ctx_thread: ArcRwLock::new(ProxyCacheFileNodeContext {
                 cache_file_status: CacheFileStatus::Exist,
                 cache_file_node_version: curr_file_node_version,
                 bitmap: ArcRwLock::new(bitmap),
                 bitmap_to_file: VecDeque::with_capacity(10),
-                cache_control_time: response_info.cache_control_time,
-                expires_time: response_info.expires_time,
                 slice_upstream_map: ArcRwLock::new(HashMap::new()),
-                expires_time_del: response_info.expires_time,
             }),
             fix: Arc::new(ProxyCacheFileNodeFix {
                 response,
@@ -285,40 +315,15 @@ impl ProxyCacheFileNode {
             buf_file,
             cache_file_info,
             response_info,
+            cache_file_node_head: Arc::new(cache_file_node_head),
+            proxy_cache_name,
         });
     }
 
     pub fn update_file_node_status(&self) {
-        let curr_time = std::time::SystemTime::now();
-        let curr_time = curr_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
-
-        let ctx = &mut *self.ctx_thread.get_mut();
-        if ctx.expires_time <= curr_time {
-            ctx.cache_file_status = CacheFileStatus::Expire;
+        if self.cache_file_node_head.is_expires() {
+            self.ctx_thread.get_mut().cache_file_status = CacheFileStatus::Expire;
         }
-    }
-
-    pub fn update_file_node_expires_time_del(&self) {
-        let curr_time = std::time::SystemTime::now();
-        let curr_time = curr_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
-
-        let ctx = &mut *self.ctx_thread.get_mut();
-        let cache_control_time = if ctx.cache_control_time <= 0 {
-            0
-        } else {
-            ctx.cache_control_time as u64
-        };
-        ctx.expires_time_del = curr_time + cache_control_time;
-    }
-
-    pub fn is_file_node_expires_del(&self) -> bool {
-        let curr_time = std::time::SystemTime::now();
-        let curr_time = curr_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let ctx = &mut *self.ctx_thread.get_mut();
-        if ctx.expires_time_del <= curr_time {
-            return true;
-        }
-        return false;
     }
 
     pub fn get_file_head_time_str(cache_control_time: i64, expires_time: u64) -> Vec<u8> {
@@ -337,8 +342,9 @@ impl ProxyCacheFileNode {
     pub async fn from_file(
         cache_file_info: Arc<ProxyCacheFileInfo>,
         curr_file_node_version: u64,
+        proxy_cache_name: ArcString,
     ) -> Result<Option<ProxyCacheFileNode>> {
-        let ret = Self::open_http_cache_node_file(
+        let ret = ProxyCache::load_cache_file_head(
             cache_file_info.proxy_cache_path.clone(),
             cache_file_info.directio,
         )
@@ -346,8 +352,7 @@ impl ProxyCacheFileNode {
         if ret.is_err() {
             return Ok(None);
         }
-        let (file_ext, http_head_start, buf, file_head_size, expires_time, cache_control_time) =
-            ret?;
+        let (cache_file_node_head, file_ext, http_head_start, buf, file_head_size) = ret?;
         let file_ext = Arc::new(file_ext);
 
         let (file_res, http_head_size) =
@@ -427,6 +432,7 @@ impl ProxyCacheFileNode {
 
         let curr_time = std::time::SystemTime::now();
         let curr_time = curr_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let expires_time = cache_file_node_head.expires_time();
 
         let cache_file_status = if expires_time <= curr_time {
             CacheFileStatus::Expire
@@ -446,10 +452,7 @@ impl ProxyCacheFileNode {
                 cache_file_node_version: curr_file_node_version,
                 bitmap: ArcRwLock::new(bitmap),
                 bitmap_to_file: VecDeque::with_capacity(10),
-                cache_control_time,
-                expires_time,
                 slice_upstream_map: ArcRwLock::new(HashMap::new()),
-                expires_time_del: expires_time,
             }),
             fix: Arc::new(ProxyCacheFileNodeFix {
                 response: file_res,
@@ -465,11 +468,13 @@ impl ProxyCacheFileNode {
                 last_modified_time,
                 last_modified,
                 e_tag,
-                cache_control_time,
+                cache_control_time: cache_file_node_head.cache_control_time(),
                 expires_time,
                 range: content_range,
                 head: Some(http_head),
             }),
+            cache_file_node_head: Arc::new(cache_file_node_head),
+            proxy_cache_name,
         }));
     }
 
@@ -491,138 +496,9 @@ impl ProxyCacheFileNode {
             buf_file,
             cache_file_info,
             response_info: other.response_info.clone(),
+            cache_file_node_head: other.cache_file_node_head.clone(),
+            proxy_cache_name: other.proxy_cache_name.clone(),
         });
-    }
-
-    pub async fn open_http_cache_node_file(
-        file_name: ArcString,
-        _directio: u64,
-    ) -> Result<(FileExt, Bytes, Bytes, usize, u64, i64)> {
-        let file_ext = Self::open_file(file_name, 0).await?;
-        let file_len = file_ext.file_len;
-        let file_r = file_ext.file.clone();
-        let ret: Result<BytesMut> = tokio::task::spawn_blocking(move || {
-            #[cfg(feature = "anyio-file")]
-            let start_time = Instant::now();
-            let read_len = 1024 * 16;
-            let read_len = if file_len < read_len {
-                file_len
-            } else {
-                read_len
-            };
-            let mut buf = BytesMut::zeroed(read_len as usize);
-            let file_r = &mut *file_r.get_mut();
-            file_r.seek(std::io::SeekFrom::Start(0))?;
-            use std::io::Read;
-            file_r
-                .read_exact(buf.as_mut())
-                .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
-
-            #[cfg(feature = "anyio-file")]
-            if start_time.elapsed().as_millis() > 100 {
-                log::info!("open file read head:{}", start_time.elapsed().as_millis());
-            }
-            Ok(buf)
-        })
-        .await?;
-        let buf = ret?;
-        let buf = buf.freeze();
-
-        //let mut client_uri  = Bytes::new();
-        //let mut proxy_cache_path = Bytes::new();
-        //let mut proxy_cache_path_tmp = Bytes::new();
-        //let mut md5 = Bytes::new();
-        //let mut crc32 = Bytes::new();
-        let mut cache_control_time = Bytes::new();
-        let mut expires_time = Bytes::new();
-        let mut directio = Bytes::new();
-        //let mut last_modified_time = Bytes::new();
-        //let mut last_modified = Bytes::new();
-        //let mut e_tag = Bytes::new();
-
-        let pattern = "\r\n\r\n";
-        let position = bytes_index(&buf, pattern.as_ref()).ok_or(anyhow!("read_head"))?;
-        let file_head_size = position + pattern.len();
-        let file_head = buf.slice(0..file_head_size);
-        let http_head_start = buf.slice(file_head_size..);
-        let mut is_file_ok = false;
-
-        let pattern = "\r\n";
-        let file_heads = bytes_split(&file_head.slice(0..position), pattern.as_ref());
-        let pattern = ":";
-        for v in file_heads {
-            let vv = bytes_split_once(&v, pattern.as_ref());
-            if vv.is_none() {
-                return Err(anyhow!("v.is_none()"));
-            }
-            let (key, value) = vv.unwrap();
-
-            if key == "cache_control_time" {
-                cache_control_time = value.clone();
-            } else if key == "expires_time" {
-                expires_time = value.clone();
-            } else if key == "directio" {
-                directio = value.clone();
-            } else if v.as_ref() == &CACHE_FILE_KEY.as_bytes()[0..CACHE_FILE_KEY.len() - 2] {
-                is_file_ok = true;
-            }
-
-            // if key == "proxy_cache_path" {
-            //     proxy_cache_path = value.clone();
-            // } else if key == "proxy_cache_path_tmp" {
-            //     proxy_cache_path_tmp = value.clone();
-            // }else if key == "md5" {
-            //     md5 = value.clone();
-            // }else if key == "crc32" {
-            //     crc32 = value.clone();
-            // }else if key == "cache_control_time" {
-            //     cache_control_time = value.clone();
-            // }else if key == "last_modified_time" {
-            //     last_modified_time = value.clone();
-            // }else if key == "last_modified" {
-            //     last_modified = value.clone();
-            // }else if key == "e_tag" {
-            //     e_tag = value.clone();
-            // }
-        }
-
-        if !is_file_ok {
-            return Err(anyhow!("err:open file fail"));
-        }
-
-        if cache_control_time.is_empty() {
-            return Err(anyhow!("cache_control_time.is_empty"));
-        }
-        let mut fixed_bytes = [0u8; 8];
-        fixed_bytes.copy_from_slice(&cache_control_time.as_ref()[0..8]);
-        let cache_control_time = i64::from_be_bytes(fixed_bytes);
-
-        if expires_time.is_empty() {
-            return Err(anyhow!("expires_time.is_empty"));
-        }
-        let mut fixed_bytes = [0u8; 8];
-        fixed_bytes.copy_from_slice(&expires_time.as_ref()[0..8]);
-        let expires_time = u64::from_be_bytes(fixed_bytes);
-
-        if directio.is_empty() {
-            return Err(anyhow!("directio.is_empty"));
-        }
-        let mut fixed_bytes = [0u8; 8];
-        fixed_bytes.copy_from_slice(&directio.as_ref()[0..8]);
-        let _directio_from_file = u64::from_be_bytes(fixed_bytes);
-
-        #[cfg(unix)]
-        if _directio > 0 && _directio_from_file > 0 && file_ext.file_len >= _directio_from_file {
-            file_ext.directio_on()?;
-        }
-        Ok((
-            file_ext,
-            http_head_start,
-            buf,
-            file_head_size,
-            expires_time,
-            cache_control_time,
-        ))
     }
 
     pub async fn open_file(file_name: ArcString, _directio: u64) -> Result<FileExt> {

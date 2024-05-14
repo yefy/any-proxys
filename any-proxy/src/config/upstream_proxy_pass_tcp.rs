@@ -1,5 +1,5 @@
 use crate::config as conf;
-use crate::config::config_toml::{ProxyPassTcp, UpstreamHeartbeat};
+use crate::config::config_toml::{ProxyPassTcp, UpstreamHeartbeat, UpstreamHeartbeatHttp};
 use crate::config::upstream_block;
 use crate::stream::connect;
 use crate::tcp::connect as tcp_connect;
@@ -176,7 +176,13 @@ impl Heartbeat {
     }
 }
 
+use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
+use crate::util::util::host_and_port;
+use any_base::executor_local_spawn::ThreadRuntime;
+use any_base::util::ArcString;
 use async_trait::async_trait;
+use http::HeaderValue;
+
 #[async_trait]
 impl upstream_core::HeartbeatI for Heartbeat {
     async fn heartbeat(
@@ -200,7 +206,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             ));
         }
         let connect = Box::new(tcp_connect::Connect::new(
-            host.into(),
+            host.clone().into(),
             addr.clone(),
             tcp_config.unwrap(),
         ));
@@ -221,6 +227,19 @@ impl upstream_core::HeartbeatI for Heartbeat {
 
         let weight = if weight.is_some() { weight.unwrap() } else { 1 };
 
+        let http_heartbeat = if heartbeat.is_some() {
+            let heartbeat = heartbeat.clone().unwrap();
+            if heartbeat.http.is_some() {
+                let http = heartbeat.http.as_ref().unwrap();
+                let http_heartbeat = http_heartbeat(host.into(), addr.clone(), &ms, http).await?;
+                Some(http_heartbeat)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let (shutdown_heartbeat_tx, _) = broadcast::channel(100);
         let ups_heartbeat = UpstreamHeartbeatData {
             domain_index,
@@ -238,8 +257,67 @@ impl upstream_core::HeartbeatI for Heartbeat {
             weight,
             effective_weight: weight,
             current_weight: 0,
+            http_heartbeat,
         };
 
         Ok(ShareRw::new(ups_heartbeat))
     }
+}
+
+pub async fn http_heartbeat(
+    host: ArcString,
+    mut address: SocketAddr,
+    ms: &Modules,
+    http_conf: &UpstreamHeartbeatHttp,
+) -> Result<(
+    Arc<http::Request<hyper::Body>>,
+    Arc<hyper::Client<HttpHyperConnector>>,
+)> {
+    let (host, _) = host_and_port(&host);
+    let host = format!("{}:{}", host, http_conf.port);
+    address.set_port(http_conf.port);
+    let url = format!("http://{}{}", host, http_conf.uri);
+    let url = url.parse::<http::uri::Uri>()?;
+    let mut req = http::Request::builder()
+        .method(http::Method::HEAD)
+        .uri(url)
+        .body(hyper::Body::default())?;
+    req.headers_mut()
+        .insert(http::header::RANGE, HeaderValue::from_bytes(b"bytes=0-1")?);
+    let req = Arc::new(req);
+
+    use crate::config::config_toml::default_tcp_config;
+    use crate::tcp::connect::Connect;
+    let tcp_config = default_tcp_config().pop().unwrap();
+    let connect = Box::new(Connect::new(
+        ArcString::new(host),
+        address,
+        Arc::new(tcp_config),
+    ));
+    let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+    let client = get_http_client(connect, ms).await?;
+    Ok((req, client))
+}
+
+pub async fn get_http_client(
+    connect_func: Arc<Box<dyn connect::Connect>>,
+    ms: &Modules,
+) -> Result<Arc<hyper::Client<HttpHyperConnector>>> {
+    use crate::config::common_core;
+    let common_core_conf = common_core::main_conf_mut(&ms).await;
+    let http = HttpHyperConnector::new(
+        ArcString::default(),
+        connect_func,
+        common_core_conf.session_id.clone(),
+        Arc::new(Box::new(ThreadRuntime)),
+    );
+
+    let client = hyper::Client::builder()
+        .pool_max_idle_per_host(10)
+        .pool_idle_timeout(tokio::time::Duration::from_secs(10))
+        .http2_only(false)
+        //.set_host(false)
+        .build(http);
+    let client = Arc::new(client);
+    Ok(client)
 }

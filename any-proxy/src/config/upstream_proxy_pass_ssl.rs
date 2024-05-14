@@ -177,7 +177,9 @@ impl Heartbeat {
     }
 }
 
+use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
 use async_trait::async_trait;
+
 #[async_trait]
 impl upstream_core::HeartbeatI for Heartbeat {
     async fn heartbeat(
@@ -203,7 +205,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             ));
         }
         let connect = Box::new(ssl_connect::Connect::new(
-            host.into(),
+            host.clone().into(),
             addr.clone(),
             self.ssl.ssl_domain.clone(),
             tcp_config.unwrap(),
@@ -226,6 +228,19 @@ impl upstream_core::HeartbeatI for Heartbeat {
 
         let weight = if weight.is_some() { weight.unwrap() } else { 1 };
 
+        let http_heartbeat = if heartbeat.is_some() {
+            let heartbeat = heartbeat.clone().unwrap();
+            if heartbeat.http.is_some() {
+                let http = heartbeat.http.as_ref().unwrap();
+                let http_heartbeat = http_heartbeat(host.into(), addr.clone(), &ms, http).await?;
+                Some(http_heartbeat)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let (shutdown_heartbeat_tx, _) = broadcast::channel(100);
         let ups_heartbeat = UpstreamHeartbeatData {
             domain_index,
@@ -243,6 +258,7 @@ impl upstream_core::HeartbeatI for Heartbeat {
             weight,
             effective_weight: weight,
             current_weight: 0,
+            http_heartbeat,
         };
 
         Ok(ShareRw::new(ups_heartbeat))

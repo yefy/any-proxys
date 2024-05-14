@@ -913,6 +913,13 @@ pub struct _DomainConfig {
     pub _server: Vec<DomainServerConfig>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamHeartbeatHttp {
+    pub port: u16,
+    pub uri: String,
+}
+
 pub fn default_heartbeat_interval() -> usize {
     10
 }
@@ -934,6 +941,7 @@ pub struct UpstreamHeartbeat {
     pub timeout: usize,
     #[serde(default = "default_heartbeat_fail")]
     pub fail: usize,
+    pub http: Option<UpstreamHeartbeatHttp>,
 }
 
 pub fn default_dynamic_domain_interval() -> usize {

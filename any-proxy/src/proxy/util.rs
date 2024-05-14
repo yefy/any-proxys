@@ -125,7 +125,6 @@ pub async fn upsteam_connect_info(
         }
     };
     stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
-
     use crate::config::net_server_core;
     let net_server_core_conf = net_server_core::curr_conf(scc.net_curr_conf());
     if net_server_core_conf.upstream_data.is_none() {

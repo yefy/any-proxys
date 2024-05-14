@@ -113,7 +113,7 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
                 hyper::AnyProxyHyperHttpHeaderExt(HttpHeaderExt::new()),
             ));
 
-        if !r_ctx.is_out_status_ok() {
+        if r_ctx.is_out_status_err() {
             response.headers_mut().remove(http::header::CONTENT_RANGE);
             response.headers_mut().remove(http::header::CONTENT_LENGTH);
             response.headers_mut().remove(http::header::CACHE_CONTROL);

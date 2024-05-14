@@ -101,7 +101,6 @@ impl UpstreamDynamicDomainServer {
                     continue;
                 }
             }
-
             log::info!("name:{}, {:?} => {:?}", ups_config_name, addrs, curr_addrs);
             addrs = curr_addrs.clone();
             {

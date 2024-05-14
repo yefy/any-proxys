@@ -524,6 +524,13 @@ impl<T> OptionExt<T> {
         }
     }
 
+    pub fn as_ref(&self) -> &T {
+        match &self.d {
+            Some(val) => val,
+            None => panic!("called `Option::unwrap()` on a `None` value"),
+        }
+    }
+
     pub unsafe fn take(&mut self) -> T {
         self.d.take().unwrap()
     }

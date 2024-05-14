@@ -1,5 +1,6 @@
 use crate::proxy::http_proxy::http_stream_request::HttpRange;
 use crate::proxy::stream_info::StreamInfo;
+use crate::util::util::host_and_port;
 use any_base::typ::Share;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -669,11 +670,22 @@ pub fn copy_request_parts<T>(
     }
     let req_host = req_host.unwrap();
     let req_host = req_host.to_str().unwrap();
+    let (domain, port) = host_and_port(req_host);
+    let port = if port.len() <= 0 {
+        if stream_info.get().server_stream_info.is_tls {
+            "443"
+        } else {
+            "80"
+        }
+    } else {
+        port
+    };
 
     let uri = format!(
-        "{}://{}{}",
+        "{}://{}:{}{}",
         scheme,
-        req_host,
+        domain,
+        port,
         request
             .uri()
             .path_and_query()

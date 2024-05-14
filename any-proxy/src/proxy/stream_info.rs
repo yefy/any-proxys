@@ -256,6 +256,12 @@ pub struct StreamInfo {
     pub wasm_timers: HashMap<u64, (i64, Vec<u8>)>,
 }
 
+impl Drop for StreamInfo {
+    fn drop(&mut self) {
+        //println!("___test___ drop StreamInfo");
+    }
+}
+
 impl StreamInfo {
     pub fn new(
         server_stream_info: Arc<ServerStreamInfo>,

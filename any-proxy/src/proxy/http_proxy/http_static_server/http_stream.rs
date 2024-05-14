@@ -63,7 +63,8 @@ impl HttpStream {
             .shutdown_thread_tx
             .subscribe();
         let header_response = self.header_response.clone();
-        let ret = stream_start::do_start(self, stream_info, shutdown_thread_rx).await;
+        let ret = stream_start::do_start(self, stream_info.clone(), shutdown_thread_rx).await;
+        stream_info.get_mut().http_r.set_nil();
         if ret.is_err() {
             let _ = stream_send_err_head(header_response).await;
         }
@@ -130,6 +131,32 @@ impl HttpStream {
     async fn do_stream(&mut self, r: Arc<HttpStreamRequest>) -> Result<()> {
         let scc = self.http_arg.stream_info.get().scc.clone();
         log::trace!(target: "main", "r.request.version:{:?}", r.ctx.get().r_in.version);
+
+        let body = {
+            let r_ctx = &mut *r.ctx.get_mut();
+            if r_ctx.r_in.content_length > 0 {
+                let body = r_ctx.r_in.body.take().unwrap();
+                Some(body)
+            } else {
+                None
+            }
+        };
+
+        if body.is_some() {
+            let mut body = body.unwrap();
+            use futures_util::StreamExt;
+            loop {
+                let data = body.next().await;
+                if data.is_none() {
+                    break;
+                }
+                let data = data.unwrap();
+                if data.is_err() {
+                    break;
+                }
+            }
+        }
+
         let is_client_sendfile_version = match &r.ctx.get().r_in.version {
             &Version::HTTP_2 => false,
             &Version::HTTP_3 => false,

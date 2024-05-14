@@ -17,6 +17,7 @@ pub mod io;
 pub mod io_rb;
 pub mod module;
 pub mod parking_lot;
+pub mod queue;
 pub mod rt;
 pub mod std_sync;
 pub mod stream_buf;

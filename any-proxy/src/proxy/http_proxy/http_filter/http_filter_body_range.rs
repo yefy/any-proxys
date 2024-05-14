@@ -88,8 +88,7 @@ pub async fn do_http_filter_body_range(r: &HttpStreamRequest) -> Result<()> {
                     .http_cache_file
                     .ctx_thread
                     .get()
-                    .cache_file_node
-                    .clone()
+                    .cache_file_node()
                     .unwrap();
                 cache_file_node.fix.body_start as u64
             } else {

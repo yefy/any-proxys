@@ -4,7 +4,7 @@ use any_base::typ::{ArcMutex, ArcRwLock, OptionExt};
 //use hyper::body::HttpBody;
 use crate::config::net_core_proxy::CACHE_FILE_SLISE;
 use crate::proxy::http_proxy::http_cache_file::HttpCacheFile;
-use crate::proxy::http_proxy::http_header_parse::{http_headers_size, HttpParts};
+use crate::proxy::http_proxy::http_header_parse::{content_length, http_headers_size, HttpParts};
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
 use crate::proxy::http_proxy::HttpHeaderResponse;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
@@ -113,6 +113,7 @@ impl HttpInMain {
 }
 
 pub struct HttpIn {
+    pub content_length: u64,
     pub method: hyper::Method,
     pub uri: hyper::Uri,
     pub version: hyper::Version,
@@ -147,6 +148,7 @@ pub struct HttpIn {
     pub main: HttpInMain,
     pub curr_slice_index: usize,
     pub curr_upstream_method: Option<hyper::Method>,
+    pub is_304: bool,
 }
 
 #[derive(Clone)]
@@ -273,6 +275,10 @@ impl HttpStreamRequestContext {
         self.r_out.status == http::StatusCode::OK
             || self.r_out.status == http::StatusCode::PARTIAL_CONTENT
     }
+
+    pub fn is_out_status_err(&self) -> bool {
+        self.r_out.status.is_client_error() || self.r_out.status.is_server_error()
+    }
 }
 
 pub struct HttpStreamRequest {
@@ -289,6 +295,12 @@ pub struct HttpStreamRequest {
     pub header_ext: HttpHeaderExt,
     pub page_size: usize,
     pub client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
+}
+
+impl Drop for HttpStreamRequest {
+    fn drop(&mut self) {
+        //println!("___test___ drop HttpStreamRequest");
+    }
 }
 
 impl HttpStreamRequest {
@@ -311,6 +323,9 @@ impl HttpStreamRequest {
         //     Version::HTTP_2 => false,
         //     _ => true,
         // };
+
+        let content_length = content_length(request_upstream.headers())
+            .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;
 
         let is_head = request_upstream.method() == &http::Method::HEAD;
         let is_get = request_upstream.method() == &http::Method::GET;
@@ -390,6 +405,7 @@ impl HttpStreamRequest {
             client,
             ctx: ArcRwLock::new(HttpStreamRequestContext {
                 r_in: HttpIn {
+                    content_length,
                     method,
                     uri,
                     version,
@@ -422,6 +438,7 @@ impl HttpStreamRequest {
                     main: HttpInMain::new(),
                     curr_slice_index: 0,
                     curr_upstream_method: None,
+                    is_304: false,
                 },
                 r_out: HttpOut {
                     status: http::StatusCode::OK,

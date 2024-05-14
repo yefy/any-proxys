@@ -1,5 +1,4 @@
 use crate::proxy::stream_info::StreamInfo;
-use crate::util::util::host_and_port;
 use crate::util::var::VarAnyData;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -773,19 +772,18 @@ pub fn http_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> 
     } else if name == "version" {
         return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_in.version)));
     } else if name == "host" {
-        let host = http_r_ctx.r_in.uri.host().unwrap().to_string();
-        return Some(VarAnyData::Str(host));
+        let domain = http_r_ctx.r_in.uri.host().unwrap();
+        let port_u16 = http_r_ctx.r_in.uri.port_u16().unwrap();
+        return Some(VarAnyData::Str(format!("{}:{}", domain, port_u16)));
     } else if name == "scheme" {
         let scheme = http_r_ctx.r_in.uri.scheme_str().unwrap().to_string();
         return Some(VarAnyData::Str(scheme));
     } else if name == "domain" {
-        let host = http_r_ctx.r_in.uri.host().unwrap();
-        let (domain, _) = host_and_port(host);
+        let domain = http_r_ctx.r_in.uri.host().unwrap();
         return Some(VarAnyData::Str(domain.to_string()));
     } else if name == "port" {
-        let host = http_r_ctx.r_in.uri.host().unwrap();
-        let (_, port) = host_and_port(host);
-        return Some(VarAnyData::Str(port.to_string()));
+        let port_u16 = http_r_ctx.r_in.uri.port_u16().unwrap();
+        return Some(VarAnyData::U16(port_u16));
     }
 
     let value = http_r_ctx.r_in.headers.get(name).cloned();
@@ -821,8 +819,9 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
             http_r_ctx.r_in.version_upstream
         )));
     } else if name == "host" {
-        let host = http_r_ctx.r_in.uri_upstream.host().unwrap().to_string();
-        return Some(VarAnyData::Str(host));
+        let domain = http_r_ctx.r_in.uri_upstream.host().unwrap();
+        let port_u16 = http_r_ctx.r_in.uri_upstream.port_u16().unwrap();
+        return Some(VarAnyData::Str(format!("{}:{}", domain, port_u16)));
     } else if name == "scheme" {
         let scheme = http_r_ctx
             .r_in
@@ -832,13 +831,11 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
             .to_string();
         return Some(VarAnyData::Str(scheme));
     } else if name == "domain" {
-        let host = http_r_ctx.r_in.uri_upstream.host().unwrap();
-        let (domain, _) = host_and_port(host);
+        let domain = http_r_ctx.r_in.uri_upstream.host().unwrap();
         return Some(VarAnyData::Str(domain.to_string()));
     } else if name == "port" {
-        let host = http_r_ctx.r_in.uri_upstream.host().unwrap();
-        let (_, port) = host_and_port(host);
-        return Some(VarAnyData::Str(port.to_string()));
+        let port_u16 = http_r_ctx.r_in.uri_upstream.port_u16().unwrap();
+        return Some(VarAnyData::U16(port_u16));
     }
 
     let value = http_r_ctx.r_in.headers_upstream.get(name).cloned();

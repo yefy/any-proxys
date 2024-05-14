@@ -55,6 +55,7 @@ impl Conf {
                 interval: default_heartbeat_interval(),
                 timeout: default_heartbeat_timeout(),
                 fail: default_heartbeat_fail(),
+                http: None,
             })
         } else {
             None

@@ -33,8 +33,13 @@ pub struct UpstreamHeartbeatData {
     pub weight: i64,
     pub effective_weight: i64,
     pub current_weight: i64,
+    pub http_heartbeat: Option<(
+        Arc<http::Request<hyper::Body>>,
+        Arc<hyper::Client<HttpHyperConnector>>,
+    )>,
 }
 use crate::config::upstream_core;
+use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
 use any_base::typ::ShareRw;
 use any_base::util::ArcString;
 

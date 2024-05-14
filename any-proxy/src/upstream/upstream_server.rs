@@ -223,7 +223,6 @@ impl UpstreamServer {
                     ups_data.ups_heartbeats_active.push(v.clone());
                 }
             }
-
             use crate::config::upstream_core_plugin;
             if ups_data.is_sort_heartbeats_active
                 && ups_data.ups_config.balancer.as_str() == upstream_core_plugin::FAIR
