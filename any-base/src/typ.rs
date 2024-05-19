@@ -647,7 +647,7 @@ impl<T> RcCell<T> {
         RcRefMut::new(self.d.borrow_mut())
     }
 
-    pub unsafe fn take(&self) -> T {
-        self.d.borrow_mut().take().unwrap()
+    pub unsafe fn take(&self) -> Option<T> {
+        self.d.borrow_mut().take()
     }
 }

@@ -1,4 +1,5 @@
 use crate::config as conf;
+use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
@@ -37,6 +38,9 @@ lazy_static! {
         merge_old_conf: |old_ms, old_main_conf, old_conf, ms, main_conf, conf| Box::pin(
             merge_old_conf(old_ms, old_main_conf, old_conf, ms, main_conf, conf)
         ),
+        init_master_thread: None,
+        init_work_thread: None,
+        drop_conf: None,
     });
 }
 
@@ -55,6 +59,13 @@ lazy_static! {
             merge_old_main_confs(old_ms, old_main_conf, ms, main_conf)
         )),
         merge_confs: None,
+        init_master_thread_confs: Some(|ms, main_confs, executor, ms_executor| Box::pin(
+            init_master_thread_confs(ms, main_confs, executor, ms_executor)
+        )),
+        init_work_thread_confs: Some(|ms, main_confs, executor| Box::pin(init_work_thread_confs(
+            ms, main_confs, executor
+        ))),
+        drop_confs: Some(|ms, main_confs| Box::pin(drop_confs(ms, main_confs))),
         typ: conf::MODULE_TYPE_SOCKET,
         create_server: None,
     });
@@ -262,6 +273,131 @@ async fn init_main_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result
             upstream_confs[ctx_index as usize].clone(),
         )
         .await?;
+    }
+    Ok(())
+}
+
+async fn init_master_thread_confs(
+    ms: module::Modules,
+    conf: typ::ArcUnsafeAny,
+    executor: ExecutorLocalSpawn,
+    ms_executor: ExecutorLocalSpawn,
+) -> Result<()> {
+    let main_index = M.get().main_index;
+    if main_index < 0 {
+        panic!("main_index:{}", main_index)
+    }
+    let main_confs = conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
+    let upstream_main_conf = main_confs[main_index as usize].clone();
+    let upstream_confs = upstream_main_conf
+        .get_mut::<Vec<typ::ArcUnsafeAny>>()
+        .clone();
+    for module in ms.get_modules() {
+        let (typ, ctx_index, func, name, main_index) = {
+            let module_ = &*module.get();
+            (
+                module_.typ,
+                module_.ctx_index,
+                module_.func.clone(),
+                module_.name.clone(),
+                module_.main_index,
+            )
+        };
+        if typ & conf::MODULE_TYPE_SOCKET == 0 {
+            continue;
+        }
+        log::trace!(target: "main",
+                    "socket init_master_thread name:{}, typ:{}, main_index:{}, ctx_index:{}",
+                    name,
+                    typ,
+                    main_index,
+                    ctx_index
+        );
+
+        if func.init_master_thread.is_none() {
+            continue;
+        }
+        let init_master_thread = func.init_master_thread.as_ref().unwrap();
+        (init_master_thread)(
+            ms.clone(),
+            conf.clone(),
+            upstream_confs[ctx_index as usize].clone(),
+            executor.clone(),
+            ms_executor.clone(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn init_work_thread_confs(
+    ms: module::Modules,
+    conf: typ::ArcUnsafeAny,
+    executor: ExecutorLocalSpawn,
+) -> Result<()> {
+    let main_index = M.get().main_index;
+    if main_index < 0 {
+        panic!("main_index:{}", main_index)
+    }
+    let main_confs = conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
+    let upstream_main_conf = main_confs[main_index as usize].clone();
+    let upstream_confs = upstream_main_conf
+        .get_mut::<Vec<typ::ArcUnsafeAny>>()
+        .clone();
+    for module in ms.get_modules() {
+        let (typ, ctx_index, func, name, main_index) = {
+            let module_ = &*module.get();
+            (
+                module_.typ,
+                module_.ctx_index,
+                module_.func.clone(),
+                module_.name.clone(),
+                module_.main_index,
+            )
+        };
+        if typ & conf::MODULE_TYPE_SOCKET == 0 {
+            continue;
+        }
+        log::trace!(target: "main",
+                    "socket init_work_thread name:{}, typ:{}, main_index:{}, ctx_index:{}",
+                    name,
+                    typ,
+                    main_index,
+                    ctx_index
+        );
+
+        if func.init_work_thread.is_none() {
+            continue;
+        }
+        let init_work_thread = func.init_work_thread.as_ref().unwrap();
+        (init_work_thread)(
+            ms.clone(),
+            conf.clone(),
+            upstream_confs[ctx_index as usize].clone(),
+            executor.clone(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn drop_confs(_ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+    let main_index = M.get().main_index;
+    if main_index < 0 {
+        panic!("main_index:{}", main_index)
+    }
+    let main_confs = conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
+    let upstream_main_conf = main_confs[main_index as usize].clone();
+    let upstream_confs = upstream_main_conf
+        .get_mut::<Vec<typ::ArcUnsafeAny>>()
+        .clone();
+    {
+        let ctx_index = M.get().ctx_index;
+        if ctx_index < 0 {
+            panic!("ctx_index:{}", ctx_index)
+        }
+        let upstream_conf = upstream_confs[ctx_index as usize].get_mut::<Conf>();
+        upstream_conf.upstream_confs.clear();
     }
     Ok(())
 }

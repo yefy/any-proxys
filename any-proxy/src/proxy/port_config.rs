@@ -1,6 +1,5 @@
 use super::StreamConfigContext;
 use crate::stream::server;
-use anyhow::anyhow;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -27,16 +26,15 @@ impl PortConfig {
     ) -> Result<PortConfigListen> {
         let old_sni = old_port_config_listen.listen_server.sni();
         let new_sni = new_port_config_listen.listen_server.sni();
-        if old_sni.is_none() || new_sni.is_none() {
-            return Err(anyhow!("err:merget sni"))?;
+        if old_sni.is_some() && new_sni.is_some() {
+            old_sni
+                .as_ref()
+                .unwrap()
+                .take_from(new_sni.as_ref().unwrap());
+            new_port_config_listen
+                .listen_server
+                .set_sni(old_sni.unwrap());
         }
-        old_sni
-            .as_ref()
-            .unwrap()
-            .take_from(new_sni.as_ref().unwrap());
-        new_port_config_listen
-            .listen_server
-            .set_sni(old_sni.unwrap());
         Ok(new_port_config_listen)
     }
 }

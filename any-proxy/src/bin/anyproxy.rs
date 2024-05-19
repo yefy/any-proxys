@@ -71,6 +71,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn do_main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(debug_assertions)]
+    log::info!("DEBUG");
+    #[cfg(not(debug_assertions))]
+    log::info!("RELEASE");
+
     log::info!("BUILD_VERSION: {}", default_config::BUILD_VERSION.as_str());
     log::info!("HTTP_VERSION: {}", default_config::HTTP_VERSION.as_str());
     log::info!("pwd:{:?}", std::env::current_dir()?);

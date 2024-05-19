@@ -34,6 +34,9 @@ lazy_static! {
         merge_old_conf: |old_ms, old_main_conf, old_conf, ms, main_conf, conf| Box::pin(
             merge_old_conf(old_ms, old_main_conf, old_conf, ms, main_conf, conf)
         ),
+        init_master_thread: None,
+        init_work_thread: None,
+        drop_conf: None,
     });
 }
 
@@ -50,6 +53,9 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
+        init_master_thread_confs: None,
+        init_work_thread_confs: None,
+        drop_confs: None,
         typ: conf::MODULE_TYPE_NET,
         create_server: Some(create_server),
     });

@@ -101,8 +101,14 @@ impl ResolvesServerCertUsingSNI {
     }
     /// reload的时候，clone新配置
     pub fn take_from(&self, other: &ResolvesServerCertUsingSNI) {
-        self.domain_index.set(unsafe { other.domain_index.take() });
-        self.by_name.set(unsafe { other.by_name.take() });
+        let domain_index = unsafe { other.domain_index.take() };
+        if domain_index.is_some() {
+            self.domain_index.set(domain_index.unwrap());
+        }
+        let by_name = unsafe { other.by_name.take() };
+        if by_name.is_some() {
+            self.by_name.set(by_name.unwrap());
+        }
     }
 
     pub fn is_empty(&self) -> bool {

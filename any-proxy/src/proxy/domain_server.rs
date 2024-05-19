@@ -16,7 +16,6 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct DomainServer {
-    ms: Modules,
     executors: ExecutorsLocal,
     listen_shutdown_tx: broadcast::Sender<()>,
     listen_server: Arc<Box<dyn Server>>,
@@ -27,7 +26,6 @@ pub struct DomainServer {
 
 impl DomainServer {
     pub fn new(
-        ms: Modules,
         executors: ExecutorsLocal,
         listen_shutdown_tx: broadcast::Sender<()>,
         listen_server: Arc<Box<dyn Server>>,
@@ -36,7 +34,6 @@ impl DomainServer {
         domain_context: Arc<DomainContext>,
     ) -> Result<DomainServer> {
         Ok(DomainServer {
-            ms,
             executors,
             listen_shutdown_tx,
             listen_server,
@@ -46,7 +43,7 @@ impl DomainServer {
         })
     }
 
-    pub async fn start(&self) -> Result<()> {
+    pub async fn start(&self, ms: Modules) -> Result<()> {
         log::trace!(target: "main", "domain server start");
         let listen_server = self.listen_server.clone();
         let listen_addr = listen_server
@@ -56,8 +53,8 @@ impl DomainServer {
 
         use crate::config::tunnel2_core;
         use crate::config::tunnel_core;
-        let tunnel_core_conf = tunnel_core::main_conf_mut(&self.ms).await;
-        let tunnel2_core_conf = tunnel2_core::main_conf_mut(&self.ms).await;
+        let tunnel_core_conf = tunnel_core::main_conf_mut(&ms).await;
+        let tunnel2_core_conf = tunnel2_core::main_conf_mut(&ms).await;
 
         let (tunnel2_listen, tunnel2_publish) = if tunnel2_core_conf.server().is_some() {
             let (tunnel2_listen, tunnel2_publish) = tunnel2_core_conf
@@ -82,8 +79,13 @@ impl DomainServer {
 
         let listens = server::get_listens(tunnel_listen, tunnel2_listen, listen_server).await?;
         let executor = ExecutorLocalSpawn::new(self.executors.clone());
+
+        use crate::config::common_core;
+        let common_core_conf = common_core::main_conf_mut(&ms).await;
+        let shutdown_timeout = common_core_conf.shutdown_timeout;
         for listen in listens.into_iter() {
             self.do_start(
+                shutdown_timeout,
                 executor.clone(),
                 listen,
                 tunnel_publish.clone(),
@@ -92,6 +94,7 @@ impl DomainServer {
             .await?;
         }
 
+        drop(ms);
         let mut shutdown_thread_tx = self.executors.context.shutdown_thread_tx.subscribe();
         tokio::select! {
             biased;
@@ -113,21 +116,17 @@ impl DomainServer {
 
     pub async fn do_start(
         &self,
+        shutdown_timeout: u64,
         mut executor: ExecutorLocalSpawn,
         listen: Box<dyn Listener>,
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
     ) -> Result<()> {
-        use crate::config::common_core;
-        let common_core_conf = common_core::main_conf_mut(&self.ms).await;
-
-        let shutdown_timeout = common_core_conf.shutdown_timeout;
         let listen_server = self.listen_server.clone();
         let key = self.key.clone();
         let domain_config_listen_map = self.domain_config_listen_map.clone();
         let listen_shutdown_tx = self.listen_shutdown_tx.clone();
         let domain_context = self.domain_context.clone();
-        let ms = self.ms.clone();
         executor._start(
             #[cfg(feature = "anyspawn-count")]
             None,
@@ -141,7 +140,7 @@ impl DomainServer {
                     listen_server,
                     listen,
                     move |stream, server_stream_info, executors| async move {
-                        let domain_config_listen = {
+                        let (domain_config_listen, ms) = {
                             let domain_config_listen_map = domain_config_listen_map.get();
                             let domain_listen = domain_config_listen_map.get(&key);
                             if domain_listen.is_none() {
@@ -154,7 +153,7 @@ impl DomainServer {
                             }
                             let domain_listen = domain_listen.unwrap();
                             let domain_config_listen = domain_listen.domain_config_listen.clone();
-                            domain_config_listen
+                            (domain_config_listen, domain_listen.ms.clone())
                         };
 
                         let domain_stream = domain_stream::DomainStream::new(

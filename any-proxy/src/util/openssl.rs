@@ -95,10 +95,13 @@ impl OpensslSni {
 
     /// reload的时候，clone新配置
     pub fn take_from(&self, other: &OpensslSni) {
-        self.default_key.set(unsafe { other.default_key.take() });
-        self.default_cert.set(unsafe { other.default_cert.take() });
-        self.sni_map.set(unsafe { other.sni_map.take() });
-        self.domain_index.set(unsafe { other.domain_index.take() });
+        self.default_key
+            .set(unsafe { other.default_key.take() }.unwrap());
+        self.default_cert
+            .set(unsafe { other.default_cert.take() }.unwrap());
+        self.sni_map.set(unsafe { other.sni_map.take() }.unwrap());
+        self.domain_index
+            .set(unsafe { other.domain_index.take() }.unwrap());
     }
 
     ///openssl 加密accept

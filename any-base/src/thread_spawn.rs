@@ -194,10 +194,13 @@ impl ThreadSpawn {
         }
 
         let thread_handles = unsafe { self.thread_handles.take() };
-        log::info!("stop join version:{}", self.version);
-        for handle in thread_handles.into_iter() {
-            handle.join().unwrap();
+        if thread_handles.is_some() {
+            let thread_handles = thread_handles.unwrap();
+            log::info!("stop join version:{}", self.version);
+            for handle in thread_handles.into_iter() {
+                handle.join().unwrap();
+            }
+            log::info!("stop done version:{}", self.version);
         }
-        log::info!("stop done version:{}", self.version);
     }
 }

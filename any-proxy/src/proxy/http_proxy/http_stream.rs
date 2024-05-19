@@ -289,7 +289,7 @@ impl HttpStream {
                 .clone();
             let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
             if r.ctx.get().is_upstream_add {
-                log::info!("session_id:{}, is_upstream = false", r.session_id);
+                log::trace!(target: "is_ups", "session_id:{}, is_upstream = false", r.session_id);
                 r.ctx.get_mut().is_upstream_add = false;
                 cache_file_node_manage.is_upstream = false;
                 cache_file_node_manage

@@ -37,6 +37,9 @@ loggers:
   is_ups:
     level: trace
     additive: false
+  ms:
+    level: debug
+    additive: false
   wasm:
     level: info
     additive: true

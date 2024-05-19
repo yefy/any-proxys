@@ -1,6 +1,7 @@
 use crate::config as conf;
 use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeData};
 use crate::util::var::Var;
+use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use any_base::parking_lot::typ::ArcMutex;
 use any_base::typ;
@@ -14,7 +15,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -138,6 +139,13 @@ pub struct Conf {
     pub hot_io_percent_map: ArcRwLock<HashMap<String, u64>>,
     pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
     pub is_check: Arc<AtomicBool>,
+    pub is_init_master_thread: Arc<AtomicBool>,
+}
+
+impl Drop for Conf {
+    fn drop(&mut self) {
+        log::debug!(target: "ms", "drop net_core_proxy");
+    }
 }
 
 impl Conf {
@@ -163,6 +171,7 @@ impl Conf {
             cache_file_node_queue: ArcMutex::new(VecDeque::new()),
             proxy_max_open_file: 0,
             is_check: Arc::new(AtomicBool::new(false)),
+            is_init_master_thread: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -384,6 +393,19 @@ lazy_static! {
         merge_old_conf: |old_ms, old_main_conf, old_conf, ms, main_conf, conf| Box::pin(
             merge_old_conf(old_ms, old_main_conf, old_conf, ms, main_conf, conf)
         ),
+        init_master_thread: Some(
+            |ms, parent_conf, child_conf, executor, ms_executor| Box::pin(init_master_thread(
+                ms,
+                parent_conf,
+                child_conf,
+                executor,
+                ms_executor
+            ))
+        ),
+        init_work_thread: Some(|ms, parent_conf, child_conf, ms_executor| Box::pin(
+            init_work_thread(ms, parent_conf, child_conf, ms_executor)
+        )),
+        drop_conf: None,
     });
 }
 
@@ -400,6 +422,9 @@ lazy_static! {
         init_main_confs: None,
         merge_old_main_confs: None,
         merge_confs: None,
+        init_master_thread_confs: None,
+        init_work_thread_confs: None,
+        drop_confs: None,
         typ: conf::MODULE_TYPE_NET,
         create_server: None,
     });
@@ -561,6 +586,7 @@ async fn merge_old_conf(
         conf.hot_io_percent_map = old_conf.hot_io_percent_map.clone();
         conf.cache_file_node_queue = old_conf.cache_file_node_queue.clone();
         conf.is_check = old_conf.is_check.clone();
+        conf.is_init_master_thread = old_conf.is_init_master_thread.clone();
     }
 
     use super::net_core_proxy;
@@ -601,6 +627,117 @@ async fn init_conf(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
+    return Ok(());
+}
+
+async fn init_master_thread(
+    ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+    executor: ExecutorLocalSpawn,
+    ms_executor: ExecutorLocalSpawn,
+) -> Result<()> {
+    let session_id = ms.session_id();
+    let conf = conf.get_mut::<Conf>();
+    let ret = conf.is_init_master_thread.compare_exchange(
+        false,
+        true,
+        Ordering::Acquire,
+        Ordering::Relaxed,
+    );
+    if let Ok(false) = ret {
+        executor.clone()._start(
+            #[cfg(feature = "anyspawn-count")]
+            None,
+            move |executors| async move {
+                let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
+                let interval = 10;
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {
+                        }
+                        _ =  shutdown_thread_rx.recv() => {
+                            log::debug!(target: "ms", "ms session_id:{} => init_master_thread exit executor", session_id);
+                            return Ok(());
+                        }
+                        else => {
+                            return Err(anyhow!("err:select"));
+                        }
+                    }
+
+                    log::trace!(
+                        "session_id:{}, init_master_thread net_core_proxy once",
+                        session_id
+                    );
+                }
+            },
+        );
+    }
+
+    ms_executor.clone()._start(
+        #[cfg(feature = "anyspawn-count")]
+        None,
+        move |executors| async move {
+            let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
+            let interval = 10;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {
+                    }
+                    _ =  shutdown_thread_rx.recv() => {
+                        log::debug!(target: "ms", "ms session_id:{} => init_master_thread exit ms_executor", session_id);
+                        return Ok(());
+                    }
+                    else => {
+                        return Err(anyhow!("err:select"));
+                    }
+                }
+
+                log::trace!(
+                    "session_id:{}, init_master_thread net_core_proxy",
+                    session_id
+                );
+            }
+        },
+    );
+
+    return Ok(());
+}
+
+async fn init_work_thread(
+    ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+    ms_executor: ExecutorLocalSpawn,
+) -> Result<()> {
+    let session_id = ms.session_id();
+    let _conf = conf.get_mut::<Conf>();
+    ms_executor.clone()._start(
+        #[cfg(feature = "anyspawn-count")]
+        None,
+        move |executors| async move {
+            let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
+            let interval = 10;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {
+                    }
+                    _ =  shutdown_thread_rx.recv() => {
+                        log::debug!(target: "ms", "ms session_id:{} => init_work_thread exit", session_id);
+                        return Ok(());
+                    }
+                    else => {
+                        return Err(anyhow!("err:select"));
+                    }
+                }
+
+                log::trace!("session_id:{}, init_work_thread net_core_proxy", session_id);
+            }
+        },
+    );
     return Ok(());
 }
 

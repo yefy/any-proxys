@@ -1,9 +1,11 @@
 use super::anyproxy_work;
 use crate::util::default_config;
+use crate::ModulesExecutor;
 use any_base::executor_local_spawn;
-use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::executor_local_spawn::_block_on;
+use any_base::executor_local_spawn::{ExecutorLocalSpawn, ExecutorsLocal};
 use any_base::module::module;
+use any_base::module::module::Modules;
 use any_base::thread_pool::ThreadPool;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -12,23 +14,29 @@ use rlimit::{setrlimit, Resource};
 use tokio::sync::broadcast;
 
 pub struct AnyproxyGroup {
+    executor: ExecutorLocalSpawn,
     group_version: i32,
     config_tx: Option<broadcast::Sender<module::Modules>>,
     thread_pool: Option<ThreadPool>,
-    ms: module::Modules,
+    mse: ModulesExecutor,
 }
 
 impl AnyproxyGroup {
-    pub fn new(group_version: i32, ms: module::Modules) -> Result<AnyproxyGroup> {
+    pub fn new(
+        group_version: i32,
+        mse: ModulesExecutor,
+        executor: ExecutorLocalSpawn,
+    ) -> Result<AnyproxyGroup> {
         Ok(AnyproxyGroup {
             group_version,
             config_tx: None,
             thread_pool: None,
-            ms,
+            mse,
+            executor,
         })
     }
     pub fn ms(&self) -> module::Modules {
-        self.ms.clone()
+        self.mse.ms.clone()
     }
     pub fn group_version(&self) -> i32 {
         self.group_version
@@ -36,7 +44,7 @@ impl AnyproxyGroup {
 
     pub async fn start(&mut self) -> Result<()> {
         log::trace!(target: "main", "anyproxy_group start");
-        let ms = self.ms.clone();
+        let ms = self.ms();
         let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
                 let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
@@ -48,12 +56,26 @@ impl AnyproxyGroup {
                 Ok(ms)
             })
         })
-        .await?;
+        .await
+        .map_err(|e| anyhow!("err:parse_module_config => e:{}", e))?;
         let ms = ms.unwrap();
 
-        self.ms = ms.clone();
+        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
+        ms.init_master_thread(self.executor.clone(), ms_executor.clone())
+            .await
+            .map_err(|e| anyhow!("err:init_master_thread => e:{}", e))?;
+
         use crate::config::common_core;
         let common_conf = common_core::main_conf(&ms).await;
+        let shutdown_timeout = common_conf.shutdown_timeout;
+
+        let mse = ModulesExecutor::new(
+            ms.clone(),
+            self.executor.clone(),
+            ms_executor,
+            shutdown_timeout,
+        );
+        self.mse = mse;
 
         #[cfg(unix)]
         {
@@ -128,7 +150,7 @@ impl AnyproxyGroup {
     }
 
     pub async fn reload(&mut self, _executors: ExecutorsLocal) {
-        let ms = self.ms.clone();
+        let ms = self.ms();
         let ret = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
                 let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
@@ -153,7 +175,7 @@ impl AnyproxyGroup {
         match ret {
             Err(e) => {
                 log::error!(
-                    "err:reload config => group_version:{} e:{}",
+                    "err:reload config parse_module_config => group_version:{} e:{}",
                     self.group_version,
                     e
                 );
@@ -162,13 +184,35 @@ impl AnyproxyGroup {
             _ => {}
         };
         let ms = ms.unwrap();
-        self.ms = ms.clone();
+        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
+        let ret = ms
+            .init_master_thread(self.executor.clone(), ms_executor.clone())
+            .await
+            .map_err(|e| anyhow!("err:init_master_thread => e:{}", e));
+        if let Err(e) = ret {
+            log::error!(
+                "err:reload config init_master_thread => group_version:{} e:{}",
+                self.group_version,
+                e
+            );
+            return;
+        }
+        use crate::config::common_core;
+        let common_conf = common_core::main_conf(&ms).await;
+        let shutdown_timeout = common_conf.shutdown_timeout;
+
+        let mse = ModulesExecutor::new(
+            ms.clone(),
+            self.executor.clone(),
+            ms_executor,
+            shutdown_timeout,
+        );
+        self.mse = mse;
 
         log::info!("reload ok group_version:{}", self.group_version);
 
         #[cfg(unix)]
         {
-            use crate::config::common_core;
             let common_conf = common_core::main_conf(&ms).await;
 
             let soft = common_conf.max_open_file_limit;
@@ -187,18 +231,20 @@ impl AnyproxyGroup {
             .as_ref()
             .unwrap()
             .stop(is_fast_shutdown, shutdown_timeout)
-            .await
+            .await;
+        self.mse.del_ms_executor();
     }
 
-    pub async fn check(group_version: i32, _executors: ExecutorsLocal) -> Result<()> {
-        let ret: Result<()> = tokio::task::spawn_blocking(move || {
+    pub async fn check(group_version: i32, executor: ExecutorLocalSpawn) -> Result<()> {
+        let ret: Result<Modules> = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
                 let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();
                 let file_name = anyproxy_conf_full_path.as_str();
                 let mut ms = module::Modules::new(None, false);
                 ms.parse_module_config(&file_name, None)
                     .await
-                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))
+                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
+                Ok(ms)
             })
         })
         .await?;
@@ -206,17 +252,41 @@ impl AnyproxyGroup {
         match ret {
             Err(e) => {
                 log::error!(
-                    "err:check config => group_version:{} e:{}",
+                    "err:check config parse_module_config => group_version:{} e:{}",
                     group_version,
                     e
                 );
                 return Err(anyhow::anyhow!(
-                    "err:check config => group_version:{} e:{}",
+                    "err:check config parse_module_config => group_version:{} e:{}",
                     group_version,
                     e
                 ));
             }
-            _ => {}
+            Ok(ms) => {
+                let ms_executor = ExecutorLocalSpawn::new(executor.executors());
+                let ret = ms
+                    .init_master_thread(executor.clone(), ms_executor.clone())
+                    .await
+                    .map_err(|e| anyhow!("err:init_master_thread => e:{}", e));
+                if let Err(e) = ret {
+                    log::error!(
+                        "err:check config init_master_thread => group_version:{} e:{}",
+                        group_version,
+                        e
+                    );
+                    return Err(anyhow::anyhow!(
+                        "err:check config init_master_thread => group_version:{} e:{}",
+                        group_version,
+                        e
+                    ));
+                }
+
+                use crate::config::common_core;
+                let common_conf = common_core::main_conf(&ms).await;
+                let shutdown_timeout = common_conf.shutdown_timeout;
+                let _mse =
+                    ModulesExecutor::new(ms, executor.clone(), ms_executor, shutdown_timeout);
+            }
         };
 
         log::info!("check ok group_version:{}", group_version);

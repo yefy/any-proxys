@@ -1,3 +1,4 @@
+use crate::executor_local_spawn::ExecutorLocalSpawn;
 use crate::typ::{ArcMutex, ArcRwLock, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -10,7 +11,7 @@ use std::future::Future;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /*
@@ -50,6 +51,14 @@ merge_confs_map    -> merge_conf
 
 //全局共享数据参考 any-proxy\src\confighttp_core_proxy.rs   proxy_cache  proxy_cache_name的处理
 */
+
+lazy_static! {
+    pub static ref SESSION_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(100000));
+}
+
+pub fn get_session_id() -> u64 {
+    SESSION_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 lazy_static! {
     pub static ref G_MODULES: ArcMutex<GModules> = ArcMutex::new(GModules::new());
@@ -704,7 +713,38 @@ type MergeOldMainConfs = fn(
     ArcUnsafeAny,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
+type DropConf =
+    fn(Modules, ArcUnsafeAny, ArcUnsafeAny) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
 type MergeConfs = fn(Modules, ArcUnsafeAny) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+type DropConfs = fn(Modules, ArcUnsafeAny) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+type InitMasterThread = fn(
+    Modules,
+    ArcUnsafeAny,
+    ArcUnsafeAny,
+    ExecutorLocalSpawn,
+    ExecutorLocalSpawn,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+type InitWorkThread = fn(
+    Modules,
+    ArcUnsafeAny,
+    ArcUnsafeAny,
+    ExecutorLocalSpawn,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+type InitMasterThreadConfs = fn(
+    Modules,
+    ArcUnsafeAny,
+    ExecutorLocalSpawn,
+    ExecutorLocalSpawn,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+type InitWorkThreadConfs = fn(
+    Modules,
+    ArcUnsafeAny,
+    ExecutorLocalSpawn,
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
 type CreateServer = fn(ArcUnsafeAny) -> Result<Box<dyn Server>>;
 type SetConfArgValue = fn(&mut ConfArg, &str) -> Result<()>;
@@ -767,6 +807,9 @@ pub struct Func {
     pub merge_conf: MergeConf,
     pub init_conf: InitConf,
     pub merge_old_conf: MergeOldConf,
+    pub init_master_thread: Option<InitMasterThread>,
+    pub init_work_thread: Option<InitWorkThread>,
+    pub drop_conf: Option<DropConf>,
 }
 
 #[derive(Clone)]
@@ -782,12 +825,33 @@ pub struct Module {
     pub init_main_confs: Option<InitMainConfs>,
     pub merge_old_main_confs: Option<MergeOldMainConfs>,
     pub merge_confs: Option<MergeConfs>,
+    pub init_master_thread_confs: Option<InitMasterThreadConfs>,
+    pub init_work_thread_confs: Option<InitWorkThreadConfs>,
+    pub drop_confs: Option<DropConfs>,
     pub typ: usize,
     pub create_server: Option<CreateServer>,
 }
 
 #[derive(Clone)]
+pub struct ModuleDropTest {
+    session_id: u64,
+}
+
+impl ModuleDropTest {
+    pub fn new(session_id: u64) -> Self {
+        ModuleDropTest { session_id }
+    }
+}
+
+impl Drop for ModuleDropTest {
+    fn drop(&mut self) {
+        log::debug!(target: "ms", "ms session_id:{}, drop ModuleDropTest", self.session_id);
+    }
+}
+
+#[derive(Clone)]
 pub struct Modules {
+    session_id: u64,
     main_confs: ArcUnsafeAny,
     init_main_confs_map: ArcMutex<HashMap<i32, (String, InitMainConfs)>>,
     is_finish: Arc<AtomicBool>,
@@ -795,12 +859,37 @@ pub struct Modules {
     old_ms: ArcMutex<Modules>,
     merge_old_main_confs_map: ArcMutex<HashMap<i32, (String, MergeOldMainConfs)>>,
     merge_confs_map: ArcMutex<HashMap<i32, (String, MergeConfs)>>,
+    main_indexs: ArcMutex<Vec<i32>>,
+    init_master_thread_confs_map: ArcMutex<HashMap<i32, (String, InitMasterThreadConfs)>>,
+    init_work_thread_confs_map: ArcMutex<HashMap<i32, (String, InitWorkThreadConfs)>>,
+    drop_confs_map: ArcMutex<HashMap<i32, (String, DropConfs)>>,
     is_work_thread: bool,
     curr_module_confs: ArcUnsafeAny,
     cmd_conf_type: usize,
+    _drop_test: Arc<ModuleDropTest>,
 }
+impl Drop for Modules {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self._drop_test) == 1 {
+            let drop_confs_map = unsafe { self.drop_confs_map.take() };
+            if drop_confs_map.is_none() {
+                return;
+            }
+            let drop_confs_map = drop_confs_map.unwrap();
+            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop Modules", self.session_id(), self.count());
+            let ms = self.clone();
+            tokio::task::spawn(async move {
+                let _ = ms.drop_confs(drop_confs_map).await;
+            });
+        }
+    }
+}
+
 unsafe impl Send for Modules {}
 impl Modules {
+    pub fn count(&self) -> usize {
+        Arc::strong_count(&self._drop_test)
+    }
     pub fn curr_conf(&self) -> &ArcUnsafeAny {
         &self.curr_module_confs
     }
@@ -819,7 +908,10 @@ impl Modules {
         } else {
             ArcMutex::default()
         };
+
+        let session_id = get_session_id();
         Modules {
+            session_id,
             main_confs: ArcUnsafeAny::default(),
             init_main_confs_map: ArcMutex::default(),
             is_finish: Arc::new(AtomicBool::new(false)),
@@ -827,10 +919,19 @@ impl Modules {
             old_ms,
             merge_old_main_confs_map: ArcMutex::default(),
             merge_confs_map: ArcMutex::default(),
+            main_indexs: ArcMutex::default(),
+            init_master_thread_confs_map: ArcMutex::default(),
+            init_work_thread_confs_map: ArcMutex::default(),
+            drop_confs_map: ArcMutex::default(),
             is_work_thread,
             curr_module_confs: ArcUnsafeAny::default(),
             cmd_conf_type: 0,
+            _drop_test: Arc::new(ModuleDropTest::new(session_id)),
         }
+    }
+
+    pub fn session_id(&self) -> u64 {
+        self.session_id
     }
 
     pub fn is_work_thread(&self) -> bool {
@@ -853,6 +954,77 @@ impl Modules {
         G_MODULES.get().main_index_len()
     }
 
+    pub async fn init_master_thread(
+        &self,
+        executor: ExecutorLocalSpawn,
+        ms_executor: ExecutorLocalSpawn,
+    ) -> Result<()> {
+        for (_, main_index) in self.main_indexs.get().iter().enumerate() {
+            {
+                let v = self
+                    .init_master_thread_confs_map
+                    .get_mut()
+                    .remove(&main_index);
+                if v.is_some() {
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "init_master_thread_confs_map main_index:{}, name:{}", main_index, name);
+                    (v)(
+                        self.clone(),
+                        self.main_confs.clone(),
+                        executor.clone(),
+                        ms_executor.clone(),
+                    )
+                    .await
+                    .map_err(|e| anyhow!("err:init_master_thread_confs_map =>e{}", e))?;
+                }
+            }
+        }
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => init_master_thread", self.session_id(), self.count());
+        return Ok(());
+    }
+
+    pub async fn init_work_thread(&self, ms_executor: ExecutorLocalSpawn) -> Result<()> {
+        let main_indexs = self.main_indexs.get().clone();
+        for (_, main_index) in main_indexs.iter().enumerate() {
+            {
+                let v = self
+                    .init_work_thread_confs_map
+                    .get_mut()
+                    .remove(&main_index);
+                if v.is_some() {
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "init_work_thread_confs_map main_index:{}, name:{}", main_index, name);
+                    (v)(self.clone(), self.main_confs.clone(), ms_executor.clone())
+                        .await
+                        .map_err(|e| anyhow!("err:init_work_thread_confs_map =>e{}", e))?;
+                }
+            }
+        }
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => init_work_thread", self.session_id(), self.count());
+        return Ok(());
+    }
+
+    pub async fn drop_confs(
+        &self,
+        mut drop_confs_map: HashMap<i32, (String, DropConfs)>,
+    ) -> Result<()> {
+        let main_indexs = self.main_indexs.get().clone();
+        for (_, main_index) in main_indexs.iter().enumerate() {
+            {
+                let v = drop_confs_map.remove(&main_index);
+                if v.is_some() {
+                    let (name, v) = v.unwrap();
+                    log::trace!(target: "main", "drop_confs main_index:{}, name:{}", main_index, name);
+                    (v)(self.clone(), self.main_confs.clone())
+                        .await
+                        .map_err(|e| anyhow!("err:drop_confs =>e{}", e))?;
+                }
+            }
+        }
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => drop_confs", self.session_id(), self.count());
+        return Ok(());
+    }
+
     pub async fn parse_module_config(
         &mut self,
         path_full_name: &str,
@@ -863,6 +1035,11 @@ impl Modules {
         let mut init_main_confs_map = HashMap::new();
         let mut merge_old_main_confs_map = HashMap::new();
         let mut merge_confs_map = HashMap::new();
+        let mut main_indexs = Vec::with_capacity(100);
+        let mut init_master_thread_confs_map = HashMap::new();
+        let mut init_work_thread_confs_map = HashMap::new();
+        let mut drop_confs_map = HashMap::new();
+
         for module in self.get_modules() {
             let create_main_confs = { module.get().create_main_confs.clone() };
             if create_main_confs.is_none() {
@@ -874,6 +1051,7 @@ impl Modules {
                 if init_main_confs.is_none() {
                     panic!("init_main_confs nil name:{}", module.name)
                 }
+                main_indexs.push(module.main_index);
                 init_main_confs_map.insert(
                     module.main_index,
                     (module.name.clone(), init_main_confs.unwrap()),
@@ -891,6 +1069,7 @@ impl Modules {
                     (module.name.clone(), merge_old_main_confs.unwrap()),
                 );
             }
+
             {
                 let module = module.get();
                 let merge_confs = module.merge_confs.clone();
@@ -902,6 +1081,39 @@ impl Modules {
                 }
             }
 
+            {
+                let module = module.get();
+                let init_master_thread_confs = module.init_master_thread_confs.clone();
+                if init_master_thread_confs.is_some() {
+                    init_master_thread_confs_map.insert(
+                        module.main_index,
+                        (module.name.clone(), init_master_thread_confs.unwrap()),
+                    );
+                }
+            }
+
+            {
+                let module = module.get();
+                let init_work_thread_confs = module.init_work_thread_confs.clone();
+                if init_work_thread_confs.is_some() {
+                    init_work_thread_confs_map.insert(
+                        module.main_index,
+                        (module.name.clone(), init_work_thread_confs.unwrap()),
+                    );
+                }
+            }
+
+            {
+                let module = module.get();
+                let drop_confs = module.drop_confs.clone();
+                if drop_confs.is_some() {
+                    drop_confs_map.insert(
+                        module.main_index,
+                        (module.name.clone(), drop_confs.unwrap()),
+                    );
+                }
+            }
+
             log::trace!(target: "main", "parse_module_config module name:{}", module.get().name);
             let conf = (create_main_confs.unwrap())(self.clone()).await?;
             main_confs.push(conf);
@@ -909,12 +1121,17 @@ impl Modules {
         self.init_main_confs_map = ArcMutex::new(init_main_confs_map);
         self.merge_old_main_confs_map = ArcMutex::new(merge_old_main_confs_map);
         self.merge_confs_map = ArcMutex::new(merge_confs_map);
+        self.main_indexs = ArcMutex::new(main_indexs);
+        self.init_master_thread_confs_map = ArcMutex::new(init_master_thread_confs_map);
+        self.init_work_thread_confs_map = ArcMutex::new(init_work_thread_confs_map);
+        self.drop_confs_map = ArcMutex::new(drop_confs_map);
         self.main_confs = ArcUnsafeAny::new(Box::new(main_confs));
 
         let mut conf_arg = ConfArg::new();
         if any.is_some() {
             conf_arg.any.set(any.unwrap());
         }
+
         self.parse_config_file(&mut conf_arg, path_full_name, self.main_confs.clone())
             .await?;
 
@@ -965,7 +1182,12 @@ impl Modules {
             }
         }
 
+        if self.old_ms.is_some() {
+            self.old_ms.set_nil();
+        }
         self.is_finish.store(true, Ordering::SeqCst);
+
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => parse_module_config", self.session_id(), self.count());
         log::trace!(target: "main", "================parse_module_config end================");
         return Ok(());
     }

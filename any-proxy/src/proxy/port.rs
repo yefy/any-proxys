@@ -41,6 +41,7 @@ impl Port {
 #[async_trait]
 impl module::Server for Port {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => Port", ms.session_id(), ms.count());
         log::trace!(target: "main", "port start");
         use crate::config::port_core;
         let port_core_conf = port_core::main_conf_mut(&ms).await;
@@ -88,6 +89,7 @@ impl module::Server for Port {
                 let port_config_listen = port_config_listen?;
                 (port_config_listen, port_listen.listen_shutdown_tx.clone())
             };
+
             self.port_config_listen_map.get_mut().insert(
                 key.clone(),
                 PortListen {
@@ -105,6 +107,7 @@ impl module::Server for Port {
                 port_config_listen: Arc::new(port_config_listen.clone()),
                 listen_shutdown_tx: listen_shutdown_tx.clone(),
             };
+
             self.port_config_listen_map
                 .get_mut()
                 .insert(key.clone(), port_listen);
@@ -118,7 +121,6 @@ impl module::Server for Port {
                 None,
                 move |executors| async move {
                     let port_server = port_server::PortServer::new(
-                        ms,
                         executors,
                         listen_shutdown_tx,
                         listen_server,
@@ -127,14 +129,13 @@ impl module::Server for Port {
                     )
                     .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
                     port_server
-                        .start()
+                        .start(ms)
                         .await
                         .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
                     Ok(())
                 },
             );
         }
-
         Ok(())
     }
     async fn stop(&self, value: ArcUnsafeAny) -> Result<()> {

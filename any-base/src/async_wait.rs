@@ -19,9 +19,11 @@ impl AsyncWait {
     }
 
     pub fn waker(&self) {
-        if self.waker.is_some() {
-            unsafe { self.waker.take() }.wake();
+        let waker = unsafe { self.waker.take() };
+        if waker.is_none() {
+            return;
         }
+        waker.unwrap().wake();
     }
 }
 

@@ -2,7 +2,7 @@ use super::upstream_server::UpstreamServer;
 use crate::anyproxy::anyproxy_work::{
     AnyproxyWorkDataNew, AnyproxyWorkDataSend, AnyproxyWorkDataStop, AnyproxyWorkDataWait,
 };
-use any_base::executor_local_spawn::ExecutorLocalSpawn;
+use any_base::executor_local_spawn::{ExecutorLocalSpawn, ExecutorsLocal};
 use any_base::module::module;
 use any_base::module::module::Modules;
 use any_base::typ;
@@ -12,14 +12,17 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 pub struct Upstream {
-    executor: ExecutorLocalSpawn,
+    executors: ExecutorsLocal,
+    executor: Option<ExecutorLocalSpawn>,
 }
 
 impl Upstream {
     pub fn new(value: typ::ArcUnsafeAny) -> Result<Upstream> {
         let value = value.get::<AnyproxyWorkDataNew>();
-        let executor = ExecutorLocalSpawn::new(value.executors.clone());
-        Ok(Upstream { executor })
+        Ok(Upstream {
+            executors: value.executors.clone(),
+            executor: None,
+        })
     }
 }
 
@@ -31,12 +34,21 @@ impl module::Server for Upstream {
         //     return Ok(());
         // }
 
+        let executor = self.executor.take();
+        if executor.is_some() {
+            let executor = executor.unwrap();
+            executor.stop("upstream start", true, 30).await;
+        }
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => Upstream", ms.session_id(), ms.count());
+
+        let mut executor = ExecutorLocalSpawn::new(self.executors.clone());
+        self.executor = Some(executor.clone());
         use crate::config::upstream_core;
         let upstream_core_conf = upstream_core::main_conf_mut(&ms).await;
         for (_, ups_data) in upstream_core_conf.ups_data_map.iter() {
             let ups_data = ups_data.clone();
             let ms = ms.clone();
-            self.executor._start(
+            executor._start(
                 #[cfg(feature = "anyspawn-count")]
                 None,
                 move |executors| async move {
@@ -53,25 +65,37 @@ impl module::Server for Upstream {
         Ok(())
     }
     async fn stop(&self, value: ArcUnsafeAny) -> Result<()> {
+        if self.executor.is_none() {
+            return Ok(());
+        }
+        let executor = self.executor.as_ref().unwrap();
         let value = value.get::<AnyproxyWorkDataStop>();
         scopeguard::defer! {
             log::info!("end upstream stop flag:{}", value.name);
         }
         log::info!("start upstream stop flag:{}", value.name);
 
-        self.executor
+        executor
             .stop(&value.name, value.is_fast_shutdown, value.shutdown_timeout)
             .await;
         Ok(())
     }
     async fn send(&self, value: ArcUnsafeAny) -> Result<()> {
+        if self.executor.is_none() {
+            return Ok(());
+        }
+        let executor = self.executor.as_ref().unwrap();
         let value = value.get::<AnyproxyWorkDataSend>();
-        self.executor.send(&value.name, value.is_fast_shutdown);
+        executor.send(&value.name, value.is_fast_shutdown);
         Ok(())
     }
 
     async fn wait(&self, value: ArcUnsafeAny) -> Result<()> {
+        if self.executor.is_none() {
+            return Ok(());
+        }
+        let executor = self.executor.as_ref().unwrap();
         let value = value.get::<AnyproxyWorkDataWait>();
-        self.executor.wait(&value.name).await
+        executor.wait(&value.name).await
     }
 }

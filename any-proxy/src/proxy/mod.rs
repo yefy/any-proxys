@@ -56,6 +56,12 @@ pub struct StreamConfigContext {
     common_conf: ArcUnsafeAny,
 }
 
+impl Drop for StreamConfigContext {
+    fn drop(&mut self) {
+        //println!("drop StreamConfigContext");
+    }
+}
+
 impl StreamConfigContext {
     pub fn new(
         ms: module::Modules,

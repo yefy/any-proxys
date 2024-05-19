@@ -347,9 +347,9 @@ impl<T> ArcMutex<T> {
         )
     }
 
-    pub unsafe fn take(&self) -> T {
+    pub unsafe fn take(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        let data = lock.take().unwrap();
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
         data
@@ -477,12 +477,16 @@ impl<T> ArcMutexBox<T> {
         )
     }
 
-    pub unsafe fn take(&self) -> T {
+    pub unsafe fn take(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        let data = lock.take().unwrap();
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
-        *data
+        if data.is_some() {
+            Some(*data.unwrap())
+        } else {
+            None
+        }
     }
 
     fn get_write_lock(&self) -> MutexGuard<'_, Option<Box<T>>> {
@@ -717,9 +721,9 @@ impl<T> ArcRwLock<T> {
         )
     }
 
-    pub unsafe fn take(&self) -> T {
+    pub unsafe fn take(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        let data = lock.take().unwrap();
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
         data

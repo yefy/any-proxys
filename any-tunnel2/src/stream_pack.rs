@@ -57,9 +57,10 @@ impl SendWindowWait {
     pub fn waker(&self, sub_window_size: usize) {
         self.curr_send_pack_len
             .fetch_sub(sub_window_size, Ordering::Relaxed);
-        if self.waker.is_some() {
-            let waker = unsafe { self.waker.take() };
-            waker.wake();
+
+        let waker = unsafe { self.waker.take() };
+        if waker.is_some() {
+            waker.unwrap().wake();
         }
     }
 }

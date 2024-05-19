@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct DomainListen {
+    pub ms: Modules,
     pub domain_config_listen: Arc<domain_config::DomainConfigListen>,
     pub listen_shutdown_tx: broadcast::Sender<()>,
 }
@@ -43,6 +44,7 @@ impl Domain {
 #[async_trait]
 impl module::Server for Domain {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
+        log::debug!(target: "ms", "ms session_id:{}, count:{} => Domain", ms.session_id(), ms.count());
         log::trace!(target: "main", "domain start");
         use crate::config::domain_core;
         let domain_core_conf = domain_core::main_conf_mut(&ms).await;
@@ -96,6 +98,7 @@ impl module::Server for Domain {
             self.domain_config_listen_map.get_mut().insert(
                 key.clone(),
                 DomainListen {
+                    ms: ms.clone(),
                     domain_config_listen: Arc::new(domain_config_listen),
                     listen_shutdown_tx,
                 },
@@ -107,9 +110,11 @@ impl module::Server for Domain {
             let listen_server = domain_config_listen.listen_server.clone();
 
             let domain_listen = DomainListen {
+                ms: ms.clone(),
                 domain_config_listen: Arc::new(domain_config_listen.clone()),
                 listen_shutdown_tx: listen_shutdown_tx.clone(),
             };
+
             self.domain_config_listen_map
                 .get_mut()
                 .insert(key.clone(), domain_listen);
@@ -125,7 +130,6 @@ impl module::Server for Domain {
                 None,
                 move |executors| async move {
                     let domain_server = domain_server::DomainServer::new(
-                        ms,
                         executors,
                         listen_shutdown_tx,
                         listen_server,
@@ -135,7 +139,7 @@ impl module::Server for Domain {
                     )
                     .map_err(|e| anyhow!("err:DomainServer::new => e:{}", e))?;
                     domain_server
-                        .start()
+                        .start(ms)
                         .await
                         .map_err(|e| anyhow!("err:domain_server.start => e:{}", e))?;
                     Ok(())

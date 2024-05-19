@@ -2,6 +2,7 @@ use super::anyproxy_group;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
 use crate::util::default_config;
 use crate::util::signal;
+use crate::ModulesExecutor;
 use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
@@ -135,10 +136,11 @@ impl Anyproxy {
     }
 
     pub fn run_hot_pid() -> Result<()> {
-        if default_config::HOT_PID.is_none() {
+        let pid = unsafe { default_config::HOT_PID.take() };
+        if pid.is_none() {
             return Ok(());
         }
-        let pid = unsafe { default_config::HOT_PID.take() };
+        let pid = pid.unwrap();
         match Self::run_linux_signal("QUIT", &pid) {
             Ok(output) => {
                 log::info!("hot pid {} info:{}", pid, output);
@@ -192,7 +194,7 @@ impl Anyproxy {
 
         if arg_config.check_config {
             executor_local_spawn::_block_on(1, 1, move |executor| async move {
-                AnyproxyGroup::check(0, executor.executors()).await
+                AnyproxyGroup::check(0, executor).await
             })?;
             return Ok(true);
         }
@@ -216,6 +218,7 @@ impl Anyproxy {
         Anyproxy::remove_pid_file();
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
+
         let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
                 let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
@@ -226,16 +229,26 @@ impl Anyproxy {
                 Ok(ms)
             })
         })
-        .await?;
+        .await
+        .map_err(|e| anyhow!("err:parse_module_config => e:{}", e))?;
         let ms = ms.unwrap();
+
+        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
+        ms.init_master_thread(self.executor.clone(), ms_executor.clone())
+            .await
+            .map_err(|e| anyhow!("err:init_master_thread => e:{}", e))?;
 
         use crate::config::common_core;
         let common_conf = common_core::main_conf(&ms).await;
         let shutdown_timeout = common_conf.shutdown_timeout;
 
-        let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> = Some(
-            anyproxy_group::AnyproxyGroup::new(self.group_version_add(), ms)?,
-        );
+        let mse = ModulesExecutor::new(ms, self.executor.clone(), ms_executor, shutdown_timeout);
+        let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> =
+            Some(anyproxy_group::AnyproxyGroup::new(
+                self.group_version_add(),
+                mse,
+                self.executor.clone(),
+            )?);
         anyproxy_group
             .as_mut()
             .unwrap()
@@ -280,7 +293,7 @@ impl Anyproxy {
                 AnyproxyState::Check => {
                     let _ = anyproxy_group::AnyproxyGroup::check(
                         self.group_version,
-                        self.executor.executors(),
+                        self.executor.clone(),
                     )
                     .await;
                     continue;
@@ -294,11 +307,20 @@ impl Anyproxy {
                     #[cfg(unix)]
                     {
                         let ms = anyproxy_group.as_ref().unwrap().ms();
-                        let mut new_anyproxy_group =
-                            anyproxy_group::AnyproxyGroup::new(self.group_version_add(), ms)
-                                .map_err(|e| {
-                                    anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e)
-                                })?;
+                        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
+                        let mse = ModulesExecutor::new(
+                            ms,
+                            self.executor.clone(),
+                            ms_executor,
+                            shutdown_timeout,
+                        );
+
+                        let mut new_anyproxy_group = anyproxy_group::AnyproxyGroup::new(
+                            self.group_version_add(),
+                            mse,
+                            self.executor.clone(),
+                        )
+                        .map_err(|e| anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e))?;
                         if let Err(e) = new_anyproxy_group
                             .start()
                             .await
@@ -330,6 +352,7 @@ impl Anyproxy {
             }
         }
 
+        self.executor.send("anyproxy_group stop", true);
         self.wait_anyproxy_groups().await?;
         Ok(())
     }
