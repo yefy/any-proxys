@@ -11,7 +11,8 @@ use crate::proxy::http_proxy::http_stream_request::{
 use any_base::file_ext::{unlink, FileCacheBytes};
 use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::io::async_write_msg::{MsgWriteBuf, MsgWriteBufBytes};
-use any_base::typ::{ArcMutex, ArcRwLockTokio};
+use any_base::typ::ArcMutex;
+use any_base::typ2;
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
@@ -34,9 +35,15 @@ pub async fn response_body_read(
 ) -> Result<Option<HttpBodyBufFilter>> {
     match response_body {
         HttpResponseBody::Body(response_body) => {
-            if r.ctx.get().r_out.left_content_length <= 0 {
-                return Ok(None);
+            {
+                let ctx = &*r.ctx.get();
+                if ctx.r_out.left_content_length <= 0 {
+                    if ctx.r_out.transfer_encoding.is_none() {
+                        return Ok(None);
+                    }
+                }
             }
+
             let data = response_body.data().await;
             if data.is_none() {
                 return Ok(None);
@@ -53,6 +60,12 @@ pub async fn response_body_read(
                         }
                         let seek = r.ctx.get().r_in.curr_slice_start;
                         let size = buf.len() as u64;
+                        log::trace!(target: "ext3",
+                                    "r.session_id:{}-{}, ups response body_read seek:{}, size:{}",
+                                    r.session_id, r.local_cache_req_count,
+                                    seek,
+                                    size,
+                        );
                         Ok(Some(HttpBodyBufFilter::from_bytes(
                             MsgWriteBufBytes::from_bytes(buf),
                             seek,
@@ -66,13 +79,25 @@ pub async fn response_body_read(
             if response_body.is_none() {
                 return Ok(None);
             }
-            let r_ctx = &*r.ctx.get();
-            let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
+            let rctx = &*r.ctx.get();
             let mut buf = response_body.take().unwrap();
-            let seek = r_ctx.r_in.curr_slice_start;
-            let size = response_info.range.range_end - r_ctx.r_in.curr_slice_start + 1;
+            let seek = rctx.r_in.curr_slice_start;
+            //静态文件支持transfer_encoding， 缓存文件不支持
+            let size = if rctx.r_out.transfer_encoding.is_some() {
+                buf.size
+            } else {
+                let response_info = rctx.r_out.response_info.as_ref().unwrap();
+                response_info.range.range_end - rctx.r_in.curr_slice_start + 1
+            };
+
             buf.seek = seek;
             buf.size = size;
+            log::trace!(target: "ext3",
+                        "r.session_id:{}-{}, ups response file_read seek:{}, size:{}",
+                        r.session_id, r.local_cache_req_count,
+                        seek,
+                        size,
+            );
             Ok(Some(HttpBodyBufFilter::from_file(buf, seek, size)))
         }
     }
@@ -137,17 +162,17 @@ pub async fn slice_update_bitset(
     cache_file_node: &Arc<ProxyCacheFileNode>,
 ) -> Result<bool> {
     let (range_start, range_end, skip_bitset_index, file_length) = {
-        let r_ctx = &mut *r.ctx.get_mut();
-        if r_ctx.r_in.bitmap_curr_slice_start <= 0
-            || r_ctx.r_in.bitmap_curr_slice_start == r_ctx.r_in.bitmap_last_slice_start
+        let rctx = &mut *r.ctx.get_mut();
+        if rctx.r_in.bitmap_curr_slice_start <= 0
+            || rctx.r_in.bitmap_curr_slice_start == rctx.r_in.bitmap_last_slice_start
         {
             return Ok(false);
         }
 
-        let range_start = r_ctx.r_in.bitmap_last_slice_start;
-        let range_end = r_ctx.r_in.bitmap_curr_slice_start - 1;
-        let skip_bitset_index = r_ctx.r_in.skip_bitset_index;
-        let file_length = r_ctx.r_in.range.raw_content_length;
+        let range_start = rctx.r_in.bitmap_last_slice_start;
+        let range_end = rctx.r_in.bitmap_curr_slice_start - 1;
+        let skip_bitset_index = rctx.r_in.skip_bitset_index;
+        let file_length = rctx.r_in.range.raw_content_length;
         (range_start, range_end, skip_bitset_index, file_length)
     };
 
@@ -215,8 +240,8 @@ pub async fn bitmap_to_cache_file(
     .await?;
     ret?;
 
-    let r_ctx = &mut *r.ctx.get_mut();
-    r_ctx.r_in.bitmap_last_slice_start = r_ctx.r_in.bitmap_curr_slice_start;
+    let rctx = &mut *r.ctx.get_mut();
+    rctx.r_in.bitmap_last_slice_start = rctx.r_in.bitmap_curr_slice_start;
     Ok(())
 }
 
@@ -283,9 +308,10 @@ pub async fn write_body_to_client(
 }
 
 pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u64) -> Result<()> {
+    let scc = r.http_arg.stream_info.get().scc.clone();
     use crate::config::net_core_proxy;
     //当前可能是main  server local， ProxyCache必须到main_conf中读取
-    let net_core_proxy = net_core_proxy::main_conf(r.scc.ms()).await;
+    let net_core_proxy = net_core_proxy::main_conf(scc.ms()).await;
 
     log::trace!(target: "ext", "r.session_id:{}-{}, Response create file",
                 r.session_id, r.local_cache_req_count);
@@ -297,27 +323,31 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
         response_info,
         response,
         cache_file_node_version,
+        http_cache_file,
     ) = {
-        let r_ctx = &mut *r.ctx.get_mut();
+        let rctx = &mut *r.ctx.get_mut();
+        let http_cache_file = rctx.http_cache_file.clone();
+        let cache_file_node_version = http_cache_file.ctx_thread.get().cache_file_node_version;
         let mut response = Response::builder().body(Body::default())?;
-        *response.status_mut() = r_ctx.r_out.status_upstream.clone();
-        *response.version_mut() = r_ctx.r_out.version_upstream.clone();
-        *response.headers_mut() = r_ctx.r_out.headers_upstream.clone();
-        let response_info = r_ctx.r_out.response_info.clone().unwrap();
+        *response.status_mut() = rctx.r_out.status_upstream.clone();
+        *response.version_mut() = rctx.r_out.upstream_version.clone();
+        *response.headers_mut() = rctx.r_out.upstream_headers.clone();
+        let response_info = rctx.r_out.response_info.clone().unwrap();
         let add_cache_file_size =
             response_info.range.raw_content_length as i64 - raw_content_length as i64;
         (
             add_cache_file_size,
-            r_ctx.r_in.method.clone(),
-            r_ctx.r_in.uri.clone(),
-            r.http_cache_file.cache_file_info.clone(),
+            rctx.r_in.method.clone(),
+            rctx.r_in.uri.clone(),
+            http_cache_file.cache_file_info.clone(),
             response_info,
             response,
-            r.http_cache_file.ctx_thread.get().cache_file_node_version,
+            cache_file_node_version,
+            http_cache_file,
         )
     };
 
-    let proxy_cache_name = r.http_cache_file.proxy_cache.as_ref().unwrap().name.clone();
+    let proxy_cache_name = http_cache_file.proxy_cache.as_ref().unwrap().name.clone();
     let cache_file_node = ProxyCacheFileNode::create_file(
         client_method.clone(),
         client_uri.clone(),
@@ -326,21 +356,21 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
         response,
         cache_file_node_version,
         proxy_cache_name,
+        r.session_id,
     )
     .await?;
     let cache_file_node = Arc::new(cache_file_node);
     let cache_file_node_data = Arc::new(ProxyCacheFileNodeData::new(None));
     {
         let (_, cache_file_node_manage) = HttpCacheFile::read_cache_file_node_manage(
-            r.http_cache_file.proxy_cache.as_ref().unwrap(),
-            &r.http_cache_file.cache_file_info.md5,
+            http_cache_file.proxy_cache.as_ref().unwrap(),
+            &http_cache_file.cache_file_info.md5,
             net_core_proxy.cache_file_node_queue.clone(),
         );
         let cache_file_node_manage_ = cache_file_node_manage.clone();
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
 
-        let is_ok = r
-            .http_cache_file
+        let is_ok = http_cache_file
             .set_cache_file_node(&r, cache_file_node.clone(), cache_file_node_manage)
             .await?;
         if is_ok {
@@ -351,7 +381,7 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
             let cache_file_node_version = cache_file_node_manage.cache_file_node_version;
             let md5 = cache_file_node_head.md5.clone();
             let trie_url = cache_file_node_head.trie_url.clone();
-            let proxy_cache = r.http_cache_file.proxy_cache.as_ref().unwrap();
+            let proxy_cache = http_cache_file.proxy_cache.as_ref().unwrap();
 
             let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
             proxy_cache_ctx.curr_size += add_cache_file_size;
@@ -366,13 +396,9 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
             net_core_proxy.trie_insert(trie_url, md5.clone())?;
             net_core_proxy.index_insert(md5, proxy_cache.cache_conf.name.clone());
 
-            r.http_cache_file.ctx_thread.get_mut().cache_file_node = Some(cache_file_node);
-            r.http_cache_file.ctx_thread.get_mut().cache_file_node_data =
-                Some(cache_file_node_data);
-            r.http_cache_file
-                .ctx_thread
-                .get_mut()
-                .cache_file_node_manage = cache_file_node_manage_;
+            http_cache_file.ctx_thread.get_mut().cache_file_node = Some(cache_file_node);
+            http_cache_file.ctx_thread.get_mut().cache_file_node_data = Some(cache_file_node_data);
+            http_cache_file.ctx_thread.get_mut().cache_file_node_manage = cache_file_node_manage_;
             return Ok(());
         }
     }
@@ -380,7 +406,7 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
     r.ctx.get_mut().r_out.is_cache_err = true;
 
     use crate::config::common_core;
-    let common_core_conf = common_core::main_conf(&r.scc.ms).await;
+    let common_core_conf = common_core::main_conf(&scc.ms).await;
     let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
 
     #[cfg(feature = "anyio-file")]
@@ -408,13 +434,13 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
 
 pub async fn update_expired_cache_file(
     r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
 ) -> Result<bool> {
     let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
-    {
+    let upstream_waits = {
         let cache_file_node_response_info = &cache_file_node.response_info;
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
         let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
         match &cache_file_node_ctx.cache_file_status {
             &CacheFileStatus::Expire => {}
@@ -467,8 +493,66 @@ pub async fn update_expired_cache_file(
             &mut upstream_waits,
             &mut cache_file_node_manage.upstream_waits,
         );
-        for tx in upstream_waits {
-            let _ = tx.send(());
+
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_cache_control_time(out_response_info.cache_control_time);
+        cache_file_node_manage
+            .cache_file_node_head
+            .set_expires_time(out_response_info.expires_time);
+        cache_file_node_ctx.cache_file_status = CacheFileStatus::Exist;
+        upstream_waits
+    };
+
+    for tx in upstream_waits {
+        let _ = tx.send(());
+    }
+
+    let file_head_time = ProxyCacheFileNode::get_file_head_time_str(
+        out_response_info.cache_control_time,
+        out_response_info.expires_time,
+    );
+    let file = cache_file_node.get_file_ext().file.clone();
+    #[cfg(feature = "anyio-file")]
+    let session_id = r.session_id;
+    let ret: Result<()> = tokio::task::spawn_blocking(move || {
+        use std::io::Seek;
+        //更新文件时间头
+        let file = &mut *file.get_mut();
+        #[cfg(feature = "anyio-file")]
+        let start_time = Instant::now();
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.write_all(file_head_time.as_slice())?;
+
+        #[cfg(feature = "anyio-file")]
+        if start_time.elapsed().as_millis() > 100 {
+            log::info!(
+                "r.session_id:{}, update file head time:{}",
+                session_id,
+                start_time.elapsed().as_millis()
+            );
+        }
+        Ok(())
+    })
+    .await?;
+    ret?;
+    return Ok(true);
+}
+
+pub async fn update_expired_cache_file_by_not_get(
+    r: &Arc<HttpStreamRequest>,
+    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node: &Arc<ProxyCacheFileNode>,
+) -> Result<bool> {
+    let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
+    {
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
+        match &cache_file_node_ctx.cache_file_status {
+            &CacheFileStatus::Expire => {}
+            &CacheFileStatus::Exist => {
+                return Ok(false);
+            }
         }
 
         cache_file_node_manage
@@ -513,7 +597,7 @@ pub async fn update_expired_cache_file(
 
 pub async fn check_miss(
     r: &Arc<HttpStreamRequest>,
-    _cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    _cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
 ) -> Result<bool> {
     let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
@@ -536,7 +620,7 @@ pub async fn check_miss(
 
 pub async fn update_expired_cache_file_304(
     r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
     ups_response: &http::Response<Body>,
 ) -> Result<bool> {
@@ -546,9 +630,9 @@ pub async fn update_expired_cache_file_304(
     let (cache_control_time, expires_time, _) = cache_control_time(ups_response.headers())
         .map_err(|e| anyhow!("err:cache_control_time =>e:{}", e))?;
 
-    {
+    let upstream_waits = {
         let cache_file_node_response_info = &cache_file_node.response_info;
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
         let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
         match &cache_file_node_ctx.cache_file_status {
             &CacheFileStatus::Expire => {}
@@ -569,21 +653,12 @@ pub async fn update_expired_cache_file_304(
         }
         log::trace!(target: "ext", "r.session_id:{}-{}, Response update Expire",
                     r.session_id, r.local_cache_req_count);
-        cache_file_node_manage.is_upstream = false;
-        if r.ctx.get().is_upstream_add {
-            r.ctx.get_mut().is_upstream_add = false;
-            cache_file_node_manage
-                .upstream_count
-                .fetch_sub(1, Ordering::Relaxed);
-        }
+
         let mut upstream_waits = VecDeque::with_capacity(10);
         swap(
             &mut upstream_waits,
             &mut cache_file_node_manage.upstream_waits,
         );
-        for tx in upstream_waits {
-            let _ = tx.send(());
-        }
 
         cache_file_node_manage
             .cache_file_node_head
@@ -592,6 +667,11 @@ pub async fn update_expired_cache_file_304(
             .cache_file_node_head
             .set_expires_time(expires_time);
         cache_file_node_ctx.cache_file_status = CacheFileStatus::Exist;
+        upstream_waits
+    };
+
+    for tx in upstream_waits {
+        let _ = tx.send(());
     }
 
     let file_head_time =
@@ -625,9 +705,13 @@ pub async fn update_expired_cache_file_304(
 
 pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<()> {
     let (http_cache_status, cache_file_node_manage, cache_file_node) = {
+        let http_cache_file = r.ctx.get().http_cache_file.clone();
+        if http_cache_file.is_none() {
+            return Ok(());
+        }
+
         if !r.ctx.get().r_out.is_cache {
-            let cache_file_node_manage = r
-                .http_cache_file
+            let cache_file_node_manage = http_cache_file
                 .ctx_thread
                 .get()
                 .cache_file_node_manage
@@ -635,29 +719,33 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
             if cache_file_node_manage.is_none().await {
                 return Ok(());
             }
-            let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
-            cache_file_node_manage.is_upstream = false;
-            if r.ctx.get().is_upstream_add {
-                r.ctx.get_mut().is_upstream_add = false;
-                cache_file_node_manage
-                    .upstream_count
-                    .fetch_sub(1, Ordering::Relaxed);
-            }
-            let mut upstream_waits = VecDeque::with_capacity(10);
-            swap(
-                &mut upstream_waits,
-                &mut cache_file_node_manage.upstream_waits,
-            );
+            let upstream_waits = {
+                let cache_file_node_manage =
+                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                cache_file_node_manage.is_upstream = false;
+                if r.ctx.get().is_upstream_add {
+                    r.ctx.get_mut().is_upstream_add = false;
+                    cache_file_node_manage
+                        .upstream_count
+                        .fetch_sub(1, Ordering::Relaxed);
+                }
+                let mut upstream_waits = VecDeque::with_capacity(10);
+                swap(
+                    &mut upstream_waits,
+                    &mut cache_file_node_manage.upstream_waits,
+                );
+                upstream_waits
+            };
             for tx in upstream_waits {
                 let _ = tx.send(());
             }
             return Ok(());
         }
-        let req_cache_file_ctx = r.http_cache_file.ctx_thread.get();
+        let hcf_ctx_thread = http_cache_file.ctx_thread.get();
         (
             r.ctx.get().r_in.http_cache_status.clone(),
-            req_cache_file_ctx.cache_file_node_manage.clone(),
-            req_cache_file_ctx.cache_file_node(),
+            hcf_ctx_thread.cache_file_node_manage.clone(),
+            hcf_ctx_thread.cache_file_node(),
         )
     };
     match http_cache_status {
@@ -673,9 +761,9 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
             }
 
             {
-                let r_ctx = &mut *r.ctx.get_mut();
-                if r_ctx.r_out.status.is_server_error() {
-                    r_ctx.r_out.is_cache_err = true;
+                let rctx = &mut *r.ctx.get_mut();
+                if rctx.r_out.status.is_server_error() {
+                    rctx.r_out.is_cache_err = true;
                     log::trace!(target: "is_ups", "session_id:{}, cache_file_node Expired is_cache_err", r.session_id);
                     return Ok(());
                 }
@@ -689,13 +777,24 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
             let cache_file_node = cache_file_node.unwrap();
             if check_miss(&r, &cache_file_node_manage, &cache_file_node).await? {
                 log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss", r.session_id);
+                let is_expire_to_miss = r.ctx.get().is_expire_to_miss;
+                if is_expire_to_miss
+                    && update_expired_cache_file_by_not_get(
+                        &r,
+                        &cache_file_node_manage,
+                        &cache_file_node,
+                    )
+                    .await?
+                {
+                    log::trace!(target: "is_ups", "session_id:{}, cache_file_node update_expired", r.session_id);
+                }
                 return Ok(());
             }
 
             {
-                let r_ctx = &mut *r.ctx.get_mut();
-                if r_ctx.r_out.status.is_server_error() {
-                    r_ctx.r_out.is_cache_err = true;
+                let rctx = &mut *r.ctx.get_mut();
+                if rctx.r_out.status.is_server_error() {
+                    rctx.r_out.is_cache_err = true;
                     log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss is_cache_err", r.session_id);
                     return Ok(());
                 }
@@ -720,13 +819,24 @@ pub async fn update_or_create_cache_file_304(
     ups_response: &http::Response<Body>,
 ) -> Result<bool> {
     let (http_cache_status, cache_file_node_manage, cache_file_node) = {
-        let req_cache_file_ctx = r.http_cache_file.ctx_thread.get();
+        let http_cache_file = r.ctx.get().http_cache_file.clone();
+        let hcf_ctx_thread = http_cache_file.ctx_thread.get();
         (
             r.ctx.get().r_in.http_cache_status.clone(),
-            req_cache_file_ctx.cache_file_node_manage.clone(),
-            req_cache_file_ctx.cache_file_node(),
+            hcf_ctx_thread.cache_file_node_manage.clone(),
+            hcf_ctx_thread.cache_file_node(),
         )
     };
+    {
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        cache_file_node_manage.is_upstream = false;
+        if r.ctx.get().is_upstream_add {
+            r.ctx.get_mut().is_upstream_add = false;
+            cache_file_node_manage
+                .upstream_count
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+    }
     match http_cache_status {
         HttpCacheStatus::Create => {}
         HttpCacheStatus::Expired => {
@@ -785,7 +895,7 @@ pub async fn del_expires_cache_file(
     }
 
     let manage = manage.unwrap();
-    let manage = &mut *manage.get_mut().await;
+    let manage = &mut *manage.get_mut(file!(), line!()).await;
 
     if cache_file_node_expires.cache_file_node_version != manage.cache_file_node_version {
         return Ok(());
@@ -867,7 +977,7 @@ pub async fn del_md5(ms: &Modules) -> Result<()> {
             return Ok(());
         }
         let manage = manage.unwrap();
-        let manage = &mut *manage.get_mut().await;
+        let manage = &mut *manage.get_mut(file!(), line!()).await;
         del_cache_file(manage, &proxy_cache, ms).await?;
     }
 

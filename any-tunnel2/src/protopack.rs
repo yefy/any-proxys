@@ -7,6 +7,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const TUNNEL_MAX_HEADER_SIZE: usize = 4096;
+pub const TUNNEL_FLAG: &'static str = "${72tunnel_anyproxy}";
 pub const TUNNEL_VERSION: &'static str = "tunnel2.0.1.0";
 
 //TunnelHeaderSize_u16 TunnelHeader TunnelHello
@@ -190,6 +191,10 @@ where
     };
     let header_slice = toml::to_vec(&header).map_err(|e| anyhow!("err:toml::to_vec => e:{}", e))?;
     buf_writer
+        .write_all(TUNNEL_FLAG.as_bytes())
+        .await
+        .map_err(|e| anyhow!("err:buf_writer.write_all => e:{}", e))?;
+    buf_writer
         .write_u16(header_slice.len() as u16)
         .await
         .map_err(|e| anyhow!("err:buf_writer.write_u16 => e:{}", e))?;
@@ -229,7 +234,22 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
     slice: &mut [u8],
     typ: Option<TunnelHeaderType>,
 ) -> Result<Option<TunnelPack>> {
-    //let mut slice = [0u8; TUNNEL_MAX_HEADER_SIZE];
+    let mut flag_slice = [0u8; TUNNEL_FLAG.len() as usize];
+    let mut read_size = 0;
+    loop {
+        if read_size == flag_slice.len() {
+            break;
+        }
+        read_size += buf_reader
+            .read(&mut flag_slice[read_size..])
+            .await
+            .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
+        let flag_str = String::from_utf8_lossy(&flag_slice[0..read_size]);
+        if &TUNNEL_FLAG[0..read_size] != &flag_str {
+            return Ok(None);
+        }
+    }
+
     let header_size = buf_reader
         .read_u16()
         .await

@@ -1,5 +1,6 @@
 extern crate rand;
 use crate::stream::connect;
+use crate::upstream::balancer::get_connect_data;
 use crate::upstream::UpstreamData;
 use rand::Rng;
 use std::sync::Arc;
@@ -7,9 +8,9 @@ use std::sync::Arc;
 pub fn random(
     _ip: &str,
     ups_data: &mut UpstreamData,
-) -> Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+) -> Option<(Option<bool>, bool, Arc<Box<dyn connect::Connect>>)> {
     if ups_data.ups_heartbeats_active.len() <= 0 {
-        return None;
+        return get_connect_data(&ups_data.ups_heartbeats, 0);
     }
 
     let index: usize = rand::thread_rng().gen();
@@ -22,12 +23,12 @@ pub fn random(
         } else {
             let is_proxy_protocol_hello = ups_heartbeats.is_proxy_protocol_hello.clone();
             let connect = ups_heartbeats.connect.clone();
-            return Some((is_proxy_protocol_hello, connect));
+            return Some((is_proxy_protocol_hello, ups_heartbeats.disable, connect));
         }
 
         index = index % ups_data.ups_heartbeats.len();
         if index == start_index {
-            return None;
+            return get_connect_data(&ups_data.ups_heartbeats, 0);
         }
     }
 }

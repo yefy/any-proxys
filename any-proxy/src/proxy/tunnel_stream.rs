@@ -18,7 +18,7 @@ impl TunnelStream {
         tunnel2_publish: Option<tunnel2_server::Publish>,
         server_stream_info: Arc<ServerStreamInfo>,
         mut client_buf_reader: any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>,
-        stream_info: Share<StreamInfo>,
+        stream_info: &Share<StreamInfo>,
         executors: ExecutorsLocal,
     ) -> Result<Option<any_base::io_rb::buf_reader::BufReader<stream_flow::StreamFlow>>> {
         log::debug!(target: "main",

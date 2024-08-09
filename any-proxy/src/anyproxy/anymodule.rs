@@ -20,12 +20,14 @@ use crate::config::net_proxy_pass_upstream;
 use crate::config::net_server;
 use crate::config::net_server_core;
 use crate::config::net_server_core_plugin;
-use crate::config::net_server_echo_http;
-use crate::config::net_server_echo_websocket;
-use crate::config::net_server_proxy_http;
-use crate::config::net_server_proxy_websocket;
-use crate::config::net_server_static_http;
-use crate::config::net_server_static_websocket;
+use crate::config::net_server_http_echo;
+use crate::config::net_server_http_proxy;
+use crate::config::net_server_http_purge;
+use crate::config::net_server_http_static;
+use crate::config::net_server_http_static_test;
+use crate::config::net_server_websocket_echo;
+use crate::config::net_server_websocket_proxy;
+use crate::config::net_server_websocket_static;
 use crate::config::port_core;
 use crate::config::port_listen_quic;
 use crate::config::port_listen_ssl;
@@ -99,12 +101,15 @@ pub fn add_modules() -> Result<()> {
     module::add_module(port_listen_ssl::module())?;
     module::add_module(port_listen_quic::module())?;
 
-    module::add_module(net_server_echo_http::module())?;
-    module::add_module(net_server_proxy_http::module())?;
-    module::add_module(net_server_static_http::module())?;
-    module::add_module(net_server_proxy_websocket::module())?;
-    module::add_module(net_server_echo_websocket::module())?;
-    module::add_module(net_server_static_websocket::module())?;
+    module::add_module(net_server_http_echo::module())?;
+    module::add_module(net_server_http_purge::module())?;
+    module::add_module(net_server_http_proxy::module())?;
+    module::add_module(net_server_http_static_test::module())?;
+    module::add_module(net_server_http_static::module())?;
+
+    module::add_module(net_server_websocket_proxy::module())?;
+    module::add_module(net_server_websocket_echo::module())?;
+    module::add_module(net_server_websocket_static::module())?;
 
     module::add_module(net_proxy_pass_tcp::module())?;
     module::add_module(net_proxy_pass_ssl::module())?;
@@ -129,8 +134,6 @@ pub fn add_modules() -> Result<()> {
 
     use crate::config::net_server_stream_test;
     module::add_module(net_server_stream_test::module())?;
-    use crate::config::net_server_static_http_test;
-    module::add_module(net_server_static_http_test::module())?;
 
     use crate::config::net_core_proxy;
     module::add_module(net_core_proxy::module())?;
@@ -147,10 +150,10 @@ pub fn add_modules() -> Result<()> {
     module::add_module(http_filter_header_start::module())?;
     use crate::config::http_filter::http_filter_headers_pre;
     module::add_module(http_filter_headers_pre::module())?;
-    use crate::config::http_filter::http_filter_header_parse;
-    module::add_module(http_filter_header_parse::module())?;
     use crate::config::http_filter::http_filter_header_not_modified;
     module::add_module(http_filter_header_not_modified::module())?;
+    use crate::config::http_filter::http_filter_header_parse;
+    module::add_module(http_filter_header_parse::module())?;
     use crate::config::http_filter::http_filter_header_range;
     module::add_module(http_filter_header_range::module())?;
     use crate::config::http_filter::http_filter_headers;
@@ -162,6 +165,12 @@ pub fn add_modules() -> Result<()> {
     module::add_module(http_filter_body_start::module())?;
     use crate::config::http_filter::http_filter_body_range;
     module::add_module(http_filter_body_range::module())?;
+
+    use crate::config::net_server_http;
+    module::add_module(net_server_http::module())?;
+
+    use crate::config::net_server_websocket;
+    module::add_module(net_server_websocket::module())?;
 
     Ok(())
 }

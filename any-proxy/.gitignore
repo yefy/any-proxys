@@ -38,10 +38,10 @@ tmp
 *.d
 *.o
 vmlinux.h
-any-proxy/examples/anyproxy/anyproxy.exe
-any-proxy/examples/anyproxy/anyproxy
-any-proxy/examples/anyproxy/tokio_proxy.exe
-any-proxy/examples/anyproxy/tokio_proxy
+any-example/anyproxy/anyproxy.exe
+any-example/anyproxy/anyproxy
+any-example/anyproxy/tokio_proxy.exe
+any-example/anyproxy/tokio_proxy
 .output
 *.tmp
 *.err

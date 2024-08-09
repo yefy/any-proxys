@@ -16,7 +16,7 @@ impl UpstreamDynamicDomainServer {
     pub fn spawn_local(executors: ExecutorsLocal, ups_data: ShareRw<UpstreamData>, index: usize) {
         executors._start(
             #[cfg(feature = "anyspawn-count")]
-            None,
+            Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
                 let dynamic_domain_server =
                     UpstreamDynamicDomainServer::new(executors, ups_data, index)

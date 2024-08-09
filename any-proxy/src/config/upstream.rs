@@ -40,7 +40,11 @@ lazy_static! {
         ),
         init_master_thread: None,
         init_work_thread: None,
-        drop_conf: None,
+        drop_conf: Some(|ms, parent_conf, child_conf| Box::pin(drop_conf(
+            ms,
+            parent_conf,
+            child_conf
+        ))),
     });
 }
 
@@ -146,6 +150,18 @@ async fn init_conf(
     let _upstream_confs = {
         let conf = conf.get_mut::<Conf>();
         conf.upstream_confs.clone()
+    };
+    return Ok(());
+}
+
+async fn drop_conf(
+    _ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let _upstream_confs = {
+        let conf = conf.get_mut::<Conf>();
+        conf.upstream_confs.clear()
     };
     return Ok(());
 }
@@ -384,7 +400,50 @@ async fn init_work_thread_confs(
     Ok(())
 }
 
-async fn drop_confs(_ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+async fn drop_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+    let main_index = M.get().main_index;
+    if main_index < 0 {
+        panic!("main_index:{}", main_index)
+    }
+    let main_confs = conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
+    let upstream_main_conf = main_confs[main_index as usize].clone();
+    let upstream_confs = upstream_main_conf
+        .get_mut::<Vec<typ::ArcUnsafeAny>>()
+        .clone();
+    for module in ms.get_modules() {
+        let (typ, ctx_index, func, name, main_index) = {
+            let module_ = &*module.get();
+            (
+                module_.typ,
+                module_.ctx_index,
+                module_.func.clone(),
+                module_.name.clone(),
+                module_.main_index,
+            )
+        };
+        if typ & conf::MODULE_TYPE_UPSTREAM == 0 {
+            continue;
+        }
+        log::trace!(target: "main",
+                    "upstream init_work_thread name:{}, typ:{}, main_index:{}, ctx_index:{}",
+                    name,
+                    typ,
+                    main_index,
+                    ctx_index
+        );
+
+        if func.drop_conf.is_none() {
+            continue;
+        }
+        let drop_conf = func.drop_conf.as_ref().unwrap();
+        (drop_conf)(
+            ms.clone(),
+            conf.clone(),
+            upstream_confs[ctx_index as usize].clone(),
+        )
+        .await?;
+    }
+
     let main_index = M.get().main_index;
     if main_index < 0 {
         panic!("main_index:{}", main_index)
@@ -403,6 +462,7 @@ async fn drop_confs(_ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()>
         let upstream_conf = upstream_confs[ctx_index as usize].get_mut::<Conf>();
         upstream_conf.upstream_confs.clear();
     }
+
     Ok(())
 }
 

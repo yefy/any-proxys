@@ -39,8 +39,11 @@ pub struct UpstreamHeartbeatData {
     )>,
 }
 use crate::config::upstream_core;
+use crate::config::upstream_core::GetConnectI;
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
-use any_base::typ::ShareRw;
+use crate::proxy::stream_info::StreamInfo;
+use any_base::module::module::Modules;
+use any_base::typ::{Share, ShareRw};
 use any_base::util::ArcString;
 
 pub struct UpstreamDynamicDomainData {
@@ -84,10 +87,28 @@ impl UpstreamData {
         ip: &str,
     ) -> Result<(
         ArcString,
-        Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)>,
+        Option<(Option<bool>, bool, Arc<Box<dyn connect::Connect>>)>,
     )> {
         let plugin_handle_balancer = self.ups_config.plugin_handle_balancer.as_ref().unwrap();
         let connect_info = (plugin_handle_balancer)(ip, self);
         Ok((self.ups_config.balancer.clone(), connect_info))
+    }
+}
+
+pub struct UpstreamVarAddr {
+    pub ups_connect: Arc<Box<dyn GetConnectI>>,
+}
+
+impl UpstreamVarAddr {
+    pub fn new(ups_connect: Arc<Box<dyn GetConnectI>>) -> UpstreamVarAddr {
+        UpstreamVarAddr { ups_connect }
+    }
+
+    pub async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        self.ups_connect.get_connect(ms, stream_info).await
     }
 }

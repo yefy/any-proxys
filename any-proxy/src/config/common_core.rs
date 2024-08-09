@@ -3,15 +3,18 @@ use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
 use anyhow::Result;
+use chrono::Local;
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 lazy_static! {
-    pub static ref SESSION_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(100000));
+    pub static ref SESSION_ID: Arc<AtomicU64> =
+        Arc::new(AtomicU64::new(Local::now().timestamp() as u64));
 }
 lazy_static! {
-    pub static ref TMPFILE_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(123456));
+    pub static ref TMPFILE_ID: Arc<AtomicU64> =
+        Arc::new(AtomicU64::new(Local::now().timestamp() as u64));
 }
 
 pub fn get_session_id() -> u64 {

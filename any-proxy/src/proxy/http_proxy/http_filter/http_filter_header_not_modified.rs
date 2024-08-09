@@ -1,4 +1,5 @@
 use crate::config::net_core_plugin::PluginHttpFilter;
+use crate::proxy::http_proxy::http_header_parse::{e_tag, last_modified};
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use any_base::typ::ArcRwLockTokio;
 use anyhow::anyhow;
@@ -35,20 +36,17 @@ fn get_if_unmodified_since(headers: &HeaderMap) -> Option<SystemTime> {
     None
 }
 
-fn parse_if_unmodified_since(r: &HttpStreamRequest) -> Result<()> {
-    let r_ctx = &mut *r.ctx.get_mut();
-    let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-    let if_unmodified_since = get_if_unmodified_since(&r_ctx.r_in.headers);
+fn parse_if_unmodified_since(r: &HttpStreamRequest, last_modified_time: u64) -> Result<()> {
+    let rctx = &mut *r.ctx.get_mut();
+    let if_unmodified_since = get_if_unmodified_since(&rctx.r_in.headers);
     if if_unmodified_since.is_some() {
         let if_unmodified_since = if_unmodified_since.unwrap();
         let if_unmodified_since = if_unmodified_since
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        if response_info.last_modified_time <= 0
-            || if_unmodified_since < response_info.last_modified_time
-        {
-            r_ctx.r_out.status = StatusCode::PRECONDITION_FAILED;
+        if last_modified_time <= 0 || if_unmodified_since < last_modified_time {
+            rctx.r_out.status = StatusCode::PRECONDITION_FAILED;
             return Err(anyhow!(""));
         }
     }
@@ -89,26 +87,25 @@ fn get_etag(headers: &HeaderMap, key: &HeaderName, is_weak: bool) -> Option<Vec<
     None
 }
 
-fn parse_if_match(r: &HttpStreamRequest) -> Result<()> {
-    let r_ctx = &mut *r.ctx.get_mut();
-    let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-    let if_match = get_etag(&r_ctx.r_in.headers, &IF_MATCH, false);
+fn parse_if_match(r: &HttpStreamRequest, e_tag: &http::HeaderValue) -> Result<()> {
+    let rctx = &mut *r.ctx.get_mut();
+    let if_match = get_etag(&rctx.r_in.headers, &IF_MATCH, false);
     if if_match.is_some() {
         let if_match = if_match.unwrap();
         if if_match.len() == 1 && if_match[0] == "*" {
             return Ok(());
         }
-        if response_info.e_tag.is_empty() {
-            r_ctx.r_out.status = StatusCode::PRECONDITION_FAILED;
+        if e_tag.is_empty() {
+            rctx.r_out.status = StatusCode::PRECONDITION_FAILED;
             return Err(anyhow!(""));
         }
 
         for v in &if_match {
-            if v == &response_info.e_tag {
+            if v.as_bytes() == e_tag.as_bytes() {
                 return Ok(());
             }
         }
-        r_ctx.r_out.status = StatusCode::PRECONDITION_FAILED;
+        rctx.r_out.status = StatusCode::PRECONDITION_FAILED;
         return Err(anyhow!(""));
     }
     return Ok(());
@@ -125,17 +122,16 @@ fn get_if_modified_since(headers: &HeaderMap) -> Option<SystemTime> {
     None
 }
 
-fn parse_if_modified_since(r: &HttpStreamRequest) -> Option<bool> {
-    let r_ctx = r.ctx.get_mut();
-    let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-    let if_modified_since = get_if_modified_since(&r_ctx.r_in.headers);
+fn parse_if_modified_since(r: &HttpStreamRequest, last_modified_time: u64) -> Option<bool> {
+    let rctx = r.ctx.get_mut();
+    let if_modified_since = get_if_modified_since(&rctx.r_in.headers);
     if if_modified_since.is_some() {
         let if_modified_since = if_modified_since.unwrap();
         let if_modified_since = if_modified_since
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        if if_modified_since >= response_info.last_modified_time {
+        if if_modified_since >= last_modified_time {
             return Some(false);
         }
         return Some(true);
@@ -143,21 +139,20 @@ fn parse_if_modified_since(r: &HttpStreamRequest) -> Option<bool> {
     return None;
 }
 
-fn parse_if_none_match(r: &HttpStreamRequest) -> Option<bool> {
-    let r_ctx = r.ctx.get_mut();
-    let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-    let if_none_match = get_etag(&r_ctx.r_in.headers, &IF_NONE_MATCH, true);
+fn parse_if_none_match(r: &HttpStreamRequest, e_tag: &http::HeaderValue) -> Option<bool> {
+    let rctx = r.ctx.get_mut();
+    let if_none_match = get_etag(&rctx.r_in.headers, &IF_NONE_MATCH, true);
     if if_none_match.is_some() {
         let if_none_match = if_none_match.unwrap();
         if if_none_match.len() == 1 && if_none_match[0] == "*" {
             return Some(true);
         }
-        if response_info.e_tag.is_empty() {
+        if e_tag.is_empty() {
             return Some(false);
         }
 
         for v in &if_none_match {
-            if v == &response_info.e_tag {
+            if v.as_bytes() == e_tag.as_bytes() {
                 return Some(true);
             }
         }
@@ -167,7 +162,7 @@ fn parse_if_none_match(r: &HttpStreamRequest) -> Option<bool> {
 }
 
 pub async fn http_filter_header_not_modified(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!(target: "main",
+    log::trace!(target: "ext2",
         "r.session_id:{}, http_filter_header_not_modified",
         r.session_id
     );
@@ -180,13 +175,29 @@ pub async fn http_filter_header_not_modified(r: Arc<HttpStreamRequest>) -> Resul
 }
 
 pub async fn do_http_filter_header_not_modified(r: &HttpStreamRequest) -> Result<()> {
-    parse_if_unmodified_since(&r)?;
-    parse_if_match(&r)?;
+    if !r.ctx.get().is_request_cache {
+        return Ok(());
+    }
 
-    let if_modified_since = parse_if_modified_since(&r);
-    let if_none_match = parse_if_none_match(&r);
+    let (e_tag, last_modified_time) = {
+        let rctx = &mut *r.ctx.get_mut();
+        if !rctx.r_out.status.is_success() {
+            return Ok(());
+        }
 
-    let mut r_ctx = r.ctx.get_mut();
+        let e_tag = e_tag(&rctx.r_out.headers).map_err(|e| anyhow!("err:e_tag =>e:{}", e))?;
+        let (_, last_modified_time) = last_modified(&rctx.r_out.headers)
+            .map_err(|e| anyhow!("err:last_modified =>e:{}", e))?;
+        (e_tag, last_modified_time)
+    };
+
+    parse_if_unmodified_since(&r, last_modified_time)?;
+    parse_if_match(&r, &e_tag)?;
+
+    let if_modified_since = parse_if_modified_since(&r, last_modified_time);
+    let if_none_match = parse_if_none_match(&r, &e_tag);
+
+    let mut rctx = r.ctx.get_mut();
     if if_modified_since.is_some() || if_none_match.is_some() {
         if if_modified_since.is_some() && if_modified_since.unwrap() == true {
             return Ok(());
@@ -195,7 +206,7 @@ pub async fn do_http_filter_header_not_modified(r: &HttpStreamRequest) -> Result
             return Ok(());
         }
 
-        r_ctx.r_out.status = StatusCode::NOT_MODIFIED;
+        rctx.r_out.status = StatusCode::NOT_MODIFIED;
         return Err(anyhow!(""));
     }
     return Ok(());

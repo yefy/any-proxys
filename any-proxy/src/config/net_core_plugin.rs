@@ -1,15 +1,17 @@
 use crate::config as conf;
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::stream_info::StreamInfo;
-use crate::proxy::{StreamStatus, StreamStreamShare};
+use crate::proxy::{ServerArg, StreamStatus, StreamStreamShare};
 use any_base::module::module;
+use any_base::stream_flow::StreamFlow;
 use any_base::typ;
-use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny, Share};
+use any_base::typ::{ArcMutex, ArcRwLockTokio, ArcUnsafeAny, Share};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_tungstenite::WebSocketStream;
 
 pub type IsPluginHandleAccess =
     fn(Share<StreamInfo>) -> Pin<Box<dyn Future<Output = Result<bool>> + Send>>;
@@ -38,6 +40,15 @@ pub type PluginHttpIn =
 pub type PluginHttpInSet =
     fn(plugin: PluginHttpIn) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
+pub type PluginHandleHttp =
+    fn(Arc<HttpStreamRequest>) -> Pin<Box<dyn Future<Output = Result<crate::Error>> + Send>>;
+
+use any_base::io::buf_stream::BufStream;
+pub type PluginHandleWebsocket = fn(
+    arg: ServerArg,
+    client_stream: ArcMutex<WebSocketStream<BufStream<StreamFlow>>>,
+) -> Pin<Box<dyn Future<Output = Result<crate::Error>> + Send>>;
+
 pub struct Conf {
     pub plugin_handle_access: ArcRwLockTokio<Vec<PluginHandleAccess>>,
     pub is_plugin_handle_serverless: ArcRwLockTokio<Vec<IsPluginHandleAccess>>,
@@ -54,6 +65,9 @@ pub struct Conf {
     pub plugin_http_header_filter_set: ArcRwLockTokio<PluginHttpFilterSet>,
     pub plugin_http_body_filter: ArcRwLockTokio<PluginHttpFilter>,
     pub plugin_http_body_filter_set: ArcRwLockTokio<PluginHttpFilterSet>,
+
+    pub plugin_handle_http: ArcRwLockTokio<Vec<PluginHandleHttp>>,
+    pub plugin_handle_websocket: ArcRwLockTokio<Vec<PluginHandleWebsocket>>,
 }
 
 impl Conf {
@@ -74,6 +88,8 @@ impl Conf {
             plugin_http_header_filter_set: ArcRwLockTokio::default(),
             plugin_http_body_filter: ArcRwLockTokio::default(),
             plugin_http_body_filter_set: ArcRwLockTokio::default(),
+            plugin_handle_http: ArcRwLockTokio::new(Vec::new()),
+            plugin_handle_websocket: ArcRwLockTokio::new(Vec::new()),
         }
     }
 }

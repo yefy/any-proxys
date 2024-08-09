@@ -20,6 +20,8 @@ use crate::common::{task, Pin, Poll};
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::stream_flow::StreamReadWriteFlow;
 use any_base::util::HttpHeaderExt;
+use std::sync::atomic::{Ordering, AtomicI64};
+use std::sync::Arc;
 
 /// The initial buffer size allocated before trying to read from IO.
 pub(crate) const INIT_BUFFER_SIZE: usize = 8192;
@@ -50,6 +52,7 @@ pub(crate) struct Buffered<T, B> {
     #[cfg(unix)]
     is_set_tcp_nopush: bool,
     header_ext: HttpHeaderExt,
+    resp_header_ext: Option<HttpHeaderExt>,
 }
 
 impl<T, B> fmt::Debug for Buffered<T, B>
@@ -98,7 +101,8 @@ where
             buf_file: MsgReadBufFile::default(),
             #[cfg(unix)]
             is_set_tcp_nopush: false,
-            header_ext: HttpHeaderExt::new(),
+            header_ext: HttpHeaderExt::new(Arc::new(AtomicI64::new(0))),
+            resp_header_ext: None,
         }
     }
 
@@ -119,6 +123,10 @@ where
         );
         self.read_buf_strategy = ReadStrategy::with_max(max);
         self.write_buf.max_buf_size = max;
+    }
+
+    pub(crate) fn set_resp_header_ext(&mut self, resp_header_ext: HttpHeaderExt) {
+        self.resp_header_ext = Some(resp_header_ext);
     }
 
     #[cfg(feature = "client")]
@@ -379,6 +387,11 @@ where
                                 Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size)
                             )?;
 
+                            if self.resp_header_ext.is_some() {
+                                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                                resp_header_ext.hyper_http_sent_bytes.fetch_add(size as i64, Ordering::Relaxed);
+                            }
+
                             self.buf_file.advance(size);
                             self.write_buf.advance(size);
                         }
@@ -394,6 +407,11 @@ where
                             ready!(Pin::new(&mut self.io).poll_write_vectored(cx, &iovs[..len]))?;
                         (n, len)
                     };
+
+                    if self.resp_header_ext.is_some() {
+                        let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                        resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
+                    }
 
                     // TODO(eliza): we have to do this manually because
                     // `poll_write_buf` doesn't exist in Tokio 0.3 yet...when
@@ -445,6 +463,11 @@ where
                         let size =
                             ready!(Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size))?;
 
+                        if self.resp_header_ext.is_some() {
+                            let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                            resp_header_ext.hyper_http_sent_bytes.fetch_add(size as i64, Ordering::Relaxed);
+                        }
+
                         self.buf_file.advance(size);
                         self.write_buf.advance(size);
                     }
@@ -462,6 +485,11 @@ where
                     let len = self.write_buf.chunks_vectored(&mut iovs);
                     ready!(Pin::new(&mut self.io).poll_write_vectored(cx, &iovs[..len]))?
                 };
+
+                if self.resp_header_ext.is_some() {
+                    let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                    resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
+                }
 
                 // TODO(eliza): we have to do this manually because
                 // `poll_write_buf` doesn't exist in Tokio 0.3 yet...when
@@ -489,6 +517,11 @@ where
     fn poll_flush_flattened(&mut self, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         loop {
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.headers.chunk()))?;
+            if self.resp_header_ext.is_some() {
+                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
+            }
+
             debug!("flushed {} bytes", n);
             self.write_buf.headers.advance(n);
             if self.write_buf.headers.remaining() == 0 {
@@ -520,6 +553,11 @@ where
                 break;
             }
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.headers.chunk()))?;
+            if self.resp_header_ext.is_some() {
+                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
+            }
+
             debug!("flushed {} bytes", n);
             self.write_buf.headers.advance(n);
             if self.write_buf.headers.remaining() == 0 {
@@ -543,6 +581,11 @@ where
                 break;
             }
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.cache.chunk()))?;
+            if self.resp_header_ext.is_some() {
+                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
+                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
+            }
+
             debug!("flushed {} bytes", n);
             self.write_buf.cache.advance(n);
             self.write_buf.advance(n);

@@ -1,15 +1,26 @@
 use crate::config as conf;
 use crate::config::config_toml::{ProxyPassTcp, UpstreamHeartbeat, UpstreamHeartbeatHttp};
 use crate::config::upstream_block;
+use crate::config::upstream_core;
+use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
+use crate::proxy::stream_info::StreamInfo;
 use crate::stream::connect;
 use crate::tcp::connect as tcp_connect;
 use crate::upstream::UpstreamHeartbeatData;
+use crate::util::util::host_and_port;
+use crate::util::var::Var;
+use any_base::executor_local_spawn::ThreadRuntime;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcUnsafeAny, ShareRw};
+use any_base::typ::{ArcUnsafeAny, Share, ShareRw};
+use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
+use async_trait::async_trait;
+use http::HeaderValue;
 use lazy_static::lazy_static;
+use module::Modules;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -168,10 +179,6 @@ async fn proxy_pass_tcp(
     return Ok(());
 }
 
-use crate::config::upstream_core;
-use module::Modules;
-use std::net::SocketAddr;
-
 pub struct Heartbeat {
     tcp: ProxyPassTcp,
 }
@@ -181,13 +188,6 @@ impl Heartbeat {
         Heartbeat { tcp }
     }
 }
-
-use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
-use crate::util::util::host_and_port;
-use any_base::executor_local_spawn::ThreadRuntime;
-use any_base::util::ArcString;
-use async_trait::async_trait;
-use http::HeaderValue;
 
 #[async_trait]
 impl upstream_core::HeartbeatI for Heartbeat {
@@ -267,6 +267,75 @@ impl upstream_core::HeartbeatI for Heartbeat {
         };
 
         Ok(ShareRw::new(ups_heartbeat))
+    }
+}
+
+pub struct UpstreamTcp {
+    address_vars: Option<Var>,
+    tcp: ProxyPassTcp,
+}
+
+impl UpstreamTcp {
+    pub fn new(address_vars: Option<Var>, tcp: ProxyPassTcp) -> Self {
+        UpstreamTcp { address_vars, tcp }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamTcp {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.tcp.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.tcp.dynamic_domain.is_some() {
+            self.tcp.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_tcp;
+        let upstream_tcp_conf = socket_tcp::main_conf(ms).await;
+        let tcp_config_name = &self.tcp.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
+        if tcp_config.is_none() {
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
+        }
+        let connect = Box::new(tcp_connect::Connect::new(
+            address.into(),
+            addr.clone(),
+            tcp_config.unwrap(),
+        ));
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.tcp.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
     }
 }
 

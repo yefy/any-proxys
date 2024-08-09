@@ -115,6 +115,8 @@ impl server::Connection for Connection {
                 domain: None,
                 is_tls: self.is_tls,
                 raw_fd,
+                listen_shutdown_tx: None.into(),
+                listen_worker: None.into(),
             },
         )))
     }

@@ -399,6 +399,8 @@ impl Deref for ArcString {
     }
 }
 use std::fmt;
+use std::sync::atomic::AtomicI64;
+
 impl fmt::Debug for ArcString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Drain").field(&self.as_str()).finish()
@@ -504,10 +506,13 @@ pub fn buf_split_once<'a>(data: &'a [u8], pattern: &[u8]) -> Option<(&'a [u8], &
 #[derive(Clone)]
 pub struct HttpHeaderExt {
     //pub file_ext: ArcRwLock<HashMap<i32, ArcRwLock<FileExt>>>,
+    pub hyper_http_sent_bytes: Arc<AtomicI64>,
 }
 
 impl HttpHeaderExt {
-    pub fn new() -> Self {
-        HttpHeaderExt {}
+    pub fn new(hyper_http_sent_bytes: Arc<AtomicI64>) -> Self {
+        HttpHeaderExt {
+            hyper_http_sent_bytes,
+        }
     }
 }

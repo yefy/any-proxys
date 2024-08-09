@@ -288,11 +288,12 @@ impl<T> ArcMutex<T> {
         Arc::strong_count(&self.d)
     }
 
-    pub fn set_nil(&self) {
+    pub fn set_nil(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        *lock = None;
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
+        data
     }
 
     pub fn is_none(&self) -> bool {
@@ -435,11 +436,16 @@ impl<T> ArcMutexBox<T> {
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.d)
     }
-    pub fn set_nil(&self) {
+    pub fn set_nil(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        *lock = None;
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
+        if data.is_some() {
+            Some(*data.unwrap())
+        } else {
+            None
+        }
     }
 
     pub fn is_none(&self) -> bool {
@@ -680,11 +686,12 @@ impl<T> ArcRwLock<T> {
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.d)
     }
-    pub fn set_nil(&self) {
+    pub fn set_nil(&self) -> Option<T> {
         let mut lock = self.get_write_lock();
-        *lock = None;
+        let data = lock.take();
         #[cfg(any(debug_assertions, feature = "anylock-time"))]
         del_write_lock(&self.info);
+        data
     }
     pub fn is_none(&self) -> bool {
         let lock = self.get_read_lock();

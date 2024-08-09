@@ -320,8 +320,9 @@ pub fn sni_openssl(listens: &Vec<config_toml::Listen>) -> Result<util::openssl::
 
     let domain_index = util::domain_index::DomainIndex::new(&index_map)
         .map_err(|e| anyhow!("err:domain_index::DomainIndex => e:{}", e))?;
-    let sni_openssl = util::openssl::OpensslSni::new(&sni_contexts, domain_index, "")
-        .map_err(|e| anyhow!("err:OpensslSni => e:{}", e))?;
+    let sni_openssl =
+        util::openssl::OpensslSni::new(&sni_contexts, domain_index, util::openssl::PROTOCOL)
+            .map_err(|e| anyhow!("err:OpensslSni => e:{}", e))?;
 
     Ok(sni_openssl)
 }

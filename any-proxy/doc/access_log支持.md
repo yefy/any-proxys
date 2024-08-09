@@ -24,7 +24,8 @@ net {
                 http_local_cache_req_count:${http_local_cache_req_count} http_cache_status:${http_cache_status} \
                 http_cache_file_status:${http_cache_file_status} http_is_upstream:${http_is_upstream} \
                 http_last_slice_upstream_index:${http_last_slice_upstream_index} \
-                http_max_upstream_count:${http_max_upstream_count} http_is_cache:${http_is_cache}"""
+                http_max_upstream_count:${http_max_upstream_count} http_is_cache:${http_is_cache} \
+                http_request_url:${http_request_method}@${http_request_url} http_cache_file_path:${http_cache_file_path}"""
 
             #是否打印到屏幕，调试用， default false
             access_log_stdout = false

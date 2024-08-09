@@ -15,7 +15,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const ANYPROXY_MAX_HEADER_SIZE: usize = 4096;
-pub const ANYPROXY_FLAG: &'static str = "$${anyproxy}";
+pub const ANYPROXY_FLAG: &'static str = "${4anyproxy}";
 pub const ANYPROXY_VERSION: &'static str = "anyproxy.0.1.0";
 
 //ANYPROXY_FLAG AnyproxyHeaderSize_u16 AnyproxyHeader AnyproxyHello
@@ -246,15 +246,31 @@ pub async fn read_pack<R: AsyncRead + Unpin>(
     let mut pack_size = 0;
     let mut slice = [0u8; ANYPROXY_MAX_HEADER_SIZE];
     let flag_slice = &mut slice[..ANYPROXY_FLAG.len() as usize];
-    buf_reader
-        .read_exact(flag_slice)
-        .await
-        .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
-    pack_size += flag_slice.len();
-    let flag_str = String::from_utf8_lossy(flag_slice);
-    if ANYPROXY_FLAG != &flag_str {
-        return Ok(None);
+    let mut read_size = 0;
+    loop {
+        if read_size == flag_slice.len() {
+            break;
+        }
+        read_size += buf_reader
+            .read(&mut flag_slice[read_size..])
+            .await
+            .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
+        let flag_str = String::from_utf8_lossy(&flag_slice[0..read_size]);
+        if &ANYPROXY_FLAG[0..read_size] != &flag_str {
+            return Ok(None);
+        }
     }
+    pack_size += read_size;
+
+    // buf_reader
+    //     .read_exact(flag_slice)
+    //     .await
+    //     .map_err(|e| anyhow!("err:buf_reader.read_exact => e:{}", e))?;
+    // pack_size += flag_slice.len();
+    // let flag_str = String::from_utf8_lossy(flag_slice);
+    // if ANYPROXY_FLAG != &flag_str {
+    //     return Ok(None);
+    // }
 
     let header_size = buf_reader
         .read_u16()

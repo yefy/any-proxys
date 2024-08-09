@@ -23,6 +23,8 @@ lazy_static! {
         ArcMutex::new(cache::SessionCache::new());
 }
 
+pub const PROTOCOL: &[u8] = b"\x02h2\x08http/1.1";
+
 pub fn session_cache() -> ArcMutex<cache::SessionCache> {
     SESSION_CACHE.clone()
 }
@@ -44,7 +46,7 @@ impl OpensslSni {
     pub fn new(
         ctxs: &Vec<SniContext>,
         domain_index: DomainIndex,
-        prototol: &str,
+        protocol: &[u8],
     ) -> Result<OpensslSni> {
         let mut sni_map = HashMap::new();
 
@@ -71,13 +73,10 @@ impl OpensslSni {
                 .set_certificate_chain_file(&ssl.cert)
                 .map_err(|e| anyhow!("err:ssl_context.set_certificate_chain_file => e:{}", e))?;
 
-            if prototol.len() > 0 {
-                let prototol = prototol.to_string();
+            if protocol.len() > 0 {
+                let protocol = protocol.to_vec();
                 ssl_context.set_alpn_select_callback(move |_, client| {
-                    //ssl::select_next_proto(b"\x02h2", client).ok_or(AlpnError::NOACK)
-                    //ssl::select_next_proto(b"\x02h2\x08http/1.1", client).ok_or(AlpnError::NOACK)
-                    //ssl.set_alpn_protos(b"\x02h2\x08http/1.1")?;
-                    ssl::select_next_proto(prototol.as_bytes(), client).ok_or(AlpnError::NOACK)
+                    ssl::select_next_proto(protocol.as_ref(), client).ok_or(AlpnError::NOACK)
                 });
             }
 
@@ -105,7 +104,7 @@ impl OpensslSni {
     }
 
     ///openssl 加密accept
-    pub fn tls_acceptor(&self, prototol: &[u8]) -> Result<Arc<SslAcceptor>> {
+    pub fn tls_acceptor(&self, protocol: &[u8]) -> Result<Arc<SslAcceptor>> {
         let sni_map = self.sni_map.clone();
         let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::tls())
             .map_err(|e| anyhow!("err:SslAcceptor::mozilla_modern => e:{}", e))?;
@@ -115,13 +114,11 @@ impl OpensslSni {
         acceptor
             .set_private_key_file(self.default_key.get().as_str(), SslFiletype::PEM)
             .map_err(|e| anyhow!("err:set_private_key_file => e:{}", e))?;
-        if prototol.len() > 0 {
-            let prototol = prototol.to_vec();
+
+        if false && protocol.len() > 0 {
+            let protocol = protocol.to_vec();
             acceptor.set_alpn_select_callback(move |_, client| {
-                //ssl::select_next_proto(b"\x02h2", client).ok_or(AlpnError::NOACK)
-                //ssl::select_next_proto(b"\x02h2\x08http/1.1", client).ok_or(AlpnError::NOACK)
-                //ssl.set_alpn_protos(b"\x02h2\x08http/1.1")?;
-                ssl::select_next_proto(&prototol, client).ok_or(AlpnError::NOACK)
+                ssl::select_next_proto(&protocol, client).ok_or(AlpnError::NOACK)
             });
         }
 

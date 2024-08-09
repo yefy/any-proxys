@@ -9,6 +9,7 @@ use crate::body::{Body, DecodedLength, HttpBody};
 use crate::common::{task, Future, Pin, Poll, Unpin};
 use crate::proto::{BodyLength, Conn, Dispatched, MessageHead, RequestHead};
 use crate::upgrade::OnUpgrade;
+use crate::AnyProxyRawHttpHeaderExt;
 use any_base::io::async_write_msg::MsgWriteBuf;
 use any_base::stream_flow::StreamReadWriteFlow;
 
@@ -300,6 +301,11 @@ where
             {
                 if let Some(msg) = ready!(Pin::new(&mut self.dispatch).poll_msg(cx)) {
                     let (head, mut body) = msg.map_err(crate::Error::new_user_service)?;
+                    let resp_header_ext = head.extensions.get::<AnyProxyRawHttpHeaderExt>();
+                    if resp_header_ext.is_some() {
+                        let resp_header_ext = resp_header_ext.unwrap();
+                        self.conn.set_resp_header_ext(resp_header_ext.0 .0.clone());
+                    }
 
                     // Check if the body knows its full data immediately.
                     //

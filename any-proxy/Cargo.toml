@@ -40,6 +40,7 @@ anydebug = []
 anyerror = []
 anyspawn-count = []
 anyio-file = []
+anylock-time =[]
 
 
 
@@ -57,7 +58,7 @@ strip = false
 #rpath = false
 
 [profile.release]
-debug = false
+debug = true
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常
@@ -92,6 +93,8 @@ core_affinity = "0.7.6"
 scopeguard = "1.1.0"
 toml = "0.5.10"
 serde = "1.0.152"
+#console-subscriber = "0.2.0"
+#tokio = { version = "1.35.1", features = ["full", "tracing"], default-features = false}
 tokio = { version = "1.35.1", features = ["full"], default-features = false}
 async-trait = "0.1.61"
 regex = "1.10.2"
@@ -103,7 +106,7 @@ pin-project-lite = "0.2.9"
 chrono = "0.4.23"
 rand = "0.8.5"
 structopt = "0.3.26"
-async-channel = "2.1.1"
+async-channel = "1.8.0"
 serde_json = "1.0.91"
 reqwest = "0.11.13"
 rustls = { version = "0.20", default-features = false, features = ["quic", "dangerous_configuration"]}

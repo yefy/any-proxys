@@ -97,7 +97,10 @@ impl server::Listener for Listener {
     async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         let ret: Result<(TcpStream, SocketAddr)> = async {
             match self.listener.accept().await {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => {
+                    log::debug!(target: "ext3", "ssl accept");
+                    return Ok(stream);
+                }
                 Err(e) => {
                     return Err(anyhow!(
                         "err:Listener.accept => kind:{:?}, e:{}",
@@ -160,7 +163,7 @@ impl server::Connection for Connection {
             let tls_acceptor = self
                 .sni
                 .sni_openssl
-                .tls_acceptor(b"\x02h2\x08http/1.1")
+                .tls_acceptor(util::openssl::PROTOCOL)
                 .map_err(|e| anyhow!("err:sni_openssl.tls_acceptor => e:{}", e))?;
             let mut ssl =
                 Ssl::new(tls_acceptor.context()).map_err(|e| anyhow!("err:Ssl::new => e:{}", e))?;
@@ -217,6 +220,8 @@ impl server::Connection for Connection {
                     domain: Some(domain.into()),
                     is_tls: true,
                     raw_fd,
+                    listen_shutdown_tx: None.into(),
+                    listen_worker: None.into(),
                 },
             )))
         }
@@ -225,7 +230,7 @@ impl server::Connection for Connection {
         {
             let tls_acceptor = util::rustls::tls_acceptor(
                 self.sni.sni_rustls.clone(),
-                vec![b"http/1.1".to_vec(), b"h2".to_vec()],
+                util::rustls::get_protocols(),
             );
             let ssl_stream = tls_acceptor
                 .accept(tcp_stream)
@@ -260,6 +265,8 @@ impl server::Connection for Connection {
                     domain,
                     is_tls: true,
                     raw_fd,
+                    listen_shutdown_tx: None.into(),
+                    listen_worker: None.into(),
                 },
             )))
         }

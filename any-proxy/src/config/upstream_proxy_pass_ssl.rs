@@ -1,15 +1,24 @@
 use crate::config as conf;
+use crate::config::config_toml::ProxyPassSsl;
+use crate::config::config_toml::UpstreamHeartbeat;
+use crate::config::socket_tcp;
 use crate::config::upstream_block;
+use crate::config::upstream_core;
+use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
+use crate::proxy::stream_info::StreamInfo;
+use crate::ssl::connect as ssl_connect;
+use crate::util::var::Var;
 use any_base::module::module;
 use any_base::typ;
+use any_base::typ::Share;
 use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
+use async_trait::async_trait;
 use lazy_static::lazy_static;
+use module::Modules;
+use std::net::SocketAddr;
 use std::sync::Arc;
-
-use crate::config::config_toml::ProxyPassSsl;
-use crate::config::config_toml::UpstreamHeartbeat;
 
 pub struct Conf {}
 
@@ -165,10 +174,6 @@ async fn proxy_pass_ssl(
     return Ok(());
 }
 
-use crate::config::upstream_core;
-use module::Modules;
-use std::net::SocketAddr;
-
 use crate::stream::connect;
 use crate::upstream::UpstreamHeartbeatData;
 use tokio::sync::broadcast;
@@ -183,9 +188,6 @@ impl Heartbeat {
     }
 }
 
-use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
-use async_trait::async_trait;
-
 #[async_trait]
 impl upstream_core::HeartbeatI for Heartbeat {
     async fn heartbeat(
@@ -198,9 +200,6 @@ impl upstream_core::HeartbeatI for Heartbeat {
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
     ) -> Result<ShareRw<UpstreamHeartbeatData>> {
-        use crate::config::socket_tcp;
-        use crate::ssl::connect as ssl_connect;
-
         let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
         let tcp_config_name = &self.ssl.tcp_config_name;
         let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
@@ -268,5 +267,75 @@ impl upstream_core::HeartbeatI for Heartbeat {
         };
 
         Ok(ShareRw::new(ups_heartbeat))
+    }
+}
+
+pub struct UpstreamSsl {
+    address_vars: Option<Var>,
+    ssl: ProxyPassSsl,
+}
+
+impl UpstreamSsl {
+    pub fn new(address_vars: Option<Var>, ssl: ProxyPassSsl) -> Self {
+        UpstreamSsl { address_vars, ssl }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamSsl {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.ssl.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.ssl.dynamic_domain.is_some() {
+            self.ssl.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_tcp;
+        let upstream_tcp_conf = socket_tcp::main_conf(ms).await;
+        let tcp_config_name = &self.ssl.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
+        if tcp_config.is_none() {
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
+        }
+        let connect = Box::new(ssl_connect::Connect::new(
+            address.into(),
+            addr.clone(),
+            self.ssl.ssl_domain.clone(),
+            tcp_config.unwrap(),
+        ));
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.ssl.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
     }
 }

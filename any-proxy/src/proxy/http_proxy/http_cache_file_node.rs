@@ -79,6 +79,7 @@ impl ProxyCacheFileNode {
         response: Response<Body>,
         curr_file_node_version: u64,
         proxy_cache_name: ArcString,
+        _session_id: u64,
     ) -> Result<ProxyCacheFileNode> {
         let _directio = cache_file_info.directio;
         let content_range = &response_info.range;
@@ -107,6 +108,10 @@ impl ProxyCacheFileNode {
         head.extend_from_slice(response_info.expires_time.to_be_bytes().as_slice());
         head.extend_from_slice("\r\n".as_bytes());
 
+        head.extend_from_slice("expires_time_first:".as_bytes());
+        head.extend_from_slice(response_info.expires_time.to_string().as_bytes());
+        head.extend_from_slice("\r\n".as_bytes());
+
         head.extend_from_slice("client_uri:".as_bytes());
         head.extend_from_slice(client_uri.to_string().as_bytes());
         head.extend_from_slice("\r\n".as_bytes());
@@ -132,11 +137,11 @@ impl ProxyCacheFileNode {
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("crc32:".as_bytes());
-        head.extend_from_slice((cache_file_info.crc32 as u64).to_be_bytes().as_slice());
+        head.extend_from_slice(cache_file_info.crc32.to_string().as_bytes());
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("last_modified_time:".as_bytes());
-        head.extend_from_slice(response_info.last_modified_time.to_be_bytes().as_slice());
+        head.extend_from_slice(response_info.last_modified_time.to_string().as_bytes());
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("last_modified:".as_bytes());
@@ -152,13 +157,13 @@ impl ProxyCacheFileNode {
             response_info
                 .range
                 .raw_content_length
-                .to_be_bytes()
-                .as_slice(),
+                .to_string()
+                .as_bytes(),
         );
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("directio:".as_bytes());
-        head.extend_from_slice(_directio.to_be_bytes().as_slice());
+        head.extend_from_slice(_directio.to_string().as_bytes());
         head.extend_from_slice("\r\n".as_bytes());
 
         head.extend_from_slice("trie_url:".as_bytes());

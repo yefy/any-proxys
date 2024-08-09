@@ -4,25 +4,13 @@ use crate::wasm_std;
 use crate::Component;
 
 impl wasm_service::Guest for Component {
-    fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
-        service::wasm_main(config)
-    }
-    fn wasm_main_timeout(config: Option<String>) -> Result<wasm_std::Error, String> {
-        service::wasm_main_timeout(config)
-    }
-    fn wasm_main_ext1(_config: Option<String>) -> Result<wasm_std::Error, String> {
-        loop {
-            wasm_std::sleep(10000 * 1000);
+    fn wasm_main(typ: Option<i64>, config: Option<String>) -> Result<wasm_std::Error, String> {
+        let typ = if typ.is_none() { 0 } else { typ.unwrap() };
+        if typ == 0 {
+            return service::service::wasm_main(config).map_err(|e| e.to_string());
+        } else if typ == 1 {
+            return service::service_timeout::wasm_main(config).map_err(|e| e.to_string());
         }
-    }
-    fn wasm_main_ext2(_config: Option<String>) -> Result<wasm_std::Error, String> {
-        loop {
-            wasm_std::sleep(10000 * 1000);
-        }
-    }
-    fn wasm_main_ext3(_config: Option<String>) -> Result<wasm_std::Error, String> {
-        loop {
-            wasm_std::sleep(10000 * 1000);
-        }
+        return service::service_timeout::wasm_main(config).map_err(|e| e.to_string());
     }
 }

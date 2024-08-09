@@ -28,19 +28,17 @@ pub struct StreamStream {}
 
 impl StreamStream {
     pub async fn connect_and_stream(
-        stream_info: Share<StreamInfo>,
+        stream_info: &Share<StreamInfo>,
         client_buffer: &[u8],
         client_stream: StreamFlow,
     ) -> Result<()> {
-        find_local(stream_info.clone())?;
-        let scc = stream_info.get().scc.clone().unwrap();
+        find_local(&stream_info)?;
+        let scc = stream_info.get().scc.clone();
 
         let (is_proxy_protocol_hello, mut upstream_stream) =
-            proxy_util::upsteam_connect(stream_info.clone(), scc.clone()).await?;
+            proxy_util::upstream_connect(&stream_info, &scc).await?;
 
-        let hello =
-            proxy_util::get_proxy_hello(is_proxy_protocol_hello, stream_info.clone(), scc.clone())
-                .await;
+        let hello = proxy_util::get_proxy_hello(is_proxy_protocol_hello, &stream_info, &scc).await;
 
         // if hello.is_some() {
         //     stream_info.get_mut().protocol_hello_size = protopack::anyproxy::write_pack(
@@ -104,13 +102,13 @@ impl StreamStream {
         }
 
         stream_info.get_mut().add_work_time1("ebpf_and_stream");
-        Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await
+        Self::ebpf_and_stream(&scc, stream_info, client_stream, upstream_stream).await
     }
 
     #[cfg(feature = "anyproxy-ebpf")]
     pub async fn connect_and_ebpf(
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         client_stream: StreamFlow,
     ) -> Result<Option<StreamFlow>> {
         use crate::config::any_ebpf_core;
@@ -121,22 +119,25 @@ impl StreamStream {
             return Ok(Some(client_stream));
         }
 
-        find_local(stream_info.clone())?;
-        let scc = stream_info.get().scc.clone().unwrap();
+        find_local(&stream_info)?;
+        let scc = stream_info.get().scc.clone();
 
-        let (_, connect_func) =
-            proxy_util::upsteam_connect_info(stream_info.clone(), scc.clone()).await?;
+        let upstream_connect_info = proxy_util::upstream_connect_info(&stream_info, &scc).await?;
+        if upstream_connect_info.is_connect_func_disable {
+            return Err(anyhow!("err: connect_func nil"));
+        }
+        let connect_func = &upstream_connect_info.connect_func;
+
         if connect_func.protocol7().await != Protocol7::Tcp.to_string() {
             return Ok(Some(client_stream));
         }
 
         use crate::proxy::util::run_plugin_handle_access;
-        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+        if run_plugin_handle_access(&scc, &stream_info).await? {
             return Ok(None);
         }
 
-        let upstream_stream =
-            proxy_util::upsteam_do_connect(stream_info.clone(), connect_func).await?;
+        let upstream_stream = proxy_util::upstream_do_connect(&stream_info, connect_func).await?;
 
         use crate::proxy::stream_info::ErrStatus;
         stream_info.get_mut().err_status = ErrStatus::Ok;
@@ -155,7 +156,7 @@ impl StreamStream {
         w_wait: FutureWait,
         wait_group: &awaitgroup::WaitGroup,
         worker_inner: &awaitgroup::WorkerInner,
-        scc: Arc<StreamConfigContext>,
+        scc: &Arc<StreamConfigContext>,
     ) -> Result<()> {
         let mut data = vec![0; 8192];
         let data = data.as_mut_slice();
@@ -213,7 +214,7 @@ impl StreamStream {
     }
 
     pub async fn wait_ebpf_stream(
-        scc: Arc<StreamConfigContext>,
+        scc: &Arc<StreamConfigContext>,
         _stream_info: Share<StreamInfo>,
         client_stream: StreamFlow,
         upstream_stream: StreamFlow,
@@ -237,7 +238,7 @@ impl StreamStream {
                     ups_wait.clone(),
                 &wait_group,
                 &client_worker_inner,
-                scc.clone(),
+                &scc,
             )  => {
                 return ret;
             }
@@ -259,11 +260,56 @@ impl StreamStream {
         }
     }
 
+    pub fn is_client_sendfile(
+        client_stream_fd: i32,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
+    ) -> bool {
+        let mut stream_info = stream_info.get_mut();
+        let net_core_conf = scc.net_core_conf();
+        if net_core_conf.is_open_sendfile {
+            let is_client_sendfile = if client_stream_fd > 0 {
+                stream_info.open_sendfile = Some("sendfile_upload".to_string());
+                true
+            } else {
+                false
+            };
+            is_client_sendfile
+        } else {
+            false
+        }
+    }
+
+    pub fn is_ups_sendfile(
+        upstream_stream_fd: i32,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
+    ) -> bool {
+        let mut stream_info = stream_info.get_mut();
+        let net_core_conf = scc.net_core_conf();
+        if net_core_conf.is_open_sendfile {
+            let is_upstream_sendfile = if upstream_stream_fd > 0 {
+                if stream_info.open_sendfile.is_none() {
+                    stream_info.open_sendfile = Some("sendfile_upload".to_string());
+                } else {
+                    let open_sendfile = stream_info.open_sendfile.take().unwrap();
+                    stream_info.open_sendfile = Some(open_sendfile + "_download");
+                }
+                true
+            } else {
+                false
+            };
+            is_upstream_sendfile
+        } else {
+            false
+        }
+    }
+
     pub fn is_sendfile(
         client_stream_fd: i32,
         upstream_stream_fd: i32,
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
     ) -> (bool, bool) {
         let mut stream_info = stream_info.get_mut();
         let net_core_conf = scc.net_core_conf();
@@ -293,8 +339,8 @@ impl StreamStream {
     }
 
     pub async fn ebpf_and_stream(
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         client_stream: StreamFlow,
         mut _upstream_stream: StreamFlow,
     ) -> Result<()> {
@@ -345,8 +391,8 @@ impl StreamStream {
                 stream_info.get_mut().add_work_time1("wait_ebpf_stream");
 
                 let ret = StreamStream::wait_ebpf_stream(
-                    scc.clone(),
-                    stream_info.clone(),
+                    &scc,
+                    &stream_info,
                     client_stream,
                     _upstream_stream,
                 )
@@ -373,18 +419,14 @@ impl StreamStream {
 
         let client_stream_fd = client_stream.raw_fd();
         let upstream_stream_fd = _upstream_stream.raw_fd();
-        let (is_client_sendfile, is_upstream_sendfile) = Self::is_sendfile(
-            client_stream_fd,
-            upstream_stream_fd,
-            scc.clone(),
-            stream_info.clone(),
-        );
+        let (is_client_sendfile, is_upstream_sendfile) =
+            Self::is_sendfile(client_stream_fd, upstream_stream_fd, &scc, &stream_info);
 
         stream_info.get_mut().add_work_time1("stream_to_stream");
         let close_type = scc.net_core_conf().close_type;
         let ret = StreamStream::stream_to_stream(
-            scc.clone(),
-            stream_info.clone(),
+            &scc,
+            &stream_info,
             client_stream,
             _upstream_stream,
             is_client_sendfile,
@@ -407,8 +449,8 @@ impl StreamStream {
     }
 
     pub async fn stream_to_stream(
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
         is_client_sendfile: bool,
@@ -496,8 +538,8 @@ impl StreamStream {
             tokio::select! {
                 ret = StreamStream::do_single_stream_to_stream(
                     ssc_upload,
-                    scc.clone(),
-                    stream_info.clone(),
+                    &scc,
+                    &stream_info,
                     client_read,
                     upstream_write,
                 )  => {
@@ -522,8 +564,8 @@ impl StreamStream {
     }
 
     pub async fn stream_single(
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         client: StreamFlow,
         is_sendfile: bool,
         is_download: bool,
@@ -594,8 +636,8 @@ impl StreamStream {
     }
 
     pub async fn stream_to_stream_single(
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         client: StreamFlow,
         upstream: StreamFlow,
         is_client_sendfile: bool,
@@ -679,8 +721,8 @@ impl StreamStream {
             .add_work_time1("do_single_stream_to_stream1");
         let ret = StreamStream::do_single_stream_to_stream(
             ssc_upload,
-            scc.clone(),
-            stream_info.clone(),
+            &scc,
+            &stream_info,
             client_read,
             upstream_write,
         )
@@ -709,8 +751,8 @@ impl StreamStream {
 
     pub async fn do_single_stream_to_stream(
         ssc: Arc<StreamStreamContext>,
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         read: StreamFlowRead,
         write: StreamFlowWrite,
     ) -> Result<()> {
@@ -719,16 +761,16 @@ impl StreamStream {
             .add_work_time2(ssc.is_client, "do_stream_to_stream");
         let ret: Result<()> = async {
             tokio::select! {
-                _ = StreamStream::limit_timeout_reset(ssc.clone()) => {
+                _ = StreamStream::limit_timeout_reset(&ssc) => {
                     Ok(())
                 }
-                _ = StreamStream::delay_timeout_reset(ssc.clone(), stream_info.clone()) => {
+                _ = StreamStream::delay_timeout_reset(&ssc, &stream_info) => {
                     Ok(())
                 }
                 ret = StreamStream::do_stream_to_stream(
-                    ssc,
-                    scc.clone(),
-                    stream_info.clone(),
+                    &ssc,
+                    &scc,
+                    &stream_info,
                     read,
                     write,
                 )  => {
@@ -743,7 +785,7 @@ impl StreamStream {
         ret
     }
 
-    pub async fn limit_timeout_reset(ssc: Arc<StreamStreamContext>) {
+    pub async fn limit_timeout_reset(ssc: &Arc<StreamStreamContext>) {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             ssc.curr_limit_rate
@@ -752,8 +794,8 @@ impl StreamStream {
     }
 
     pub async fn delay_timeout_reset(
-        ssc: Arc<StreamStreamContext>,
-        _stream_info: Share<StreamInfo>,
+        ssc: &Arc<StreamStreamContext>,
+        _stream_info: &Share<StreamInfo>,
     ) {
         let mut stream_delay_mil_time = ssc.cs.stream_delay_mil_time;
         if stream_delay_mil_time <= 0 {
@@ -789,9 +831,9 @@ impl StreamStream {
     }
 
     pub async fn do_stream_to_stream(
-        ssc: Arc<StreamStreamContext>,
-        scc: Arc<StreamConfigContext>,
-        stream_info: Share<StreamInfo>,
+        ssc: &Arc<StreamStreamContext>,
+        scc: &Arc<StreamConfigContext>,
+        stream_info: &Share<StreamInfo>,
         r: StreamFlowRead,
         w: StreamFlowWrite,
     ) -> Result<()> {
@@ -837,9 +879,8 @@ impl StreamStream {
             stream_info
                 .get_mut()
                 .add_work_time2(ssc.is_client, "WaitEmpty");
-            let ms = scc.ms.clone();
             use crate::config::net_core_plugin;
-            let net_core_plugin_conf = net_core_plugin::main_conf(&ms).await;
+            let net_core_plugin_conf = net_core_plugin::main_conf(&scc.ms).await;
             net_core_plugin_conf.plugin_handle_stream_cache.clone()
         } else {
             stream_info

@@ -107,6 +107,8 @@ lazy_static! {
             domain: None,
             is_tls: false,
             raw_fd: 0,
+            listen_shutdown_tx: None.into(),
+            listen_worker: None.into(),
         }),
         false,
         None,

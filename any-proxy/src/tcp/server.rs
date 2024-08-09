@@ -81,7 +81,10 @@ impl server::Listener for Listener {
     async fn accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         let ret: Result<(TcpStream, SocketAddr)> = async {
             match self.listener.accept().await {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => {
+                    log::debug!(target: "ext3", "tcp accept");
+                    return Ok(stream);
+                }
                 Err(e) => {
                     return Err(anyhow!(
                         "err:Listener.accept => kind:{:?}, e:{}",
@@ -149,6 +152,8 @@ impl server::Connection for Connection {
                 domain: None,
                 is_tls: false,
                 raw_fd,
+                listen_shutdown_tx: None.into(),
+                listen_worker: None.into(),
             },
         )))
     }

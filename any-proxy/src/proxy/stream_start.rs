@@ -20,7 +20,7 @@ use tokio::sync::broadcast;
 
 pub async fn do_start(
     mut start_stream: impl proxy::Stream,
-    stream_info: Share<StreamInfo>,
+    stream_info: &Share<StreamInfo>,
     mut shutdown_thread_rx: broadcast::Receiver<bool>,
 ) -> Result<()> {
     let start_time = Instant::now();
@@ -38,7 +38,7 @@ pub async fn do_start(
             }
             _ret = read_timeout(
                 client_stream_flow_info.clone(),
-                stream_info.clone(),
+                &stream_info,
                 stream_timeout.clone(),
                 stream_timeout.client_read_timeout_millis.clone(),
             ) => {
@@ -46,7 +46,7 @@ pub async fn do_start(
             }
             _ret = read_timeout(
                 upstream_stream_flow_info.clone(),
-                stream_info.clone(),
+                &stream_info,
                 stream_timeout.clone(),
                 stream_timeout.ups_read_timeout_millis.clone(),
             ) => {
@@ -54,7 +54,7 @@ pub async fn do_start(
             }
             _ret = write_timeout(
                 client_stream_flow_info.clone(),
-                stream_info.clone(),
+                &stream_info,
                 stream_timeout.clone(),
                 stream_timeout.client_write_timeout_millis.clone(),
             ) => {
@@ -62,16 +62,16 @@ pub async fn do_start(
             }
             _ret = write_timeout(
                 upstream_stream_flow_info.clone(),
-                stream_info.clone(),
+                &stream_info,
                 stream_timeout.clone(),
                 stream_timeout.ups_write_timeout_millis.clone(),
             ) => {
                 return Some(_ret);
             }
-            _ret = debug_print_access_log(stream_info.clone()) => {
+            _ret = debug_print_access_log(&stream_info) => {
                 return Some(_ret);
             }
-             _ret = debug_print_stream_flow(stream_info.clone()) => {
+             _ret = debug_print_stream_flow(&stream_info) => {
                 return Some(_ret);
             }
             _ = shutdown_thread_rx.recv() => {
@@ -107,10 +107,9 @@ pub async fn do_start(
         );
     }
 
-    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, stream_info.clone())
+    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, &stream_info)
         .await
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
-
     if scc.is_some() {
         use crate::config::net_core_plugin;
         //___wait___
@@ -165,7 +164,7 @@ pub async fn do_start(
 
 pub async fn stream_info_parse(
     stream_timeout: StreamTimeout,
-    stream_info: Share<StreamInfo>,
+    stream_info: &Share<StreamInfo>,
 ) -> Result<(bool, bool)> {
     let stream_info = &mut stream_info.get_mut();
     let mut is_error = false;
@@ -367,7 +366,7 @@ pub async fn stream_info_parse(
 
 pub async fn read_timeout(
     stream_flow_info: ArcMutex<StreamFlowInfo>,
-    stream_info: Share<StreamInfo>,
+    stream_info: &Share<StreamInfo>,
     stream_timeout: StreamTimeout,
     timeout_millis: Arc<AtomicI64>,
 ) -> Result<()> {
@@ -425,7 +424,7 @@ pub async fn read_timeout(
 
 pub async fn write_timeout(
     stream_flow_info: ArcMutex<StreamFlowInfo>,
-    stream_info: Share<StreamInfo>,
+    stream_info: &Share<StreamInfo>,
     stream_timeout: StreamTimeout,
     timeout_millis: Arc<AtomicI64>,
 ) -> Result<()> {
@@ -481,7 +480,7 @@ pub async fn write_timeout(
     }
 }
 
-pub async fn debug_print_access_log(stream_info: Share<StreamInfo>) -> Result<()> {
+pub async fn debug_print_access_log(stream_info: &Share<StreamInfo>) -> Result<()> {
     loop {
         let (debug_print_access_log_time, is_discard_flow) = {
             let stream_info = stream_info.get();
@@ -510,7 +509,7 @@ pub async fn debug_print_access_log(stream_info: Share<StreamInfo>) -> Result<()
         }
 
         if stream_info.get().scc.is_some() {
-            if let Err(e) = AccessLog::debug_access_log(stream_info.clone())
+            if let Err(e) = AccessLog::debug_access_log(&stream_info)
                 .await
                 .map_err(|e| anyhow!("err:StreamStream::debug_access_log => e:{}", e))
             {
@@ -521,7 +520,7 @@ pub async fn debug_print_access_log(stream_info: Share<StreamInfo>) -> Result<()
     }
 }
 
-pub async fn debug_print_stream_flow(stream_info: Share<StreamInfo>) -> Result<()> {
+pub async fn debug_print_stream_flow(stream_info: &Share<StreamInfo>) -> Result<()> {
     loop {
         let (debug_print_stream_flow_time, is_discard_flow) = {
             let stream_info = stream_info.get();

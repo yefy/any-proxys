@@ -2,6 +2,7 @@ use crate::config as conf;
 use crate::config::config_toml::QuicListenDomain;
 use crate::config::net_core::{DomainFromHttpV1, QUIC_CONFIG_NAME_DEFAULT};
 use crate::proxy::domain_config::DomainConfigListenMerge;
+use crate::proxy::MsConfigContext;
 use crate::quic;
 use crate::quic::server as quic_server;
 use any_base::module::module;
@@ -164,7 +165,6 @@ async fn domain_listen_quic(
     use crate::config::net_server;
     use crate::config::net_server_core;
     use crate::proxy::domain_config::DomainConfigContext;
-    use crate::proxy::StreamConfigContext;
     use crate::util;
     let net_server_conf = net_server::curr_conf(conf_arg.curr_conf());
     let net_core_conf = net_core::curr_conf(conf_arg.curr_conf());
@@ -187,15 +187,14 @@ async fn domain_listen_quic(
 
     let net_confs = net_server_conf.net_confs.clone();
     let server_confs = net_server_conf.server_confs.clone();
-    let scc = Arc::new(StreamConfigContext::new(
-        ms.clone(),
+    let scc = Arc::new(MsConfigContext::new(
         net_confs,
         server_confs,
         conf_arg.curr_conf().clone(),
         common_core_any_conf,
     ));
 
-    let domain_config_context = Arc::new(DomainConfigContext { scc: scc.clone() });
+    let domain_config_context = Arc::new(DomainConfigContext { scc });
 
     let sock_addrs = util::util::str_to_socket_addrs(&quic_listen.address)
         .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;

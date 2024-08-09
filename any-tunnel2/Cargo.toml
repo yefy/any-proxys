@@ -20,7 +20,7 @@ strip = false
 #rpath = false
 
 [profile.release]
-debug = false
+debug = true
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常

@@ -48,7 +48,7 @@ lazy_static! {
         map.insert("client_bytes_received", client_bytes_received);
         map.insert("upstream_bytes_sent", upstream_bytes_sent);
         map.insert("upstream_bytes_received", upstream_bytes_received);
-
+        map.insert("http_hyper_client_bytes_sent", http_hyper_client_bytes_sent);
         map.insert(
             "http_header_client_bytes_sent",
             http_header_client_bytes_sent,
@@ -79,6 +79,8 @@ lazy_static! {
             "http_body_upstream_bytes_received",
             http_body_upstream_bytes_received,
         );
+        map.insert("http_body_client_bytes", http_body_client_bytes);
+        map.insert("http_body_upstream_bytes", http_body_upstream_bytes);
 
         map.insert("is_open_ebpf", is_open_ebpf);
         map.insert("open_sendfile", open_sendfile);
@@ -106,6 +108,8 @@ lazy_static! {
             http_last_slice_upstream_index,
         );
         map.insert("http_max_upstream_count", http_max_upstream_count);
+        map.insert("http_cache_file_md5", http_cache_file_md5);
+        map.insert("http_cache_file_path", http_cache_file_path);
         map
     };
     pub static ref HTTP_REQUEST_FLAG: &'static str = "http_request_";
@@ -121,6 +125,12 @@ lazy_static! {
 }
 
 pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<VarAnyData>> {
+    let index = var_name.parse::<usize>();
+    if index.is_ok() {
+        let index = index.unwrap();
+        return Ok(caps(stream_info, index));
+    }
+
     if var_name.len() > HTTP_REQUEST_FLAG.len() {
         if &var_name[0..HTTP_REQUEST_FLAG.len()] == *HTTP_REQUEST_FLAG {
             let var_name = &var_name[HTTP_REQUEST_FLAG.len()..];
@@ -341,6 +351,17 @@ pub fn domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
 }
 
 pub fn status(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_some() {
+        let http_r_ctx = &*stream_info.http_r.ctx.get();
+        if http_r_ctx.r_out_main.is_some() {
+            return Some(VarAnyData::U16(
+                http_r_ctx.r_out_main.as_ref().unwrap().status.as_u16(),
+            ));
+        }
+
+        return Some(VarAnyData::U16(http_r_ctx.r_out.status.as_u16()));
+    }
+
     let err_status = stream_info.err_status.clone() as usize;
     Some(VarAnyData::Usize(err_status))
 }
@@ -462,6 +483,21 @@ pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(n))
 }
 
+pub fn http_hyper_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::I64(
+        stream_info
+            .http_r
+            .ctx
+            .get()
+            .hyper_http_sent_bytes
+            .load(Ordering::Relaxed)
+            - 40, //hyper添加数据，时间等
+    ))
+}
+
 pub fn http_header_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.http_r.is_none() {
         return None;
@@ -519,6 +555,24 @@ pub fn http_body_upstream_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyD
 pub fn http_body_upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(
         stream_info.upstream_stream_flow_info.get().read,
+    ))
+}
+
+pub fn http_body_client_bytes(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::U64(
+        stream_info.http_r.ctx.get().r_in.content_length,
+    ))
+}
+
+pub fn http_body_upstream_bytes(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+    Some(VarAnyData::U64(
+        stream_info.http_r.ctx.get().r_in.range.content_length,
     ))
 }
 
@@ -700,17 +754,17 @@ pub fn http_cache_file_status(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.http_r.is_none() {
         return None;
     }
-
-    if stream_info.http_r.http_cache_file.is_none() {
+    let http_cache_file = stream_info.http_r.ctx.get().http_cache_file.clone();
+    if http_cache_file.is_none() {
         return None;
     }
-    let http_cache_file_ctx = &*stream_info.http_r.http_cache_file.ctx_thread.get();
-    if http_cache_file_ctx.cache_file_status.is_none() {
+    let hcf_ctx_thread = &*http_cache_file.ctx_thread.get();
+    if hcf_ctx_thread.cache_file_status.is_none() {
         return None;
     }
     return Some(VarAnyData::Str(format!(
         "{:?}",
-        http_cache_file_ctx.cache_file_status
+        hcf_ctx_thread.cache_file_status
     )));
 }
 
@@ -801,13 +855,13 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
     let http_r_ctx = &*stream_info.http_r.ctx.get();
 
     if name == "method" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.method_upstream.to_string()));
+        return Some(VarAnyData::Str(http_r_ctx.r_in.upstream_method.to_string()));
     } else if name == "url" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.uri_upstream.to_string()));
+        return Some(VarAnyData::Str(http_r_ctx.r_in.upstream_uri.to_string()));
     } else if name == "uri" {
         let uri = http_r_ctx
             .r_in
-            .uri_upstream
+            .upstream_uri
             .path_and_query()
             .map(|x| x.as_str())
             .unwrap_or("/")
@@ -816,29 +870,29 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
     } else if name == "version" {
         return Some(VarAnyData::Str(format!(
             "{:?}",
-            http_r_ctx.r_in.version_upstream
+            http_r_ctx.r_in.upstream_version
         )));
     } else if name == "host" {
-        let domain = http_r_ctx.r_in.uri_upstream.host().unwrap();
-        let port_u16 = http_r_ctx.r_in.uri_upstream.port_u16().unwrap();
+        let domain = http_r_ctx.r_in.upstream_uri.host().unwrap();
+        let port_u16 = http_r_ctx.r_in.upstream_uri.port_u16().unwrap();
         return Some(VarAnyData::Str(format!("{}:{}", domain, port_u16)));
     } else if name == "scheme" {
         let scheme = http_r_ctx
             .r_in
-            .uri_upstream
+            .upstream_uri
             .scheme_str()
             .unwrap()
             .to_string();
         return Some(VarAnyData::Str(scheme));
     } else if name == "domain" {
-        let domain = http_r_ctx.r_in.uri_upstream.host().unwrap();
+        let domain = http_r_ctx.r_in.upstream_uri.host().unwrap();
         return Some(VarAnyData::Str(domain.to_string()));
     } else if name == "port" {
-        let port_u16 = http_r_ctx.r_in.uri_upstream.port_u16().unwrap();
+        let port_u16 = http_r_ctx.r_in.upstream_uri.port_u16().unwrap();
         return Some(VarAnyData::U16(port_u16));
     }
 
-    let value = http_r_ctx.r_in.headers_upstream.get(name).cloned();
+    let value = http_r_ctx.r_in.upstream_headers.get(name).cloned();
     if value.is_none() {
         return None;
     }
@@ -850,11 +904,34 @@ pub fn http_response(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData>
     if stream_info.http_r.is_none() {
         return None;
     }
+
     let http_r_ctx = &*stream_info.http_r.ctx.get();
     if name == "status" {
-        return Some(VarAnyData::Str(http_r_ctx.r_out.status.to_string()));
+        if http_r_ctx.r_out_main.is_some() {
+            return Some(VarAnyData::U16(
+                http_r_ctx.r_out_main.as_ref().unwrap().status.as_u16(),
+            ));
+        }
+
+        return Some(VarAnyData::U16(http_r_ctx.r_out.status.as_u16()));
     } else if name == "version" {
+        if http_r_ctx.r_out_main.is_some() {
+            return Some(VarAnyData::Str(format!(
+                "{:?}",
+                http_r_ctx.r_out_main.as_ref().unwrap().version
+            )));
+        }
+
         return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_out.version)));
+    }
+
+    if http_r_ctx.r_out_main.is_some() {
+        let r_out_main = http_r_ctx.r_out_main.as_ref().unwrap();
+        let value = r_out_main.headers.get(name).cloned();
+        if value.is_some() {
+            let value = value.unwrap();
+            return Some(VarAnyData::HeaderValue(value));
+        }
     }
 
     let value = http_r_ctx.r_out.headers.get(name).cloned();
@@ -863,4 +940,51 @@ pub fn http_response(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData>
     }
     let value = value.unwrap();
     return Some(VarAnyData::HeaderValue(value));
+}
+
+pub fn http_cache_file_md5(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    if http_r_ctx.http_cache_file.is_none() {
+        return None;
+    }
+
+    let md5 = String::from_utf8(http_r_ctx.http_cache_file.cache_file_info.md5.to_vec());
+    if md5.is_err() {
+        return None;
+    }
+
+    return Some(VarAnyData::Str(md5.unwrap()));
+}
+
+pub fn http_cache_file_path(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.http_r.is_none() {
+        return None;
+    }
+
+    let http_r_ctx = &*stream_info.http_r.ctx.get();
+    if http_r_ctx.http_cache_file.is_none() {
+        return None;
+    }
+
+    return Some(VarAnyData::Str(
+        http_r_ctx
+            .http_cache_file
+            .cache_file_info
+            .proxy_cache_path
+            .to_string(),
+    ));
+}
+
+pub fn caps(stream_info: &StreamInfo, index: usize) -> Option<VarAnyData> {
+    if stream_info.caps.is_none() {
+        return None;
+    }
+    if index >= stream_info.caps.len() {
+        return None;
+    }
+    return Some(VarAnyData::Str(stream_info.caps[index].clone()));
 }

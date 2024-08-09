@@ -2,13 +2,25 @@ use crate::config as conf;
 use crate::config::config_toml::ProxyPassQuic;
 use crate::config::config_toml::UpstreamHeartbeat;
 use crate::config::upstream_block;
+use crate::config::upstream_core;
+use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
+use crate::proxy::stream_info::StreamInfo;
+use crate::quic::connect as quic_connect;
+use crate::stream::connect;
+use crate::upstream::UpstreamHeartbeatData;
+use crate::util::var::Var;
 use any_base::module::module;
 use any_base::typ;
+use any_base::typ::Share;
 use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
+use async_trait::async_trait;
 use lazy_static::lazy_static;
+use module::Modules;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 pub struct Conf {}
 
@@ -164,15 +176,6 @@ async fn proxy_pass_quic(
     return Ok(());
 }
 
-use crate::config::upstream_core;
-use module::Modules;
-use std::net::SocketAddr;
-
-use crate::quic::connect as quic_connect;
-use crate::stream::connect;
-use crate::upstream::UpstreamHeartbeatData;
-use tokio::sync::broadcast;
-
 pub struct Heartbeat {
     quic: ProxyPassQuic,
 }
@@ -182,9 +185,6 @@ impl Heartbeat {
         Heartbeat { quic }
     }
 }
-
-use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
-use async_trait::async_trait;
 
 #[async_trait]
 impl upstream_core::HeartbeatI for Heartbeat {
@@ -273,5 +273,83 @@ impl upstream_core::HeartbeatI for Heartbeat {
         };
 
         Ok(ShareRw::new(ups_heartbeat))
+    }
+}
+
+pub struct UpstreamQuic {
+    address_vars: Option<Var>,
+    quic: ProxyPassQuic,
+}
+
+impl UpstreamQuic {
+    pub fn new(address_vars: Option<Var>, quic: ProxyPassQuic) -> Self {
+        UpstreamQuic { address_vars, quic }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamQuic {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.quic.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.quic.dynamic_domain.is_some() {
+            self.quic.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_quic;
+        let socket_quic_conf = socket_quic::main_conf(&ms).await;
+
+        let quic_config_name = &self.quic.quic_config_name;
+        let quic_config = socket_quic_conf.quic_confs.get(quic_config_name).cloned();
+        if quic_config.is_none() {
+            return Err(anyhow!(
+                "err:quic_config_name => quic_config_name:{}",
+                quic_config_name
+            ));
+        }
+        let endpoints = socket_quic_conf
+            .endpoints_map
+            .get(quic_config_name)
+            .cloned()
+            .unwrap();
+        let connect = Box::new(quic_connect::Connect::new(
+            address.clone().into(),
+            addr.clone(),
+            self.quic.ssl_domain.clone(),
+            endpoints,
+            quic_config.unwrap(),
+        ));
+
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.quic.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
     }
 }

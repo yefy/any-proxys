@@ -30,7 +30,7 @@ pub async fn set_header_filter(plugin: PluginHttpFilter) -> Result<()> {
 }
 
 pub async fn http_filter_header(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!(target: "main", "r.session_id:{}, http_filter_header", r.session_id);
+    log::trace!(target: "ext2", "r.session_id:{}, http_filter_header", r.session_id);
     do_http_filter_header(&r).await?;
 
     let next = HEADER_FILTER_NEXT.get().await;
@@ -41,47 +41,51 @@ pub async fn http_filter_header(r: Arc<HttpStreamRequest>) -> Result<()> {
 }
 
 pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
-    let (response, client_write) = {
-        let r_ctx = &mut *r.ctx.get_mut();
-        if r_ctx.r_in.version == Version::HTTP_10 {
-            r_ctx.r_out.headers.insert(
+    let (response, client_write, left_content_length) = {
+        let rctx = &mut *r.ctx.get_mut();
+        if rctx.r_in.version == Version::HTTP_10 {
+            rctx.r_out.headers.insert(
                 "Connection",
                 HeaderValue::from_bytes("keep-alive".as_bytes())?,
             );
         }
 
-        let cache_file_status = if r.http_cache_file.is_some() {
-            r.http_cache_file.ctx_thread.get().cache_file_status.clone()
+        let cache_file_status = if rctx.http_cache_file.is_some() {
+            rctx.http_cache_file
+                .ctx_thread
+                .get()
+                .cache_file_status
+                .clone()
         } else {
             None
         };
 
-        if r_ctx.r_in.main.http_cache_status.is_none() {
-            r_ctx.r_in.main.http_cache_status = Some(r_ctx.r_in.http_cache_status.clone());
-            r_ctx.r_in.main.cache_file_status = cache_file_status.clone();
-            r_ctx.r_in.main.is_slice = r_ctx.r_in.is_slice;
+        if rctx.r_in.main.http_cache_status.is_none() {
+            rctx.r_in.main.http_cache_status = Some(rctx.r_in.http_cache_status.clone());
+            rctx.r_in.main.cache_file_status = cache_file_status.clone();
+            rctx.r_in.main.is_slice = rctx.r_in.is_slice;
         }
 
         log::debug!(target: "ext", "r.session_id:{}-{}, http_cache_status:{:?}---{:?}, \
     cache_file_status:{:?}, is_upstream:{}, last_slice_upstream_index:{}, max_upstream_count:{}",
                     r.session_id, r.local_cache_req_count,
-                    r_ctx.r_in.main.http_cache_status, r_ctx.r_in.http_cache_status,
+                    rctx.r_in.main.http_cache_status, rctx.r_in.http_cache_status,
                     cache_file_status,
-                    r_ctx.is_upstream, r_ctx.last_slice_upstream_index, r_ctx.max_upstream_count);
+                    rctx.is_upstream, rctx.last_slice_upstream_index, rctx.max_upstream_count);
 
-        if r_ctx.r_out_main.is_some() {
-            let response_info = r_ctx.r_out.response_info.as_ref().unwrap();
-            let r_out_main = r_ctx.r_out_main.as_ref().unwrap();
+        if rctx.is_request_cache && rctx.r_out_main.is_some() {
+            let response_info = rctx.r_out.response_info.as_ref().unwrap();
+            let r_out_main = rctx.r_out_main.as_ref().unwrap();
             let res_info_main = r_out_main.response_info.as_ref().unwrap();
             if res_info_main.last_modified != response_info.last_modified
                 || res_info_main.last_modified_time != response_info.last_modified_time
                 || res_info_main.e_tag != response_info.e_tag
             {
-                return Err(anyhow!("r_ctx.r_out_main.is_some !="));
+                return Err(anyhow!("rctx.r_out_main.is_some !="));
             }
 
-            if !r_ctx.is_out_status_ok() {
-                return Err(anyhow!("r_ctx.r_out_main.is_some !r_ctx.is_out_status_ok"));
+            if !rctx.is_out_status_ok() {
+                return Err(anyhow!("rctx.r_out_main.is_some !rctx.is_out_status_ok"));
             }
 
             log::trace!(target: "ext", "r.session_id:{}-{}, disable header",
@@ -89,18 +93,25 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
             return Ok(());
         }
 
-        r_ctx.r_out_main = Some(r_ctx.r_out.clone());
+        rctx.r_out_main = Some(rctx.r_out.clone());
+
+        let left_content_length = if rctx.is_request_cache {
+            rctx.r_in.left_content_length
+        } else {
+            rctx.r_out.left_content_length
+        };
 
         let (client_write, _res_body) = Body::channel();
-        let mut response = if r_ctx.r_in.left_content_length <= 0 {
+        let mut response = if left_content_length <= 0 && rctx.r_out.transfer_encoding.is_none() {
             Response::builder().body(Body::empty())?
         } else {
             Response::builder().body(_res_body)?
         };
-        *response.version_mut() = r_ctx.r_out.version;
-        *response.status_mut() = r_ctx.r_out.status;
-        *response.headers_mut() = r_ctx.r_out.headers.clone();
-        let head = r_ctx.r_out.head.clone();
+
+        *response.version_mut() = rctx.r_out.version;
+        *response.status_mut() = rctx.r_out.status;
+        *response.headers_mut() = rctx.r_out.headers.clone();
+        let head = rctx.r_out.head.clone();
         if head.is_some() {
             let head = head.unwrap();
             response
@@ -110,21 +121,47 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         response
             .extensions_mut()
             .insert(hyper::AnyProxyRawHttpHeaderExt(
-                hyper::AnyProxyHyperHttpHeaderExt(HttpHeaderExt::new()),
+                hyper::AnyProxyHyperHttpHeaderExt(HttpHeaderExt::new(
+                    rctx.hyper_http_sent_bytes.clone(),
+                )),
             ));
 
-        if r_ctx.is_out_status_err() {
-            response.headers_mut().remove(http::header::CONTENT_RANGE);
-            response.headers_mut().remove(http::header::CONTENT_LENGTH);
-            response.headers_mut().remove(http::header::CACHE_CONTROL);
-            response.headers_mut().remove(http::header::ETAG);
-            response.headers_mut().remove(http::header::EXPIRES);
-            response.headers_mut().remove(http::header::LAST_MODIFIED);
+        // if rctx.is_request_cache && rctx.is_out_status_err() {
+        //     response.headers_mut().remove(http::header::CONTENT_RANGE);
+        //     response.headers_mut().remove(http::header::CONTENT_LENGTH);
+        //     response.headers_mut().remove(http::header::CACHE_CONTROL);
+        //     response.headers_mut().remove(http::header::ETAG);
+        //     response.headers_mut().remove(http::header::EXPIRES);
+        //     response.headers_mut().remove(http::header::LAST_MODIFIED);
+        // }
+
+        match response.version() {
+            Version::HTTP_09 => {
+                response.headers_mut().remove(http::header::CONNECTION);
+            }
+            Version::HTTP_10 => {
+                response.headers_mut().insert(
+                    http::header::CONNECTION,
+                    HeaderValue::from_bytes(b"keep-alive")?,
+                );
+            }
+            Version::HTTP_11 => {
+                response.headers_mut().insert(
+                    http::header::CONNECTION,
+                    HeaderValue::from_bytes(b"keep-alive")?,
+                );
+            }
+            Version::HTTP_2 => {
+                response.headers_mut().remove(http::header::CONNECTION);
+            }
+            Version::HTTP_3 => {
+                response.headers_mut().remove(http::header::CONNECTION);
+            }
+            _ => {}
         }
 
-        r_ctx.r_out.head_size =
-            http_headers_size(None, Some(response.status()), response.headers());
-        (response, client_write)
+        rctx.r_out.head_size = http_headers_size(None, Some(response.status()), response.headers());
+        (response, client_write, left_content_length)
     };
 
     log::debug!(target: "ext3", "r.session_id:{}-{}, to client response:{:#?}",
@@ -138,8 +175,8 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
     let stream_info = r.http_arg.stream_info.clone();
     stream_info.get_mut().err_status = ErrStatus::Ok;
 
-    let r_ctx = &mut *r.ctx.get_mut();
-    if r_ctx.r_in.left_content_length <= 0 {
+    let rctx = &mut *r.ctx.get_mut();
+    if left_content_length <= 0 && rctx.r_out.transfer_encoding.is_none() {
         use chrono::Local;
         let stream_info = stream_info.get();
         stream_info.upstream_stream_flow_info.get_mut().err = StreamFlowErr::ReadClose;
@@ -172,19 +209,19 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         (stream_tx, client_stream)
     };
 
-    r_ctx.client_write_tx = Some(client_write_tx);
-    let is_client_sendfile = r_ctx.is_client_sendfile;
-    let scc = r.scc.clone();
+    rctx.client_write_tx = Some(client_write_tx);
+    let is_client_sendfile = rctx.is_client_sendfile;
+    let scc = r.http_arg.stream_info.get().scc.clone();
 
     let mut executor = ExecutorLocalSpawn::new(r.http_arg.executors.clone());
     executor._start(
         #[cfg(feature = "anyspawn-count")]
-        None,
+        Some(format!("{}:{}", file!(), line!())),
         move |_| async move {
             let session_id = stream_info.get().session_id;
             let ret = StreamStream::stream_single(
-                scc,
-                stream_info.clone(),
+                &scc,
+                &stream_info,
                 client_stream,
                 is_client_sendfile,
                 true,
@@ -217,6 +254,6 @@ pub async fn do_http_filter_header(r: &HttpStreamRequest) -> Result<()> {
         },
     );
 
-    r_ctx.executor_client_write = Some(executor);
+    rctx.executor_client_write = Some(executor);
     return Ok(());
 }

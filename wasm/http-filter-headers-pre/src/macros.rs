@@ -4,7 +4,7 @@ macro_rules! error {
         {
             use crate::wasm_log;
             if wasm_log::log_enabled(wasm_log::Level::Error) {
-                wasm_log::log_error(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)))?;
+                let _ = wasm_log::log_error(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)));
             }
         }
     };
@@ -16,7 +16,7 @@ macro_rules! warn {
         {
             use crate::wasm_log;
             if wasm_log::log_enabled(wasm_log::Level::Warn) {
-                wasm_log::log_warn(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)))?;
+                let _ = wasm_log::log_warn(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)));
             }
         }
     };
@@ -28,7 +28,7 @@ macro_rules! info {
         {
             use crate::wasm_log;
             if wasm_log::log_enabled(wasm_log::Level::Info) {
-                wasm_log::log_info(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)))?;
+                let _ = wasm_log::log_info(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)));
             }
         }
     };
@@ -40,7 +40,7 @@ macro_rules! debug {
         {
             use crate::wasm_log;
             if wasm_log::log_enabled(wasm_log::Level::Debug) {
-                wasm_log::log_debug(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)))?;
+                let _ = wasm_log::log_debug(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)));
             }
         }
     };
@@ -52,7 +52,7 @@ macro_rules! trace {
         {
             use crate::wasm_log;
             if wasm_log::log_enabled(wasm_log::Level::Trace) {
-                wasm_log::log_trace(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)))?;
+                let _ = wasm_log::log_trace(&format!("{}:{} {}", file!(), line!(), format!($format $(, $args)*)));
             }
         }
     };

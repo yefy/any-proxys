@@ -5,7 +5,7 @@ use crate::stream::server::ServerStreamInfo;
 use crate::stream::stream_flow::StreamFlowInfo;
 use crate::{Protocol7, Protocol77};
 use any_base::executor_local_spawn::ExecutorsLocal;
-use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionExt, Share};
+use any_base::typ::{ArcMutex, ArcRwLock, OptionExt, Share};
 use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,7 +21,7 @@ pub enum ErrStatus {
 }
 
 use crate::proxy::StreamStreamContext;
-use any_base::stream_flow::{StreamFlow, StreamFlowErr};
+use any_base::stream_flow::StreamFlowErr;
 /// 200 对应的详细错误
 //200
 use lazy_static::lazy_static;
@@ -128,7 +128,7 @@ impl ErrStatus200 for ErrStatusUpstream {
 }
 
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
-use crate::proxy::websocket_proxy::WebSocketStreamTrait;
+use crate::wasm::{WasmHost, WasmStreamInfo};
 use any_base::stream_flow;
 use std::collections::HashMap;
 
@@ -216,6 +216,7 @@ pub struct StreamInfo {
     pub stream_work_times2: Vec<(bool, String, f32)>,
     pub stream_work_time: Option<Instant>,
     pub is_discard_flow: bool,
+    pub is_discard_access_log: bool,
     pub is_open_ebpf: bool,
     pub open_sendfile: Option<String>,
     pub ups_balancer: Option<ArcString>,
@@ -237,23 +238,12 @@ pub struct StreamInfo {
     pub ssc_download: OptionExt<Arc<StreamStreamContext>>,
     pub ssc_upload: OptionExt<Arc<StreamStreamContext>>,
     pub session_id: u64,
+    pub caps: OptionExt<Vec<String>>,
     pub http_r: OptionExt<Arc<HttpStreamRequest>>,
-    pub wasm_socket_map:
-        HashMap<u64, ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>>,
-    pub wasm_websocket_map: HashMap<u64, ArcMutexTokio<Box<dyn WebSocketStreamTrait>>>,
-    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
-    pub wasm_session_sender: async_channel::Sender<(
-        u64,
-        Vec<u8>,
-        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
-    )>,
-    pub wasm_session_receiver: async_channel::Receiver<(
-        u64,
-        Vec<u8>,
-        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
-    )>,
-    pub wasm_session_response_map: HashMap<u64, tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
-    pub wasm_timers: HashMap<u64, (i64, Vec<u8>)>,
+    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
+    pub wasm_stream_info: Share<WasmStreamInfo>,
+    pub wasm_spawn_sender: async_channel::Sender<(Option<i64>, Option<String>, WasmHost)>,
+    pub wasm_spawn_receiver: async_channel::Receiver<(Option<i64>, Option<String>, WasmHost)>,
 }
 
 impl Drop for StreamInfo {
@@ -272,9 +262,9 @@ impl StreamInfo {
         stream_so_singer_time: usize,
         debug_is_open_print: bool,
         session_id: u64,
-        wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
+        wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
     ) -> StreamInfo {
-        let (wasm_session_sender, wasm_session_receiver) = async_channel::unbounded();
+        let (wasm_spawn_sender, wasm_spawn_receiver) = async_channel::unbounded();
         StreamInfo {
             executors,
             server_stream_info,
@@ -297,6 +287,7 @@ impl StreamInfo {
             stream_work_times2: Vec::new(),
             stream_work_time: Some(Instant::now()),
             is_discard_flow: false,
+            is_discard_access_log: false,
             is_open_ebpf: false,
             open_sendfile: None,
             ups_balancer: None,
@@ -319,13 +310,11 @@ impl StreamInfo {
             ssc_upload: OptionExt::default(),
             session_id,
             http_r: None.into(),
-            wasm_socket_map: HashMap::new(),
-            wasm_websocket_map: HashMap::new(),
             wasm_stream_info_map,
-            wasm_session_sender,
-            wasm_session_receiver,
-            wasm_session_response_map: HashMap::new(),
-            wasm_timers: HashMap::new(),
+            caps: None.into(),
+            wasm_stream_info: Share::default(),
+            wasm_spawn_sender,
+            wasm_spawn_receiver,
         }
     }
 

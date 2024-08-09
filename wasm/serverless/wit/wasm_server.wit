@@ -2,11 +2,7 @@ package component:server;
 
 interface wasm-service {
     use wasm-std.{error};
-    wasm-main: func(config: option<string>) -> result<error, string>;
-    wasm-main-timeout: func(config: option<string>) -> result<error, string>;
-    wasm-main-ext1: func(config: option<string>) -> result<error, string>;
-    wasm-main-ext2: func(config: option<string>) -> result<error, string>;
-    wasm-main-ext3: func(config: option<string>) -> result<error, string>;
+    wasm-main: func(typ: option<s64>, config: option<string>) -> result<error, string>;
 }
 
 world wasm-server {

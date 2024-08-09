@@ -5,18 +5,20 @@ use crate::Protocol7;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::executor_local_spawn::ExecutorsLocal;
 use any_base::stream_flow::StreamFlow;
+use any_base::typ::OptionExt;
 use any_base::util::ArcString;
 use any_tunnel::server as any_tunnel_server;
 use any_tunnel2::server as any_tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
+use awaitgroup::{Worker, WorkerInner};
+use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-#[derive(Debug)]
 pub struct ServerStreamInfo {
     pub protocol7: Protocol7,
     pub remote_addr: SocketAddr,
@@ -24,6 +26,29 @@ pub struct ServerStreamInfo {
     pub domain: Option<ArcString>,
     pub is_tls: bool,
     pub raw_fd: i32,
+    pub listen_shutdown_tx: OptionExt<broadcast::Sender<()>>,
+    pub listen_worker: OptionExt<Worker>,
+}
+
+impl fmt::Debug for ServerStreamInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Protocol7")
+            .field("protocol7", &self.protocol7)
+            .finish()?;
+        f.debug_struct("SocketAddr")
+            .field("remote_addr", &self.remote_addr)
+            .finish()?;
+        f.debug_struct("Option<SocketAddr>")
+            .field("local_addr", &self.local_addr)
+            .finish()?;
+        f.debug_struct("Option<ArcString>")
+            .field("domain", &self.domain)
+            .finish()?;
+        f.debug_struct("bool")
+            .field("is_tls", &self.is_tls)
+            .finish()?;
+        f.debug_struct("i32").field("raw_fd", &self.raw_fd).finish()
+    }
 }
 
 #[async_trait]
@@ -140,6 +165,7 @@ pub async fn listen<S, F>(
     executors: ExecutorsLocal,
     shutdown_timeout: u64,
     listen_shutdown_tx: broadcast::Sender<()>,
+    listen_worker_inner: WorkerInner,
     listen_server: Arc<Box<dyn Server>>,
     mut listen: Box<dyn Listener>,
     service: S,
@@ -164,14 +190,21 @@ where
     let mut accept_shutdown_thread_tx = executors.context.shutdown_thread_tx.subscribe();
     let mut accept_listen_shutdown_tx = listen_shutdown_tx.subscribe();
     let is_fast_shutdown = loop {
-        let (accept, is_fast_shutdown) = accept(
+        let ret = accept(
             &mut accept_shutdown_thread_tx,
             &mut accept_listen_shutdown_tx,
             &mut listen,
         )
-        .await
-        .map_err(|e| anyhow!("err:accept => e:{}", e))?;
+        .await;
+        if let Err(e) = ret {
+            log::error!("err: accept => e:{}", e);
+            break false;
+        }
+
+        let (accept, is_fast_shutdown) = ret.unwrap();
+        log::debug!(target: "ext3", "server.rs accept");
         if accept.is_none() {
+            log::debug!(target: "ext3", "server.rs accept nil");
             if is_fast_shutdown {
                 executor.send("listen send", is_fast_shutdown)
             }
@@ -183,6 +216,8 @@ where
             #[cfg(feature = "anyspawn-count")]
             let name = name.clone();
             let service = service.clone();
+            let listen_shutdown_tx = listen_shutdown_tx.clone();
+            let listen_worker = listen_worker_inner.worker();
             executor._start(
                 #[cfg(feature = "anyspawn-count")]
                 Some(format!(
@@ -204,6 +239,9 @@ where
                     if server_stream_info.local_addr.is_none() {
                         server_stream_info.local_addr = Some(local_addr);
                     }
+                    server_stream_info.listen_shutdown_tx = Some(listen_shutdown_tx).into();
+                    server_stream_info.listen_worker = Some(listen_worker).into();
+                    log::debug!(target: "ext3", "server.rs accept service");
                     if let Err(e) = service(stream, server_stream_info, executors).await {
                         log::error!("err:stream => e:{}", e);
                     }
@@ -217,12 +255,18 @@ where
             let service = service.clone();
             let connection_shutdown_thread_tx = executors.context.shutdown_thread_tx.clone();
             let connection_listen_shutdown_tx = listen_shutdown_tx.clone();
+            let worker_inner = listen_worker_inner.worker().add();
+            let listen_shutdown_tx = listen_shutdown_tx.clone();
+            let listen_worker_inner = listen_worker_inner.worker();
             executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                None,
+                Some(format!("{}:{}", file!(), line!())),
                 move |executors| async move {
                     let mut stream_shutdown_thread_tx = connection_shutdown_thread_tx.subscribe();
                     let mut stream_listen_shutdown_tx = connection_listen_shutdown_tx.subscribe();
+                    scopeguard::defer! {
+                       worker_inner.done();
+                    }
                     loop {
                         let stream = stream(
                             &mut stream_shutdown_thread_tx,
@@ -231,13 +275,17 @@ where
                         )
                         .await
                         .map_err(|e| anyhow!("err:stream => e:{}", e))?;
+                        log::debug!(target: "ext3", "server.rs accept stream");
                         if stream.is_none() {
+                            log::debug!(target: "ext3", "server.rs accept stream nil");
                             return Ok(());
                         }
                         let local_addr = local_addr.clone();
                         #[cfg(feature = "anyspawn-count")]
                         let name = name.clone();
                         let service = service.clone();
+                        let listen_shutdown_tx = listen_shutdown_tx.clone();
+                        let listen_worker = listen_worker_inner.worker();
                         executors._start(
                             #[cfg(feature = "anyspawn-count")]
                             Some(format!(
@@ -252,6 +300,10 @@ where
                                 if server_stream_info.local_addr.is_none() {
                                     server_stream_info.local_addr = Some(local_addr);
                                 }
+                                server_stream_info.listen_shutdown_tx =
+                                    Some(listen_shutdown_tx).into();
+                                server_stream_info.listen_worker = Some(listen_worker).into();
+                                log::debug!(target: "ext3", "server.rs accept service");
                                 if let Err(e) = service(stream, server_stream_info, executor).await
                                 {
                                     log::error!("err:stream => e:{}", e);
@@ -265,6 +317,7 @@ where
         }
     };
 
+    listen_worker_inner.done();
     executor
         .stop("listen stop", is_fast_shutdown, shutdown_timeout)
         .await;

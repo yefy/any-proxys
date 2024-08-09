@@ -11,6 +11,13 @@ use std::fs;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 
+// Configure ALPN to accept HTTP/2, HTTP/1.1 in that order.
+//cfg.set_protocols(&[b"http/1.1".to_vec(), b"h2".to_vec()]);
+pub fn get_protocols() -> Vec<Vec<u8>> {
+    //vec![b"http/1.1".to_vec(), b"h2".to_vec()]
+    vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+}
+
 /// 不验证证书
 /// Dummy certificate verifier that treats any certificate as valid.
 /// NOTE, such verification is vulnerable to MITM attacks, but convenient for testing.
@@ -179,7 +186,6 @@ pub fn load_private_key(filename: &str) -> Result<rustls::PrivateKey> {
 /// rustls accept
 pub fn tls_acceptor(
     sni_rustls_map: std::sync::Arc<ResolvesServerCertUsingSNI>,
-    //alpn_protocols: &[Vec<u8>],
     alpn_protocols: Vec<Vec<u8>>,
 ) -> Arc<TlsAcceptor> {
     let tls_cfg = {
@@ -188,10 +194,7 @@ pub fn tls_acceptor(
             .with_no_client_auth()
             .with_cert_resolver(sni_rustls_map);
 
-        // Configure ALPN to accept HTTP/2, HTTP/1.1 in that order.
-        //cfg.set_protocols(&[b"http/1.1".to_vec(), b"h2".to_vec()]);
         if alpn_protocols.len() > 0 {
-            //server_crypto.alpn_protocols = protocols.to_vec();
             server_crypto.alpn_protocols = alpn_protocols;
         }
         std::sync::Arc::new(server_crypto)

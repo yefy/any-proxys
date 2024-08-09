@@ -10,9 +10,8 @@ use std::sync::Arc;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 
-use crate::proxy::stream_info::StreamInfo;
-use crate::wasm::ServerWasiView;
 use crate::wasm::WasmServer;
+use crate::wasm::{ServerWasiView, WasmStreamInfo};
 use wasmtime::component::*;
 use wasmtime_wasi::preview2::command;
 
@@ -38,7 +37,7 @@ lazy_static! {
         ArcRwLock::new(HashMap::new());
     pub static ref WASH_HASH_HASH: ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>> =
         ArcRwLock::new(HashMap::new());
-    pub static ref WASM_STREAM_INFO_MAP: ArcRwLock<HashMap<u64, Share<StreamInfo>>> =
+    pub static ref WASM_STREAM_INFO_MAP: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>> =
         ArcRwLock::new(HashMap::new());
 }
 
@@ -54,7 +53,7 @@ pub struct Conf {
 
     pub wash_hash: ArcRwLock<HashMap<String, WasmHashValue>>,
     pub wash_hash_hash: ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>>,
-    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<StreamInfo>>>,
+    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
 }
 
 impl Conf {

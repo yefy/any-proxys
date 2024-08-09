@@ -1,1 +1,1 @@
-pub mod stream_test_server;
+pub mod stream_server_test;

@@ -1,10 +1,10 @@
-use super::StreamConfigContext;
+use crate::proxy::MsConfigContext;
 use crate::stream::server;
 use anyhow::Result;
 use std::sync::Arc;
 
 pub struct PortConfigContext {
-    pub scc: Arc<StreamConfigContext>,
+    pub scc: Arc<MsConfigContext>,
 }
 
 #[derive(Clone)]

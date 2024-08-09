@@ -7,9 +7,10 @@ use crate::proxy::http_proxy::http_cache_file::HttpCacheFile;
 use crate::proxy::http_proxy::http_header_parse::{content_length, http_headers_size, HttpParts};
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
 use crate::proxy::http_proxy::HttpHeaderResponse;
+use crate::stream::connect::Connect;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::io::async_write_msg::{MsgReadBufFile, MsgWriteBufBytes};
-use any_base::util::HttpHeaderExt;
+use any_base::util::{ArcString, HttpHeaderExt};
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
@@ -96,6 +97,30 @@ pub enum HttpCacheStatus {
     Expired,
 }
 
+#[derive(Clone)]
+pub struct HttpUpstreamConnectInfo {
+    pub is_proxy_protocol_hello: Option<bool>,
+    pub is_connect_func_disable: bool,
+    pub connect_func: OptionExt<Arc<Box<dyn Connect>>>,
+    pub ups_balancer: Option<ArcString>,
+}
+
+impl HttpUpstreamConnectInfo {
+    pub fn new(
+        is_proxy_protocol_hello: Option<bool>,
+        is_connect_func_disable: bool,
+        connect_func: OptionExt<Arc<Box<dyn Connect>>>,
+        ups_balancer: Option<ArcString>,
+    ) -> Self {
+        HttpUpstreamConnectInfo {
+            is_proxy_protocol_hello,
+            is_connect_func_disable,
+            connect_func,
+            ups_balancer,
+        }
+    }
+}
+
 pub struct HttpInMain {
     pub http_cache_status: Option<HttpCacheStatus>,
     pub cache_file_status: Option<CacheFileStatus>,
@@ -119,11 +144,11 @@ pub struct HttpIn {
     pub version: hyper::Version,
     pub headers: hyper::HeaderMap<http::HeaderValue>,
 
-    pub method_upstream: hyper::Method,
-    pub uri_upstream: hyper::Uri,
-    pub version_upstream: hyper::Version,
-    pub headers_upstream: hyper::HeaderMap<http::HeaderValue>,
-    pub extensions_upstream: Option<Extensions>,
+    pub upstream_method: hyper::Method,
+    pub upstream_uri: hyper::Uri,
+    pub upstream_version: hyper::Version,
+    pub upstream_headers: hyper::HeaderMap<http::HeaderValue>,
+    pub upstream_extensions: Option<Extensions>,
     pub body: Option<Body>,
 
     pub head_size: usize,
@@ -133,9 +158,11 @@ pub struct HttpIn {
     pub is_load_range: bool,
     pub range: HttpRange,
     pub cache_control_time: i64,
+    pub is_range: bool,
     pub is_head: bool,
     pub is_get: bool,
     pub left_content_length: i64,
+    pub out_content_length: i64,
     pub curr_slice_start: u64,
     pub bitmap_curr_slice_start: u64,
     pub bitmap_last_slice_start: u64,
@@ -149,6 +176,7 @@ pub struct HttpIn {
     pub curr_slice_index: usize,
     pub curr_upstream_method: Option<hyper::Method>,
     pub is_304: bool,
+    pub upstream_connect_info: Arc<HttpUpstreamConnectInfo>,
 }
 
 #[derive(Clone)]
@@ -170,8 +198,8 @@ pub struct HttpOut {
     pub headers: hyper::HeaderMap<http::HeaderValue>,
     pub extensions: ArcMutex<Extensions>,
     pub status_upstream: hyper::StatusCode,
-    pub version_upstream: hyper::Version,
-    pub headers_upstream: hyper::HeaderMap<http::HeaderValue>,
+    pub upstream_version: hyper::Version,
+    pub upstream_headers: hyper::HeaderMap<http::HeaderValue>,
     pub head: Option<Bytes>,
 
     pub head_size: usize,
@@ -182,6 +210,8 @@ pub struct HttpOut {
     pub response_info: Option<Arc<HttpResponseInfo>>,
     pub header_ext: HttpHeaderExt,
     pub left_content_length: i64,
+    pub out_content_length: i64,
+    pub transfer_encoding: OptionExt<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -267,7 +297,13 @@ pub struct HttpStreamRequestContext {
     pub is_slice_upstream_index_add: bool,
     pub last_slice_upstream_index: i32,
     pub is_try_cache: bool,
-    pub wasm_body: Option<Body>,
+    pub wasm_response: Option<Response<Body>>,
+    pub is_expire_to_miss: bool,
+    pub hyper_http_sent_bytes: Arc<AtomicI64>,
+    pub http_request_slice: u64,
+    pub http_cache_file: OptionExt<HttpCacheFile>,
+    pub is_local_cache_req: bool,
+    pub client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
 }
 
 impl HttpStreamRequestContext {
@@ -283,18 +319,14 @@ impl HttpStreamRequestContext {
 
 pub struct HttpStreamRequest {
     pub http_arg: ServerArg,
-    pub scc: Arc<StreamConfigContext>,
+    pub scc: OptionExt<Arc<StreamConfigContext>>,
     pub ctx: ArcRwLock<HttpStreamRequestContext>,
-    pub http_cache_file: OptionExt<HttpCacheFile>,
     pub cache_file_slice: u64,
-    pub http_request_slice: u64,
     pub arg: ServerArg,
-    pub is_local_cache_req: bool,
-    pub local_cache_req_count: usize,
     pub session_id: u64,
     pub header_ext: HttpHeaderExt,
     pub page_size: usize,
-    pub client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
+    pub local_cache_req_count: usize,
 }
 
 impl Drop for HttpStreamRequest {
@@ -310,12 +342,14 @@ impl HttpStreamRequest {
         session_id: u64,
         header_response: OptionExt<Arc<HttpHeaderResponse>>,
         parts: HttpParts,
-        request_upstream: Request<Body>,
-        mut is_client_sendfile: bool,
-        is_upstream_sendfile: bool,
-        client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
+        mut request_upstream: Request<Body>,
+        upstream_connect_info: Option<Arc<HttpUpstreamConnectInfo>>,
     ) -> Result<HttpStreamRequest> {
-        let scc = http_arg.stream_info.get().scc.clone().unwrap();
+        let upstream_connect_info = if upstream_connect_info.is_none() {
+            Arc::new(HttpUpstreamConnectInfo::new(None, true, None.into(), None))
+        } else {
+            upstream_connect_info.unwrap()
+        };
         use crate::util::default_config::PAGE_SIZE;
         let page_size = PAGE_SIZE.load(Ordering::Relaxed);
 
@@ -330,7 +364,15 @@ impl HttpStreamRequest {
         let is_head = request_upstream.method() == &http::Method::HEAD;
         let is_get = request_upstream.method() == &http::Method::GET;
 
-        let local_cache_req_count = request_upstream.headers().get(LOCAL_CACHE_REQ_KEY);
+        use http::header::RANGE;
+        let range = request_upstream.headers().get(RANGE);
+        let is_range = if range.is_some() && (is_get || is_head) {
+            true
+        } else {
+            false
+        };
+
+        let local_cache_req_count = request_upstream.headers_mut().remove(LOCAL_CACHE_REQ_KEY);
         let local_cache_req_count = if local_cache_req_count.is_some() {
             let local_cache_req_count = local_cache_req_count.unwrap();
             let local_cache_req_count = local_cache_req_count.to_str()?.parse::<usize>()?;
@@ -348,10 +390,6 @@ impl HttpStreamRequest {
             local_cache_req_count
         );
 
-        if local_cache_req_count > 0 {
-            is_client_sendfile = false;
-        }
-
         let header_ext = request_upstream
             .extensions()
             .get::<hyper::AnyProxyRawHttpHeaderExt>();
@@ -361,14 +399,9 @@ impl HttpStreamRequest {
             header_ext.0 .0.clone()
         } else {
             log::debug!(target: "main", "nil HttpStreamRequest header_ext:{}", local_cache_req_count);
-            HttpHeaderExt::new()
+            HttpHeaderExt::new(Arc::new(AtomicI64::new(0)))
         };
 
-        use crate::config::net_core_proxy;
-        let net_curr_conf = scc.net_curr_conf();
-        let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
-
-        let http_request_slice = net_core_proxy_conf.proxy_request_slice;
         let cache_file_slice = CACHE_FILE_SLISE;
 
         let HttpParts {
@@ -380,15 +413,15 @@ impl HttpStreamRequest {
 
         let (parts, body) = request_upstream.into_parts();
         let Parts {
-            method: method_upstream,
-            uri: uri_upstream,
-            version: version_upstream,
-            headers: headers_upstream,
-            extensions: extensions_upstream,
+            method: upstream_method,
+            uri: upstream_uri,
+            version: upstream_version,
+            headers: upstream_headers,
+            extensions: upstream_extensions,
             ..
         } = parts;
 
-        let head = extensions_upstream.get::<hyper::AnyProxyRawHeaders>();
+        let head = upstream_extensions.get::<hyper::AnyProxyRawHeaders>();
         let head_size = if head.is_some() {
             let head = head.unwrap();
             head.0 .0.len()
@@ -396,13 +429,14 @@ impl HttpStreamRequest {
             http_headers_size(Some(&uri), None, &headers)
         };
 
+        let scc = http_arg.stream_info.get().scc.clone();
+
         Ok(HttpStreamRequest {
             page_size,
             header_ext,
             session_id,
             http_arg,
             scc,
-            client,
             ctx: ArcRwLock::new(HttpStreamRequestContext {
                 r_in: HttpIn {
                     content_length,
@@ -411,11 +445,11 @@ impl HttpStreamRequest {
                     version,
                     headers,
 
-                    method_upstream: method_upstream.clone(),
-                    uri_upstream,
-                    version_upstream: version_upstream.clone(),
-                    headers_upstream,
-                    extensions_upstream: Some(extensions_upstream),
+                    upstream_method: upstream_method.clone(),
+                    upstream_uri,
+                    upstream_version: upstream_version.clone(),
+                    upstream_headers,
+                    upstream_extensions: Some(upstream_extensions),
                     body: Some(body),
                     head_size,
                     head_upstream_size: 0,
@@ -423,9 +457,11 @@ impl HttpStreamRequest {
                     is_load_range: false,
                     range: HttpRange::new(),
                     cache_control_time: -1,
+                    is_range,
                     is_head,
                     is_get,
                     left_content_length: -1,
+                    out_content_length: -1,
                     curr_slice_start: 0,
                     bitmap_curr_slice_start: 0,
                     bitmap_last_slice_start: 0,
@@ -437,25 +473,28 @@ impl HttpStreamRequest {
                     http_cache_status: HttpCacheStatus::Bypass,
                     main: HttpInMain::new(),
                     curr_slice_index: 0,
-                    curr_upstream_method: None,
+                    curr_upstream_method: Some(upstream_method),
                     is_304: false,
+                    upstream_connect_info,
                 },
                 r_out: HttpOut {
                     status: http::StatusCode::OK,
-                    version: version_upstream.clone(),
+                    version: upstream_version.clone(),
                     headers: hyper::HeaderMap::new(),
                     extensions: ArcMutex::default(),
                     status_upstream: http::StatusCode::OK,
-                    version_upstream: version_upstream.clone(),
-                    headers_upstream: hyper::HeaderMap::new(),
+                    upstream_version: upstream_version.clone(),
+                    upstream_headers: hyper::HeaderMap::new(),
                     head: None,
                     head_size: 0,
                     head_upstream_size: 0,
                     is_cache: true,
                     is_cache_err: false,
                     response_info: None,
-                    header_ext: HttpHeaderExt::new(),
+                    header_ext: HttpHeaderExt::new(Arc::new(AtomicI64::new(0))),
                     left_content_length: 0,
+                    out_content_length: 0,
+                    transfer_encoding: None.into(),
                 },
                 r_out_main: None,
                 in_body_buf: None,
@@ -463,8 +502,8 @@ impl HttpStreamRequest {
                 header_response,
                 client_write_tx: None,
                 executor_client_write: None,
-                is_client_sendfile,
-                is_upstream_sendfile,
+                is_client_sendfile: false,
+                is_upstream_sendfile: false,
                 is_request_cache: false,
                 is_upstream: false,
                 is_upstream_add: false,
@@ -474,13 +513,16 @@ impl HttpStreamRequest {
                 last_slice_upstream_index: -1,
                 upstream_count_drop: UpstreamCountDrop::new(None),
                 is_try_cache: false,
-                wasm_body: None,
+                wasm_response: None,
+                is_expire_to_miss: false,
+                hyper_http_sent_bytes: Arc::new(AtomicI64::new(0)),
+                http_cache_file: None.into(),
+                http_request_slice: 0,
+                is_local_cache_req: false,
+                client: None.into(),
             }),
-            http_cache_file: None.into(),
             cache_file_slice,
-            http_request_slice,
             arg,
-            is_local_cache_req: false,
             local_cache_req_count,
         })
     }

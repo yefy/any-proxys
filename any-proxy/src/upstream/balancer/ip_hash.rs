@@ -1,4 +1,5 @@
 use crate::stream::connect;
+use crate::upstream::balancer::get_connect_data;
 use crate::upstream::UpstreamData;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 pub fn ip_hash(
     ip: &str,
     ups_data: &mut UpstreamData,
-) -> Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+) -> Option<(Option<bool>, bool, Arc<Box<dyn connect::Connect>>)> {
     if ups_data.ups_heartbeats.len() <= 0 {
         return None;
     }
@@ -18,11 +19,5 @@ pub fn ip_hash(
     let hash = hasher.finish();
     let index = (hash % ups_data.ups_heartbeats.len() as u64) as usize;
 
-    let ups_heartbeats = ups_data.ups_heartbeats[index].get_mut();
-    if ups_heartbeats.disable {
-        return None;
-    }
-    let is_proxy_protocol_hello = ups_heartbeats.is_proxy_protocol_hello.clone();
-    let connect = ups_heartbeats.connect.clone();
-    return Some((is_proxy_protocol_hello, connect));
+    return get_connect_data(&ups_data.ups_heartbeats, index);
 }

@@ -33,8 +33,8 @@ cargo build --release --bin anyproxy  --no-default-features --features "anyproxy
 ```
 rust一定要用--release编译， release和debug性能几十倍的差异  
 cargo build --release --bin anyproxy  
-cp target/release/anyproxy ./any-proxy/examples/anyproxy  
-cd ./any-proxy/examples/anyproxy  
+cp target/release/anyproxy ./any-example/anyproxy  
+cd ./any-example/anyproxy  
 
 ```
 ./anyproxy
@@ -44,7 +44,7 @@ cd ./any-proxy/examples/anyproxy
 
 ```
 如果是使用CLion打开项目，  
-Working directory设置 ./any-proxy/examples/anyproxy  
+Working directory设置 ./any-example/anyproxy  
 Command设置 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
 ```
 

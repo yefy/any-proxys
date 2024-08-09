@@ -1,11 +1,13 @@
 use crate::config as conf;
 use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeData};
+use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
+use crate::proxy::stream_info::StreamInfo;
 use crate::util::var::Var;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use any_base::parking_lot::typ::ArcMutex;
 use any_base::typ;
-use any_base::typ::{ArcRwLock, ArcUnsafeAny};
+use any_base::typ::{ArcRwLock, ArcUnsafeAny, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
@@ -18,6 +20,58 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+pub struct ProxyRewrite {
+    pub regex: regex::Regex,
+    pub vars: Var,
+    pub status: http::StatusCode,
+}
+
+impl ProxyRewrite {
+    pub fn start(
+        &self,
+        r: &Arc<HttpStreamRequest>,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<Option<(String, http::StatusCode)>> {
+        let url = r.ctx.get().r_in.uri.to_string();
+        let caps = self.regex.captures(&url);
+        if caps.is_none() {
+            return Ok(None);
+        }
+        let caps = caps.map(|cap| {
+            cap.iter()
+                .filter_map(|m| m.map(|mat| mat.as_str().to_string()))
+                .collect::<Vec<String>>()
+        });
+        if caps.is_none() {
+            return Ok(None);
+        }
+
+        let old_caps = unsafe { stream_info.get_mut().caps.take_op() };
+        stream_info.get_mut().caps = Some(caps.unwrap()).into();
+
+        let str = {
+            let stream_info = stream_info.get();
+            let mut vars =
+                Var::copy(&self.vars).map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            use crate::proxy::stream_var;
+            vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let str = vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            str
+        };
+
+        stream_info.get_mut().caps = old_caps.into();
+
+        Ok(Some((str, self.status)))
+    }
+}
 
 fn default_proxy_cache_conf_is_open() -> bool {
     true
@@ -118,7 +172,7 @@ lazy_static! {
 }
 
 pub struct Conf {
-    pub proxy_cache_names: Vec<String>,
+    pub proxy_cache_names: Option<Vec<String>>,
     pub proxy_cache_key: String,
     pub proxy_cache_key_vars: Var,
     pub proxy_cache_purge: bool,
@@ -130,6 +184,7 @@ pub struct Conf {
     pub proxy_expires_file_timer: u64,
     pub proxy_hot_file: ProxyHotFile,
     pub proxy_max_open_file: usize,
+    pub proxy_get_to_get_range: bool,
 
     pub proxy_cache_map: HashMap<String, Arc<ProxyCache>>,
     pub proxy_cache_index_map: ArcRwLock<HashMap<Bytes, ArcRwLock<HashSet<String>>>>,
@@ -140,6 +195,7 @@ pub struct Conf {
     pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
     pub is_check: Arc<AtomicBool>,
     pub is_init_master_thread: Arc<AtomicBool>,
+    pub rewrite: Vec<ProxyRewrite>,
 }
 
 impl Drop for Conf {
@@ -154,7 +210,7 @@ impl Conf {
             proxy_cache_map: HashMap::new(),
             proxy_caches: Vec::with_capacity(10),
             proxy_cache_confs: Vec::with_capacity(10),
-            proxy_cache_names: Vec::with_capacity(10),
+            proxy_cache_names: None,
             proxy_request_slice: 1 * CACHE_FILE_SLISE,
             proxy_cache_key: DEFAULT_PROXY_CACHE_KEY.to_string(),
             proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
@@ -170,8 +226,10 @@ impl Conf {
             hot_io_percent_map: ArcRwLock::new(HashMap::new()),
             cache_file_node_queue: ArcMutex::new(VecDeque::new()),
             proxy_max_open_file: 0,
+            proxy_get_to_get_range: false,
             is_check: Arc::new(AtomicBool::new(false)),
             is_init_master_thread: Arc::new(AtomicBool::new(false)),
+            rewrite: Vec::new(),
         }
     }
 
@@ -381,6 +439,22 @@ lazy_static! {
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN,
         },
+        module::Cmd {
+            name: "proxy_get_to_get_range".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_get_to_get_range(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "rewrite".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(rewrite(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_SERVER | conf::CMD_CONF_TYPE_LOCAL,
+        },
     ]);
 }
 
@@ -487,7 +561,7 @@ async fn merge_conf(
         let parent_conf = parent_conf.unwrap();
         let parent_conf = parent_conf.get_mut::<Conf>();
 
-        if child_conf.proxy_cache_names.is_empty() {
+        if child_conf.proxy_cache_names.is_none() {
             child_conf.proxy_cache_names = parent_conf.proxy_cache_names.clone();
         }
 
@@ -522,6 +596,10 @@ async fn merge_conf(
         if child_conf.proxy_max_open_file == 0 {
             child_conf.proxy_max_open_file = parent_conf.proxy_max_open_file.clone();
         }
+
+        if child_conf.proxy_get_to_get_range == false {
+            child_conf.proxy_get_to_get_range = parent_conf.proxy_get_to_get_range.clone();
+        }
     }
 
     use crate::proxy::stream_var;
@@ -551,18 +629,21 @@ async fn merge_conf(
     })?;
     child_conf.proxy_cache_key_vars = vars;
 
-    for proxy_cache_name in &child_conf.proxy_cache_names {
-        let proxy_cache = net_core_proxy
-            .proxy_cache_map
-            .get(proxy_cache_name)
-            .cloned();
-        if proxy_cache.is_none() {
-            return Err(anyhow::anyhow!(
-                "err: not find => proxy_cache_name:{}",
-                proxy_cache_name
-            ));
+    if child_conf.proxy_cache_names.is_some() {
+        let proxy_cache_names = child_conf.proxy_cache_names.as_ref().unwrap();
+        for proxy_cache_name in proxy_cache_names {
+            let proxy_cache = net_core_proxy
+                .proxy_cache_map
+                .get(proxy_cache_name)
+                .cloned();
+            if proxy_cache.is_none() {
+                return Err(anyhow::anyhow!(
+                    "err: not find => proxy_cache_name:{}",
+                    proxy_cache_name
+                ));
+            }
+            child_conf.proxy_caches.push(proxy_cache.unwrap());
         }
-        child_conf.proxy_caches.push(proxy_cache.unwrap());
     }
 
     return Ok(());
@@ -648,7 +729,7 @@ async fn init_master_thread(
     if let Ok(false) = ret {
         executor.clone()._start(
             #[cfg(feature = "anyspawn-count")]
-            None,
+                Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
                 let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
                 let interval = 10;
@@ -677,7 +758,7 @@ async fn init_master_thread(
 
     ms_executor.clone()._start(
         #[cfg(feature = "anyspawn-count")]
-        None,
+            Some(format!("{}:{}", file!(), line!())),
         move |executors| async move {
             let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
             let interval = 10;
@@ -716,7 +797,7 @@ async fn init_work_thread(
     let _conf = conf.get_mut::<Conf>();
     ms_executor.clone()._start(
         #[cfg(feature = "anyspawn-count")]
-        None,
+            Some(format!("{}:{}", file!(), line!())),
         move |executors| async move {
             let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
             let interval = 10;
@@ -783,11 +864,7 @@ async fn proxy_cache_name(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    c.proxy_cache_names = conf_arg.value.get::<Vec<String>>().clone();
-
-    if c.proxy_cache_names.len() <= 0 {
-        return Err(anyhow!("err:c.proxy_cache_names.len() <= 0"));
-    }
+    c.proxy_cache_names = Some(conf_arg.value.get::<Vec<String>>().clone());
 
     log::trace!(target: "main", "c.proxy_cache_names:{:?}", c.proxy_cache_names);
     return Ok(());
@@ -971,5 +1048,50 @@ async fn proxy_max_open_file(
     let c = conf.get_mut::<Conf>();
     c.proxy_max_open_file = conf_arg.value.get::<usize>().clone();
     log::trace!(target: "main", "c.proxy_max_open_file:{:?}", c.proxy_max_open_file);
+    return Ok(());
+}
+
+async fn proxy_get_to_get_range(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.proxy_get_to_get_range = conf_arg.value.get::<bool>().clone();
+    log::trace!(target: "main", "c.proxy_get_to_get_range:{:?}", c.proxy_get_to_get_range);
+    return Ok(());
+}
+
+async fn rewrite(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let strs = conf_arg.value.get::<Vec<String>>().clone();
+    if strs.len() != 3 {
+        return Err(anyhow::anyhow!("strs.len() != 3"));
+    }
+
+    let regex = regex::Regex::new(&strs[0]).map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
+    let vars = Var::new(&strs[1], "").map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+    let status = if strs[2] == "redirect" {
+        http::StatusCode::FOUND
+    } else if strs[2] == "permanent" {
+        http::StatusCode::MOVED_PERMANENTLY
+    } else {
+        return Err(anyhow::anyhow!("redirect or permanent"));
+    };
+
+    let rewrite = ProxyRewrite {
+        regex,
+        vars,
+        status,
+    };
+    c.rewrite.push(rewrite);
+
+    //log::trace!(target: "main", "rewrite:{:?}", rewrite);
     return Ok(());
 }

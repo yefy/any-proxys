@@ -1,6 +1,7 @@
 use crate::wasm_socket;
 use crate::wasm_std;
 use crate::info;
+use anyhow::Result;
 
 use serde::{Deserialize, Serialize};
 
@@ -10,11 +11,11 @@ pub struct WasmConf {
     pub name: String,
 }
 
-pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error> {
     if config.is_none() {
         return Ok(wasm_std::Error::Ok);
     }
-    let wasm_conf: WasmConf = toml::from_str(&config.unwrap()).map_err(|e| e.to_string())?;
+    let wasm_conf: WasmConf = toml::from_str(&config.unwrap())?;
     info!("wasm_conf:{:?}", wasm_conf);
 
     let line = "GET /1.txt HTTP/1.1\r\n";
@@ -32,11 +33,11 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
     //let fd =
     //    wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "www.upstream.cn:10001", None, timeout_ms)?;
     let fd =
-        wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "192.168.192.139:10001", None, timeout_ms)?;
-    wasm_socket::socket_write_all(fd, request.as_bytes(), timeout_ms)?;
-    wasm_socket::socket_flush(fd, timeout_ms)?;
-    let data = wasm_socket::socket_read(fd, 1024, timeout_ms)?;
-    wasm_socket::socket_flush(fd, timeout_ms)?;
+        wasm_socket::socket_connect(wasm_socket::SocketType::Tcp, "192.168.192.139:10001", None, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_socket::socket_write_all(fd, request.as_bytes(), timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_socket::socket_flush(fd, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let data = wasm_socket::socket_read(fd, 1024, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_socket::socket_flush(fd, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
     info!("data:{:?}", unsafe{String::from_utf8_unchecked(data)});
 
     // 响应的内容
@@ -52,11 +53,11 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
         "{}{}{}{}\r\n{}", // 注意末尾的 \r\n 表示换行
         status_line, content_type, content_length, connection, body
     );
-    let fd = wasm_std::curr_fd();
+    let fd = wasm_std::main_fd();
     // 打印生成的 HTTP 响应字符串
     info!("response:{:?}", response);
-    wasm_socket::socket_write_all(fd, &response.as_bytes(), timeout_ms)?;
-    wasm_socket::socket_flush(fd, timeout_ms)?;
+    wasm_socket::socket_write_all(fd, &response.as_bytes(), timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_socket::socket_flush(fd, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     Ok(wasm_std::Error::Ok)
 }

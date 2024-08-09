@@ -9,6 +9,7 @@ use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
+use awaitgroup::{Worker, WorkerInner};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -38,7 +39,7 @@ impl PortServer {
         })
     }
 
-    pub async fn start(&self, ms: Modules) -> Result<()> {
+    pub async fn start(&self, ms: Arc<Modules>, worker_inner: WorkerInner) -> Result<()> {
         log::trace!(target: "main", "port server start");
         use crate::config::tunnel2_core;
         use crate::config::tunnel_core;
@@ -78,15 +79,18 @@ impl PortServer {
         let common_core_conf = common_core::main_conf_mut(&ms).await;
         let shutdown_timeout = common_core_conf.shutdown_timeout;
         for listen in listens.into_iter() {
+            let worker = worker_inner.worker();
             self.do_start(
                 shutdown_timeout,
                 executor.clone(),
                 listen,
                 tunnel_publish.clone(),
                 tunnel2_publish.clone(),
+                worker,
             )
             .await?;
         }
+        worker_inner.done();
 
         drop(ms);
         let mut shutdown_thread_tx = self.executors.context.shutdown_thread_tx.subscribe();
@@ -115,14 +119,16 @@ impl PortServer {
         listen: Box<dyn Listener>,
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
+        worker: Worker,
     ) -> Result<()> {
         let listen_server = self.listen_server.clone();
         let key = self.key.clone();
         let port_config_listen_map = self.port_config_listen_map.clone();
         let listen_shutdown_tx = self.listen_shutdown_tx.clone();
+        let worker_inner = worker.add();
         executor._start(
             #[cfg(feature = "anyspawn-count")]
-            None,
+            Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
                 server::listen(
                     #[cfg(feature = "anyspawn-count")]
@@ -130,10 +136,11 @@ impl PortServer {
                     executors,
                     shutdown_timeout,
                     listen_shutdown_tx,
+                    worker_inner,
                     listen_server,
                     listen,
                     move |stream, server_stream_info, executors| async move {
-                        let port_config_listen = {
+                        let (port_config_listen, ms) = {
                             let port_config_listen_map = port_config_listen_map.get();
                             let port_listen = port_config_listen_map.get(&key);
                             if port_listen.is_none() {
@@ -146,11 +153,11 @@ impl PortServer {
                             }
                             let port_listen = port_listen.unwrap();
                             let port_config_listen = port_listen.port_config_listen.clone();
-                            port_config_listen
+                            (port_config_listen, port_listen.ms.clone())
                         };
 
                         let port_stream = port_stream::PortStream::new(
-                            port_config_listen.port_config_context.scc.ms.clone(),
+                            ms,
                             executors,
                             server_stream_info,
                             tunnel_publish,

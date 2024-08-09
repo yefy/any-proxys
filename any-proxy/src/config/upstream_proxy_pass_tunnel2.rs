@@ -5,11 +5,14 @@ use crate::config::config_toml::ProxyPassTcpTunnel2;
 use crate::config::config_toml::UpstreamHeartbeat;
 use crate::config::upstream_block;
 use crate::config::upstream_core;
+use crate::proxy::stream_info::StreamInfo;
 use crate::stream::connect;
 use crate::tunnel2::connect as tunnel2_connect;
 use crate::upstream::UpstreamHeartbeatData;
+use crate::util::var::Var;
 use any_base::module::module;
 use any_base::typ;
+use any_base::typ::Share;
 use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -560,5 +563,255 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
         };
 
         Ok(ShareRw::new(ups_heartbeat))
+    }
+}
+
+pub struct UpstreamTcp {
+    address_vars: Option<Var>,
+    tcp: ProxyPassTcpTunnel2,
+}
+
+impl UpstreamTcp {
+    pub fn new(address_vars: Option<Var>, tcp: ProxyPassTcpTunnel2) -> Self {
+        UpstreamTcp { address_vars, tcp }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamTcp {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.tcp.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.tcp.dynamic_domain.is_some() {
+            self.tcp.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_tcp;
+        use crate::config::tunnel2_core;
+        let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
+        let tunnel2_core_conf = tunnel2_core::main_conf(&ms).await;
+
+        let tcp_config_name = &self.tcp.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
+        if tcp_config.is_none() {
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
+        }
+        let client = tunnel2_core_conf.client();
+        if client.is_none() {
+            return Err(anyhow!("err:client is nil"));
+        }
+        let client = client.unwrap();
+        let connect = Box::new(tunnel2_connect::Connect::new(
+            client,
+            Box::new(tunnel2_connect::PeerStreamConnectTcp::new(
+                address.clone(),
+                addr.clone(),
+                tcp_config.unwrap(),
+            )),
+        ));
+
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.tcp.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
+    }
+}
+
+pub struct UpstreamSsl {
+    address_vars: Option<Var>,
+    ssl: ProxyPassSslTunnel2,
+}
+
+impl UpstreamSsl {
+    pub fn new(address_vars: Option<Var>, ssl: ProxyPassSslTunnel2) -> Self {
+        UpstreamSsl { address_vars, ssl }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamSsl {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.ssl.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.ssl.dynamic_domain.is_some() {
+            self.ssl.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_tcp;
+        use crate::config::tunnel2_core;
+        let upstream_tcp_conf = socket_tcp::main_conf(&ms).await;
+        let tunnel2_core_conf = tunnel2_core::main_conf(&ms).await;
+
+        let tcp_config_name = &self.ssl.tcp_config_name;
+        let tcp_config = upstream_tcp_conf.tcp_confs.get(tcp_config_name).cloned();
+        if tcp_config.is_none() {
+            return Err(anyhow!(
+                "err:tcp_config_name => tcp_config_name:{}",
+                tcp_config_name
+            ));
+        }
+        let client = tunnel2_core_conf.client();
+        if client.is_none() {
+            return Err(anyhow!("err:client is nil"));
+        }
+        let client = client.unwrap();
+        let connect = Box::new(tunnel2_connect::Connect::new(
+            client,
+            Box::new(tunnel2_connect::PeerStreamConnectSsl::new(
+                address.clone(),
+                addr.clone(),
+                self.ssl.ssl_domain.clone(),
+                tcp_config.unwrap(),
+            )),
+        ));
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.ssl.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
+    }
+}
+
+pub struct UpstreamQuic {
+    address_vars: Option<Var>,
+    quic: ProxyPassQuicTunnel2,
+}
+
+impl UpstreamQuic {
+    pub fn new(address_vars: Option<Var>, quic: ProxyPassQuicTunnel2) -> Self {
+        UpstreamQuic { address_vars, quic }
+    }
+}
+
+#[async_trait]
+impl upstream_core::GetConnectI for UpstreamQuic {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)> {
+        use crate::proxy::stream_var;
+        let address = if self.address_vars.is_some() {
+            let stream_info = stream_info.get();
+            let mut address_vars = Var::copy(self.address_vars.as_ref().unwrap())
+                .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+            address_vars.for_each(|var| {
+                let var_name = Var::var_name(var);
+                let value = stream_var::find(var_name, &stream_info)
+                    .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                Ok(value)
+            })?;
+            let address = address_vars
+                .join()
+                .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+            address
+        } else {
+            self.quic.address.clone()
+        };
+
+        use crate::util;
+        let timeout = if self.quic.dynamic_domain.is_some() {
+            self.quic.dynamic_domain.as_ref().unwrap().timeout
+        } else {
+            5
+        };
+        let addr =
+            util::util::lookup_host(tokio::time::Duration::from_secs(timeout as u64), &address)
+                .await?;
+
+        use crate::config::socket_quic;
+        use crate::config::tunnel2_core;
+        let socket_quic_conf = socket_quic::main_conf(&ms).await;
+        let tunnel2_core_conf = tunnel2_core::main_conf(&ms).await;
+
+        let quic_config_name = &self.quic.quic_config_name;
+        let quic_config = socket_quic_conf.quic_confs.get(quic_config_name).cloned();
+        if quic_config.is_none() {
+            return Err(anyhow!(
+                "err:quic_config_name => quic_config_name:{}",
+                quic_config_name
+            ));
+        }
+        let endpoints = socket_quic_conf
+            .endpoints_map
+            .get(quic_config_name)
+            .cloned()
+            .unwrap();
+        let client = tunnel2_core_conf.client();
+        if client.is_none() {
+            return Err(anyhow!("err:client is nil"));
+        }
+        let client = client.unwrap();
+        let connect = Box::new(tunnel2_connect::Connect::new(
+            client,
+            Box::new(tunnel2_connect::PeerStreamConnectQuic::new(
+                address.clone(),
+                addr.clone(),
+                self.quic.ssl_domain.clone(),
+                endpoints,
+                quic_config.unwrap(),
+            )),
+        ));
+
+        let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);
+        let is_proxy_protocol_hello = self.quic.is_proxy_protocol_hello;
+
+        Ok((is_proxy_protocol_hello, connect))
     }
 }

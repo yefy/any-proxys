@@ -1,9 +1,10 @@
 use crate::config as conf;
 use crate::config::upstream_block;
+use crate::stream::connect;
 use crate::upstream::{UpstreamData, UpstreamHeartbeatData};
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcUnsafeAny, ShareRw};
+use any_base::typ::{ArcUnsafeAny, Share, ShareRw};
 use anyhow::Result;
 use async_trait::async_trait;
 use lazy_static::lazy_static;
@@ -23,6 +24,15 @@ pub trait HeartbeatI: Send + Sync + 'static {
         ups_heartbeat: Option<UpstreamHeartbeat>,
         is_weight: bool,
     ) -> Result<ShareRw<UpstreamHeartbeatData>>;
+}
+
+#[async_trait]
+pub trait GetConnectI: Send + Sync + 'static {
+    async fn get_connect(
+        &self,
+        ms: &Modules,
+        stream_info: &Share<StreamInfo>,
+    ) -> Result<(Option<bool>, Arc<Box<dyn connect::Connect>>)>;
 }
 
 pub struct Conf {
@@ -97,7 +107,11 @@ lazy_static! {
         ),
         init_master_thread: None,
         init_work_thread: None,
-        drop_conf: None,
+        drop_conf: Some(|ms, parent_conf, child_conf| Box::pin(drop_conf(
+            ms,
+            parent_conf,
+            child_conf
+        ))),
     });
 }
 
@@ -215,7 +229,27 @@ async fn init_conf(
     let _conf = conf.get_mut::<Conf>();
     return Ok(());
 }
+
+async fn drop_conf(
+    _ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let conf = conf.get_mut::<Conf>();
+    conf.servers.clear();
+
+    for (_, v) in conf.ups_data_map.iter() {
+        let v = &mut *v.get_mut();
+        v.ups_dynamic_domains.clear();
+        v.ups_heartbeats.clear();
+        v.ups_heartbeats_active.clear();
+        v.ups_heartbeats_map.clear();
+    }
+    return Ok(());
+}
+
 use crate::config::config_toml::UpstreamHeartbeat;
+use crate::proxy::stream_info::StreamInfo;
 use crate::upstream::upstream::Upstream;
 use std::collections::HashMap;
 use std::net::SocketAddr;

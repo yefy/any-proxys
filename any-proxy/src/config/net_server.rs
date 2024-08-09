@@ -193,6 +193,7 @@ async fn server(
     conf_arg.cmd_conf_type = Arc::new(AtomicUsize::new(conf::CMD_CONF_TYPE_SERVER));
     let main_index = conf_arg.main_index.load(Ordering::SeqCst);
     conf_arg.main_index = Arc::new(AtomicI32::new(main_index));
+    conf_arg.last_module_confs = conf_arg.curr_module_confs.clone();
 
     // let mut conf_arg_sub = module::ConfArg::new();
     // conf_arg_sub

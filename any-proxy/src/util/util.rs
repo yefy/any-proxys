@@ -90,6 +90,9 @@ pub async fn lookup_host(timeout: tokio::time::Duration, address: &str) -> Resul
         Ok(addrs) => match addrs {
             Ok(addrs) => {
                 let addrs = addrs.into_iter().collect::<Vec<_>>();
+                if addrs.len() <= 0 {
+                    return Err(anyhow!("err:address nil => address:{}", address));
+                }
                 let index: usize = rand::thread_rng().gen();
                 let index = index % addrs.len();
                 return Ok(addrs[index]);
@@ -112,6 +115,9 @@ pub async fn lookup_hosts(
         Ok(addrs) => match addrs {
             Ok(addrs) => {
                 let addrs = addrs.into_iter().collect::<Vec<_>>();
+                if addrs.len() <= 0 {
+                    return Err(anyhow!("err:address nil => address:{}", address));
+                }
                 return Ok(addrs);
             }
             Err(e) => Err(anyhow!(

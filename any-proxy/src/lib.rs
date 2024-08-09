@@ -14,9 +14,6 @@ pub mod upstream;
 pub mod util;
 pub mod wasm;
 
-use any_base::executor_local_spawn::ExecutorLocalSpawn;
-use any_base::module::module::Modules;
-use any_base::typ::ArcMutex;
 use any_tunnel2::Protocol4;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -33,11 +30,7 @@ pub struct WasmPluginConf {
     #[serde(default = "default_wasm_plug_conf_is_open")]
     pub is_open: bool,
     pub wasm_path: String,
-    pub wasm_main_config: String,
-    pub wasm_main_timeout_config: Option<String>,
-    pub wasm_main_ext1_config: Option<String>,
-    pub wasm_main_ext2_config: Option<String>,
-    pub wasm_main_ext3_config: Option<String>,
+    pub wasm_main_config: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -192,92 +185,4 @@ pub enum Error {
     Ext1,
     Ext2,
     Ext3,
-}
-
-pub struct ExecutorLocalSpawnMs {
-    ms: Modules,
-    executor: ExecutorLocalSpawn,
-    ms_executor: ExecutorLocalSpawn,
-    shutdown_timeout: u64,
-}
-
-impl ExecutorLocalSpawnMs {
-    pub fn new(
-        ms: Modules,
-        executor: ExecutorLocalSpawn,
-        ms_executor: ExecutorLocalSpawn,
-        shutdown_timeout: u64,
-    ) -> Self {
-        ExecutorLocalSpawnMs {
-            ms,
-            executor,
-            ms_executor,
-            shutdown_timeout,
-        }
-    }
-
-    pub fn executor(&self) -> ExecutorLocalSpawn {
-        self.ms_executor.clone()
-    }
-}
-
-impl Drop for ExecutorLocalSpawnMs {
-    fn drop(&mut self) {
-        let ms = self.ms.clone();
-        let ms_executor = self.ms_executor.clone();
-        let shutdown_timeout = self.shutdown_timeout;
-        let _ = self.executor.clone()._start_and_free(move |_| async move {
-            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop ExecutorLocalSpawnMs", ms.session_id(), ms.count());
-            ms_executor
-                .stop("ExecutorLocalSpawnMs", true, shutdown_timeout)
-                .await;
-            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop ExecutorLocalSpawnMs ms_executor", ms.session_id(), ms.count());
-
-            use crate::config::port_core;
-            let port_core_conf = port_core::main_conf_mut(&ms).await;
-            port_core_conf.port_config_listen_map.clear();
-
-            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop ExecutorLocalSpawnMs port_core_conf", ms.session_id(), ms.count());
-
-            use crate::config::domain_core;
-            let domain_core_conf = domain_core::main_conf_mut(&ms).await;
-            for (_, v) in domain_core_conf.domain_config_listen_map.iter_mut() {
-                v.domain_config_context_map.clear()
-            }
-            domain_core_conf.domain_config_listen_merge_map.clear();
-            domain_core_conf.domain_config_listen_map.clear();
-            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop ExecutorLocalSpawnMs domain_core_conf", ms.session_id(), ms.count());
-            Ok(())
-        });
-    }
-}
-
-pub struct ModulesExecutor {
-    pub ms: Modules,
-    pub ms_executor: ArcMutex<ExecutorLocalSpawnMs>,
-}
-
-impl ModulesExecutor {
-    pub fn new(
-        ms: Modules,
-        executor: ExecutorLocalSpawn,
-        ms_executor: ExecutorLocalSpawn,
-        shutdown_timeout: u64,
-    ) -> Self {
-        ModulesExecutor {
-            ms: ms.clone(),
-            ms_executor: ArcMutex::new(ExecutorLocalSpawnMs::new(
-                ms,
-                executor,
-                ms_executor,
-                shutdown_timeout,
-            )),
-        }
-    }
-
-    pub fn del_ms_executor(&self) {
-        if self.ms_executor.is_some() {
-            self.ms_executor.set_nil();
-        }
-    }
 }

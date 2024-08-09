@@ -1,7 +1,6 @@
-use crate::proxy::stream_info::StreamInfo;
 use crate::wasm::component::server::wasm_socket;
-use crate::wasm::socket_connect;
 use crate::wasm::WasmHost;
+use crate::wasm::{socket_connect, WasmStreamInfo};
 use any_base::stream_flow::StreamFlow;
 use any_base::typ::{ArcMutexTokio, Share};
 use anyhow::Result;
@@ -14,17 +13,16 @@ impl WasmHost {
         fd: &u64,
     ) -> Option<(
         ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>,
-        Share<StreamInfo>,
+        Share<WasmStreamInfo>,
     )> {
-        let stream = self.stream_info.get_mut().wasm_socket_map.get(fd).cloned();
+        let stream = self
+            .wasm_stream_info
+            .get_mut()
+            .wasm_socket_map
+            .get(fd)
+            .cloned();
         let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
+            let stream_info = self.wasm_stream_info_map.get().get(&fd).cloned();
             if stream_info.is_none() {
                 return None;
             }
@@ -36,7 +34,7 @@ impl WasmHost {
             }
             Some((stream.unwrap(), stream_info.clone()))
         } else {
-            Some((stream.unwrap(), self.stream_info.clone()))
+            Some((stream.unwrap(), self.wasm_stream_info.clone()))
         };
         stream
     }
@@ -78,7 +76,7 @@ impl wasm_socket::Host for WasmHost {
                 session_id
             };
 
-            self.stream_info
+            self.wasm_stream_info
                 .get_mut()
                 .wasm_socket_map
                 .insert(session_id, stream);

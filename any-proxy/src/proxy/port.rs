@@ -11,12 +11,14 @@ use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
+use awaitgroup::WaitGroup;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct PortListen {
+    pub ms: Arc<Modules>,
     pub port_config_listen: Arc<port_config::PortConfigListen>,
     pub listen_shutdown_tx: broadcast::Sender<()>,
 }
@@ -24,23 +26,33 @@ pub struct PortListen {
 pub struct Port {
     executor: ExecutorLocalSpawn,
     port_config_listen_map: ShareRw<HashMap<String, PortListen>>,
+    wait_group: WaitGroup,
 }
 
 impl Port {
     pub fn new(value: typ::ArcUnsafeAny) -> Result<Port> {
         let value = value.get::<AnyproxyWorkDataNew>();
         let executor = ExecutorLocalSpawn::new(value.executors.clone());
+        let wait_group = WaitGroup::new();
 
         Ok(Port {
             executor,
             port_config_listen_map: ShareRw::new(HashMap::new()),
+            wait_group,
         })
+    }
+}
+
+impl Drop for Port {
+    fn drop(&mut self) {
+        self.port_config_listen_map.get_mut().clear();
     }
 }
 
 #[async_trait]
 impl module::Server for Port {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
+        let ms = Arc::new(ms);
         log::debug!(target: "ms", "ms session_id:{}, count:{} => Port", ms.session_id(), ms.count());
         log::trace!(target: "main", "port start");
         use crate::config::port_core;
@@ -93,6 +105,7 @@ impl module::Server for Port {
             self.port_config_listen_map.get_mut().insert(
                 key.clone(),
                 PortListen {
+                    ms: ms.clone(),
                     port_config_listen: Arc::new(port_config_listen),
                     listen_shutdown_tx,
                 },
@@ -104,6 +117,7 @@ impl module::Server for Port {
             let listen_server = port_config_listen.listen_server.clone();
 
             let port_listen = PortListen {
+                ms: ms.clone(),
                 port_config_listen: Arc::new(port_config_listen.clone()),
                 listen_shutdown_tx: listen_shutdown_tx.clone(),
             };
@@ -115,10 +129,11 @@ impl module::Server for Port {
             let port_config_listen_map = self.port_config_listen_map.clone();
             let key = key.clone();
             let ms = ms.clone();
-
+            let wait_group = self.wait_group.clone();
+            let worker_inner = wait_group.worker().add();
             self.executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                None,
+                Some(format!("{}:{}", file!(), line!())),
                 move |executors| async move {
                     let port_server = port_server::PortServer::new(
                         executors,
@@ -129,7 +144,7 @@ impl module::Server for Port {
                     )
                     .map_err(|e| anyhow!("err:PortServer::new => e:{}", e))?;
                     port_server
-                        .start(ms)
+                        .start(ms, worker_inner)
                         .await
                         .map_err(|e| anyhow!("err:port_server.start => e:{}", e))?;
                     Ok(())
@@ -151,6 +166,22 @@ impl module::Server for Port {
         Ok(())
     }
     async fn send(&self, value: ArcUnsafeAny) -> Result<()> {
+        let keys = self
+            .port_config_listen_map
+            .get()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys.iter() {
+            let _ = self
+                .port_config_listen_map
+                .get()
+                .get(key)
+                .unwrap()
+                .listen_shutdown_tx
+                .send(());
+        }
+
         let value = value.get::<AnyproxyWorkDataSend>();
         self.executor.send(&value.name, value.is_fast_shutdown);
         Ok(())

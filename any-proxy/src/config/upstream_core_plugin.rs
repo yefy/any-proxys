@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub type PluginHandleBalancer = fn(
     ip: &str,
     ups_data: &mut UpstreamData,
-) -> Option<(Option<bool>, Arc<Box<dyn connect::Connect>>)>;
+) -> Option<(Option<bool>, bool, Arc<Box<dyn connect::Connect>>)>;
 
 pub const WEIGHT: &str = "weight";
 pub const ROUND_ROBIN: &str = "round_robin";

@@ -8,7 +8,7 @@ make
 make install
 
 # 运行nginx
-cp -r $HOME/any-proxys/any-proxy/examples/anyproxy/nginx/conf/* ./nginx/conf/  
+cp -r $HOME/any-proxys/any-example/anyproxy/nginx/conf/* ./nginx/conf/  
 ./nginx/sbin/nginx
 
 # 添加host

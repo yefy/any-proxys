@@ -22,24 +22,26 @@ interface wasm-std {
     //异步sleep函数
     sleep: func(time-ms: u64);
     //当前插件在主服务的唯一id，简称session_id, 也是session_send函数参数
+    main-session-id: func() -> u64;
     curr-session-id: func() -> u64;
     //当前链接在主服务的唯一id，简称fd，可以读取客户端流信息
-    curr-fd: func() -> u64;
+    main-fd: func() -> u64;
     //生成唯一session_id
     new-session-id: func() -> u64;
     //用于插件之间通讯， 根据session_id发送到哪个插件
-    session-send: func(session-id: u64, cmd: u64, value: list<u8>) -> result<_, string>;
-    session-request: func(session-id: u64, cmd: u64, value: list<u8>) -> result<option<list<u8>>, string>;
+    session-send: func(session-id: u64, cmd: s64, value: list<u8>) -> result<_, string>;
+    session-request: func(session-id: u64, cmd: s64, value: list<u8>) -> result<option<list<u8>>, string>;
     //插件接收信息
-    session-recv: func() -> result<tuple<u64, u64, list<u8>>, string>;
+    session-recv: func() -> result<tuple<u64, s64, list<u8>>, string>;
+    session-try-recv: func() -> result<option<tuple<u64, s64, list<u8>>>, string>;
     //插件响应信息
     session-response: func(fd: u64, value: option<list<u8>>) -> result<_, string>;
     //增加定时器
-    add-timer: func(time-ms: u64, key: u64, value: list<u8>);
+    add-timer: func(time-ms: u64, cmd: s64, value: list<u8>);
     //删除定时器
-    del-timer: func(key: u64);
+    del-timer: func(cmd: s64);
     //获取过期定时器
-    get-timer-timeout:func(time-ms: u64) -> list<tuple<u64, list<u8>>>;
+    get-timer-timeout:func(time-ms: u64) -> list<tuple<s64, list<u8>>>;
 
     in-add-headers: func(headers: list<tuple<string, string>>) -> result<_, string>;
     in-add-header: func(key: string, value: string) -> result<_, string>;
@@ -58,4 +60,6 @@ interface wasm-std {
     out-get-header: func(key: string) -> result<option<string>, string>;
     out-set-response: func(res: response) -> result<_, string>;
     out-response: func(res: response) -> result<_, string>;
+
+    spawn: func(typ: option<s64>, config: option<string>) -> result<u64, string>;
 }

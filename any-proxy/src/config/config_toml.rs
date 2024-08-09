@@ -473,7 +473,8 @@ fn default_access_format() -> String {
         http_local_cache_req_count:${http_local_cache_req_count} http_cache_status:${http_cache_status} \
         http_cache_file_status:${http_cache_file_status} http_is_upstream:${http_is_upstream} \
         http_last_slice_upstream_index:${http_last_slice_upstream_index} \
-        http_max_upstream_count:${http_max_upstream_count} http_is_cache:${http_is_cache}".to_string()
+        http_max_upstream_count:${http_max_upstream_count} http_is_cache:${http_is_cache} \
+        http_request_url:${http_request_method}@${http_request_url} http_cache_file_path:${http_cache_file_path}".to_string()
 }
 
 fn default_access_log_stdout() -> bool {

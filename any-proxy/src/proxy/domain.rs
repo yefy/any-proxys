@@ -12,13 +12,14 @@ use any_base::typ::{ArcUnsafeAny, ShareRw};
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
+use awaitgroup::WaitGroup;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct DomainListen {
-    pub ms: Modules,
+    pub ms: Arc<Modules>,
     pub domain_config_listen: Arc<domain_config::DomainConfigListen>,
     pub listen_shutdown_tx: broadcast::Sender<()>,
 }
@@ -27,23 +28,33 @@ pub struct Domain {
     executor: ExecutorLocalSpawn,
     domain_config_listen_map: ShareRw<HashMap<String, DomainListen>>,
     context: Arc<DomainContext>,
+    wait_group: WaitGroup,
 }
 
 impl Domain {
     pub fn new(value: typ::ArcUnsafeAny) -> Result<Domain> {
         let value = value.get::<AnyproxyWorkDataNew>();
         let executor = ExecutorLocalSpawn::new(value.executors.clone());
+        let wait_group = WaitGroup::new();
         Ok(Domain {
             executor,
             domain_config_listen_map: ShareRw::new(HashMap::new()),
             context: Arc::new(DomainContext::new()),
+            wait_group,
         })
+    }
+}
+
+impl Drop for Domain {
+    fn drop(&mut self) {
+        self.domain_config_listen_map.get_mut().clear();
     }
 }
 
 #[async_trait]
 impl module::Server for Domain {
     async fn start(&mut self, ms: Modules, _value: ArcUnsafeAny) -> Result<()> {
+        let ms = Arc::new(ms);
         log::debug!(target: "ms", "ms session_id:{}, count:{} => Domain", ms.session_id(), ms.count());
         log::trace!(target: "main", "domain start");
         use crate::config::domain_core;
@@ -124,10 +135,12 @@ impl module::Server for Domain {
             let domain_context = self.context.clone();
             let key = key.clone();
             let ms = ms.clone();
+            let wait_group = self.wait_group.clone();
+            let worker_inner = wait_group.worker().add();
 
             self.executor._start(
                 #[cfg(feature = "anyspawn-count")]
-                None,
+                Some(format!("{}:{}", file!(), line!())),
                 move |executors| async move {
                     let domain_server = domain_server::DomainServer::new(
                         executors,
@@ -139,7 +152,7 @@ impl module::Server for Domain {
                     )
                     .map_err(|e| anyhow!("err:DomainServer::new => e:{}", e))?;
                     domain_server
-                        .start(ms)
+                        .start(ms, worker_inner)
                         .await
                         .map_err(|e| anyhow!("err:domain_server.start => e:{}", e))?;
                     Ok(())
@@ -162,6 +175,22 @@ impl module::Server for Domain {
         Ok(())
     }
     async fn send(&self, value: ArcUnsafeAny) -> Result<()> {
+        let keys = self
+            .domain_config_listen_map
+            .get()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys.iter() {
+            let _ = self
+                .domain_config_listen_map
+                .get()
+                .get(key)
+                .unwrap()
+                .listen_shutdown_tx
+                .send(());
+        }
+
         let value = value.get::<AnyproxyWorkDataSend>();
         self.executor.send(&value.name, value.is_fast_shutdown);
         Ok(())

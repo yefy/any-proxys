@@ -183,9 +183,9 @@ async fn net_server_stream_test(
     use crate::config::net_server_core_plugin;
     let net_server_core_plugin_conf = net_server_core_plugin::curr_conf_mut(conf_arg.curr_conf());
 
-    use crate::proxy::stream_test::stream_test_server;
+    use crate::proxy::stream_test::stream_server_test;
     net_server_core_plugin_conf.plugin_handle_protocol = ArcRwLockTokio::new(|arg, flow| {
-        Box::pin(stream_test_server::http_server_handle(arg, flow))
+        Box::pin(stream_server_test::http_server_handle(arg, flow))
     });
     return Ok(());
 }

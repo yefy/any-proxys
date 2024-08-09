@@ -141,7 +141,11 @@ lazy_static! {
         ),
         init_master_thread: None,
         init_work_thread: None,
-        drop_conf: None,
+        drop_conf: Some(|ms, parent_conf, child_conf| Box::pin(drop_conf(
+            ms,
+            parent_conf,
+            child_conf
+        ))),
     });
 }
 
@@ -241,6 +245,19 @@ async fn init_conf(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
+    return Ok(());
+}
+
+async fn drop_conf(
+    _ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let conf = conf.get_mut::<Conf>();
+    conf.ups_dynamic_domains.clear();
+    conf.ups_heartbeats.clear();
+    conf.ups_heartbeats_active.clear();
+    conf.ups_heartbeats_map.clear();
     return Ok(());
 }
 

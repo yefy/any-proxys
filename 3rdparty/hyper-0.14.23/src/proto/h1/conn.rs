@@ -19,6 +19,7 @@ use crate::common::{task, Pin, Poll, Unpin};
 use crate::headers::connection_keep_alive;
 use crate::proto::{BodyLength, MessageHead};
 use any_base::stream_flow::StreamReadWriteFlow;
+use any_base::util::HttpHeaderExt;
 
 const H2_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -89,6 +90,10 @@ where
 
     pub(crate) fn set_max_buf_size(&mut self, max: usize) {
         self.io.set_max_buf_size(max);
+    }
+
+    pub(crate) fn set_resp_header_ext(&mut self, resp_header_ext: HttpHeaderExt) {
+        self.io.set_resp_header_ext(resp_header_ext);
     }
 
     #[cfg(feature = "client")]

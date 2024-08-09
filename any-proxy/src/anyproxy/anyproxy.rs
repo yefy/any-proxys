@@ -2,7 +2,6 @@ use super::anyproxy_group;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
 use crate::util::default_config;
 use crate::util::signal;
-use crate::ModulesExecutor;
 use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
@@ -62,7 +61,7 @@ yum install perf
 
 cargo install flamegraph
 
-flamegraph -o out.svg ./anyproxy
+flamegraph -o out.svg -- ./anyproxy
 cargo flamegraph -o out.svg --example some_example --features some_features
 */
 
@@ -193,6 +192,10 @@ impl Anyproxy {
         }
 
         if arg_config.check_config {
+            use crate::anyproxy::anymodule;
+            anymodule::add_modules()?;
+            module::parse_modules()?;
+
             executor_local_spawn::_block_on(1, 1, move |executor| async move {
                 AnyproxyGroup::check(0, executor).await
             })?;
@@ -219,35 +222,44 @@ impl Anyproxy {
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
 
-        let ms: Result<module::Modules> = tokio::task::spawn_blocking(move || {
-            executor_local_spawn::_block_on(1, 512, move |_executor| async move {
-                let file_name = { default_config::ANYPROXY_CONF_FULL_PATH.get().clone() };
-                let mut ms = module::Modules::new(None, false);
-                ms.parse_module_config(&file_name, None)
-                    .await
-                    .map_err(|e| anyhow!("err:file_name:{} => e:{}", file_name, e))?;
-                Ok(ms)
-            })
-        })
-        .await
-        .map_err(|e| anyhow!("err:parse_module_config => e:{}", e))?;
-        let ms = ms.unwrap();
+        #[cfg(feature = "anylock-time")]
+        self.executor._start_and_free(move |_| async move {
+            use any_base::typ2;
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                let mut datas = {
+                    let map = &mut *typ2::TOKIO_LOCK_INDEX_MAP.lock();
+                    let mut datas = Vec::with_capacity(100);
+                    for (k, v) in map {
+                        datas.push((k.clone(), v.clone()))
+                    }
+                    datas
+                };
 
-        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
-        ms.init_master_thread(self.executor.clone(), ms_executor.clone())
-            .await
-            .map_err(|e| anyhow!("err:init_master_thread => e:{}", e))?;
-
-        use crate::config::common_core;
-        let common_conf = common_core::main_conf(&ms).await;
-        let shutdown_timeout = common_conf.shutdown_timeout;
-
-        let mse = ModulesExecutor::new(ms, self.executor.clone(), ms_executor, shutdown_timeout);
+                datas.sort_by(|(_, av), (_, bv)| av.partial_cmp(bv).unwrap());
+                if datas.is_empty() {
+                    continue;
+                }
+                let (k, v) = &datas[0];
+                log::info!("min async lock:{}, time:{}", k, v);
+                for (k, v) in datas {
+                    log::info!("all async lock:{}, time:{}", k, v);
+                }
+            }
+        });
+        //test
+        // use any_base::typ2;
+        // let lock_test = typ2::ArcMutexTokio::new(1);
+        // let _la = lock_test.get_mut(file!(), line!()).await;
+        // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        // let _la = lock_test.get_mut(file!(), line!()).await;
+        let (ms_tx, ms_rx) = async_channel::unbounded();
         let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> =
             Some(anyproxy_group::AnyproxyGroup::new(
                 self.group_version_add(),
-                mse,
                 self.executor.clone(),
+                None,
+                ms_tx.clone(),
             )?);
         anyproxy_group
             .as_mut()
@@ -260,24 +272,32 @@ impl Anyproxy {
         Self::run_hot_pid()?;
 
         loop {
-            let anyproxy_state = Anyproxy::read_signal().await;
+            let anyproxy_state = tokio::select! {
+                biased;
+                anyproxy_state = Anyproxy::read_signal() =>  {
+                    anyproxy_state
+                },
+                ret = Self::ms_recv(& ms_rx) =>  {
+                    ret?;
+                   AnyproxyState::Skip
+                },
+                else => {
+                   AnyproxyState::Skip
+                }
+            };
 
             match anyproxy_state {
                 AnyproxyState::Skip => {
                     continue;
                 }
                 AnyproxyState::Quit => {
-                    self.async_anyproxy_group_stop(
-                        anyproxy_group.unwrap(),
-                        false,
-                        shutdown_timeout,
-                    )
-                    .await;
+                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), false)
+                        .await;
                     log::info!("signal: quit");
                     break;
                 }
                 AnyproxyState::Stop => {
-                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true, shutdown_timeout)
+                    self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true)
                         .await;
                     log::info!("signal: quit");
                     break;
@@ -307,18 +327,12 @@ impl Anyproxy {
                     #[cfg(unix)]
                     {
                         let ms = anyproxy_group.as_ref().unwrap().ms();
-                        let ms_executor = ExecutorLocalSpawn::new(self.executor.executors());
-                        let mse = ModulesExecutor::new(
-                            ms,
-                            self.executor.clone(),
-                            ms_executor,
-                            shutdown_timeout,
-                        );
 
                         let mut new_anyproxy_group = anyproxy_group::AnyproxyGroup::new(
                             self.group_version_add(),
-                            mse,
                             self.executor.clone(),
+                            ms,
+                            ms_tx.clone(),
                         )
                         .map_err(|e| anyhow!("err:anyproxy_group::AnyproxyGroup => e:{}", e))?;
                         if let Err(e) = new_anyproxy_group
@@ -331,21 +345,13 @@ impl Anyproxy {
                                 new_anyproxy_group.group_version(),
                                 e
                             );
-                            self.async_anyproxy_group_stop(
-                                new_anyproxy_group,
-                                false,
-                                shutdown_timeout,
-                            )
-                            .await;
+                            self.async_anyproxy_group_stop(new_anyproxy_group, false)
+                                .await;
                             continue;
                         }
 
-                        self.async_anyproxy_group_stop(
-                            anyproxy_group.take().unwrap(),
-                            false,
-                            shutdown_timeout,
-                        )
-                        .await;
+                        self.async_anyproxy_group_stop(anyproxy_group.take().unwrap(), false)
+                            .await;
                         anyproxy_group = Some(new_anyproxy_group);
                     }
                 }
@@ -354,22 +360,56 @@ impl Anyproxy {
 
         self.executor.send("anyproxy_group stop", true);
         self.wait_anyproxy_groups().await?;
+        let _ = Self::ms_try_recv(&ms_rx).await;
+
+        Ok(())
+    }
+
+    pub async fn ms_recv(ms_rx: &async_channel::Receiver<module::Modules>) -> Result<()> {
+        loop {
+            let ms = ms_rx.recv().await?;
+            let _ = Self::ms_del(ms).await;
+        }
+    }
+
+    pub async fn ms_try_recv(ms_rx: &async_channel::Receiver<module::Modules>) -> Result<()> {
+        loop {
+            let ms = ms_rx.try_recv()?;
+            let _ = Self::ms_del(ms).await;
+        }
+    }
+
+    pub async fn ms_del(ms: module::Modules) -> Result<()> {
+        let drop_confs_map = unsafe { ms.drop_confs_map.take() };
+        let drop_ms_executor = unsafe { ms.drop_ms_executor.take() };
+        if drop_confs_map.is_some() {
+            let drop_confs_map = drop_confs_map.unwrap();
+            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop Modules", ms.session_id(), ms.count());
+            let _ = ms.drop_confs(drop_confs_map).await;
+        }
+
+        if drop_ms_executor.is_some() {
+            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop_ms_executor", ms.session_id(), ms.count());
+            let drop_ms_executor = drop_ms_executor.unwrap();
+            let ms_executor = drop_ms_executor.ms_executor.clone();
+            let shutdown_timeout = drop_ms_executor.shutdown_timeout;
+            ms_executor
+                .stop("ExecutorLocalSpawnMs", true, shutdown_timeout)
+                .await;
+        }
         Ok(())
     }
 
     pub async fn async_anyproxy_group_stop(
         &mut self,
-        anyproxy_group: anyproxy_group::AnyproxyGroup,
+        mut anyproxy_group: anyproxy_group::AnyproxyGroup,
         is_fast_shutdown: bool,
-        shutdown_timeout: u64,
     ) {
         self.executor._start(
             #[cfg(feature = "anyspawn-count")]
-            None,
+            Some(format!("{}:{}", file!(), line!())),
             move |_| async move {
-                anyproxy_group
-                    .stop(is_fast_shutdown, shutdown_timeout)
-                    .await;
+                anyproxy_group.stop(is_fast_shutdown).await;
                 Ok(())
             },
         );
@@ -512,7 +552,7 @@ impl Anyproxy {
                     return AnyproxyState::Skip;
                 }
             },
-             _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+             _ = tokio::time::sleep(std::time::Duration::from_millis(1000 * 3)) => {
                return Anyproxy::load_signal_file();
             },
             else => {

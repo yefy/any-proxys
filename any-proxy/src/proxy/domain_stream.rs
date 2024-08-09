@@ -26,7 +26,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct DomainStream {
-    ms: Modules,
+    ms: Arc<Modules>,
     executors: ExecutorsLocal,
     server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: Option<tunnel_server::Publish>,
@@ -38,7 +38,7 @@ pub struct DomainStream {
 
 impl DomainStream {
     pub fn new(
-        ms: Modules,
+        ms: Arc<Modules>,
         executors: ExecutorsLocal,
         server_stream_info: ServerStreamInfo,
         tunnel_publish: Option<tunnel_server::Publish>,
@@ -60,7 +60,7 @@ impl DomainStream {
     }
 
     pub async fn start(self) -> Result<()> {
-        log::trace!(target: "main", "domain stream start");
+        log::debug!(target: "ext3", "domain_stream.rs");
         use crate::config::net_core;
         let ms = self.ms.clone();
         let net_core_conf = net_core::main_conf_mut(&ms).await;
@@ -74,7 +74,7 @@ impl DomainStream {
             net_core_wasm_conf.wasm_stream_info_map.clone()
         };
 
-        let stream_info = StreamInfo::new(
+        let mut stream_info = StreamInfo::new(
             self.server_stream_info.clone(),
             net_core_conf.debug_is_open_stream_work_times,
             Some(self.executors.clone()),
@@ -85,27 +85,39 @@ impl DomainStream {
             session_id,
             wasm_stream_info_map,
         );
+
+        let domain_config_context = self
+            .domain_config_listen
+            .domain_config_context_map
+            .iter()
+            .last();
+        if domain_config_context.is_some() {
+            let (_, domain_config_context) = domain_config_context.unwrap();
+            stream_info.scc = Some(domain_config_context.scc.to_arc_scc(ms)).into();
+        }
         let stream_info = Share::new(stream_info);
         let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
 
-        stream_start::do_start(self, stream_info, shutdown_thread_rx).await
+        stream_start::do_start(self, &stream_info, shutdown_thread_rx).await
     }
 }
 
 #[async_trait]
 impl proxy::Stream for DomainStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
+        log::debug!(target: "ext3", "domain_stream.rs do_start");
         let mut stream = self.client_stream.take().unwrap();
         stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
 
         let client_buf_reader = any_base::io_rb::buf_reader::BufReader::new(stream);
         stream_info.get_mut().add_work_time1("tunnel_stream");
+        log::debug!(target: "ext3", "domain_stream.rs tunnel_stream");
         let client_buf_reader = TunnelStream::tunnel_stream(
             self.tunnel_publish.clone(),
             self.tunnel2_publish.clone(),
             self.server_stream_info.clone(),
             client_buf_reader,
-            stream_info.clone(),
+            &stream_info,
             self.executors.clone(),
         )
         .await
@@ -115,10 +127,11 @@ impl proxy::Stream for DomainStream {
         }
         let client_buf_reader = client_buf_reader.unwrap();
 
+        log::debug!(target: "ext3", "domain_stream.rs heartbeat_stream");
         stream_info.get_mut().add_work_time1("heartbeat");
         let ret = HeartbeatStream::heartbeat_stream(
             client_buf_reader,
-            stream_info,
+            stream_info.clone(),
             self.executors.clone(),
         )
         .await?;
@@ -135,7 +148,10 @@ impl proxy::Stream for DomainStream {
             server_stream_info: self.server_stream_info.clone(),
             http_context: self.domain_context.http_context.clone(),
         };
-
+        stream_info
+            .get_mut()
+            .add_work_time1("plugin_handle_protocol");
+        log::debug!(target: "ext3", "domain_stream.rs plugin_handle_protocol");
         let plugin_handle_protocol = self.domain_config_listen.plugin_handle_protocol.clone();
         if plugin_handle_protocol.is_some().await {
             stream_info.get_mut().add_work_time1("plugin");
@@ -150,8 +166,9 @@ impl proxy::Stream for DomainStream {
         let client_buf_reader_http_v1 = client_buf_reader.clone();
         let server_stream_info = self.server_stream_info.clone();
 
+        log::debug!(target: "ext3", "domain_stream.rs parse_proxy_domain");
         stream_info.get_mut().add_work_time1("parse_proxy_domain");
-        let stream_info_ = stream_info.clone();
+        let stream_info_ = &stream_info;
         let scc = proxy_util::parse_proxy_domain(
             &arg,
             move || async move {
@@ -207,13 +224,20 @@ impl proxy::Stream for DomainStream {
         .await?;
         let client_buf_reader = unsafe { client_buf_reader.take().await };
 
-        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+        log::debug!(target: "ext3", "domain_stream.rs run_plugin_handle_access");
+        stream_info
+            .get_mut()
+            .add_work_time1("run_plugin_handle_access");
+        if run_plugin_handle_access(&scc, &stream_info).await? {
             return Ok(());
         }
 
+        log::debug!(target: "ext3", "domain_stream.rs run_plugin_handle_serverless");
+        stream_info
+            .get_mut()
+            .add_work_time1("run_plugin_handle_serverless");
         let client_buf_reader =
-            run_plugin_handle_serverless(scc.clone(), stream_info.clone(), client_buf_reader)
-                .await?;
+            run_plugin_handle_serverless(&scc, &stream_info, client_buf_reader).await?;
         if client_buf_reader.is_none() {
             return Ok(());
         }
@@ -222,7 +246,8 @@ impl proxy::Stream for DomainStream {
         let (client_stream, buf, pos, cap) = client_buf_reader.table_buffer_ext();
         let client_buffer = &buf[pos..cap];
 
+        log::debug!(target: "ext3", "domain_stream.rs connect_and_stream");
         stream_info.get_mut().add_work_time1("connect_and_stream");
-        StreamStream::connect_and_stream(stream_info, client_buffer, client_stream).await
+        StreamStream::connect_and_stream(&stream_info, client_buffer, client_stream).await
     }
 }

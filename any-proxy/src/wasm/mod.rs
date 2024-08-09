@@ -13,9 +13,10 @@ pub mod wasm_host_websocket;
 
 use crate::config::net_core_wasm::WasmPlugin;
 use crate::proxy::stream_info::StreamInfo;
+use crate::proxy::websocket_proxy::WebSocketStreamTrait;
 use crate::proxy::StreamConfigContext;
 use crate::WasmPluginConf;
-use any_base::typ::{OptionExt, Share};
+use any_base::typ::{ArcMutexTokio, ArcRwLock, OptionExt, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use component::server::wasm_std;
@@ -24,16 +25,70 @@ use wasmtime::component::ResourceTable;
 use wasmtime::Store;
 use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder, WasiView};
 
+pub struct WasmStreamInfo {
+    pub wasm_socket_map:
+        HashMap<u64, ArcMutexTokio<any_base::io::buf_stream::BufStream<StreamFlow>>>,
+    pub wasm_websocket_map: HashMap<u64, ArcMutexTokio<Box<dyn WebSocketStreamTrait>>>,
+
+    pub wasm_session_sender: async_channel::Sender<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_receiver: async_channel::Receiver<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_response_map: HashMap<u64, tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    pub wasm_timers: HashMap<i64, (i64, Vec<u8>)>,
+}
+
+impl WasmStreamInfo {
+    pub fn new() -> Self {
+        let (wasm_session_sender, wasm_session_receiver) = async_channel::unbounded();
+        Self {
+            wasm_socket_map: HashMap::new(),
+            wasm_websocket_map: HashMap::new(),
+            wasm_session_sender,
+            wasm_session_receiver,
+            wasm_session_response_map: HashMap::new(),
+            wasm_timers: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct WasmHost {
+    session_id: u64,
     stream_info: Share<StreamInfo>,
     scc: OptionExt<Arc<StreamConfigContext>>,
+    wasm_plugin: Arc<WasmPlugin>,
+    wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
+    r: OptionExt<Arc<HttpStreamRequest>>,
+    //自己独有的
+    wasm_stream_info: Share<WasmStreamInfo>,
 }
 
 impl WasmHost {
-    pub fn new(stream_info: Share<StreamInfo>) -> Self {
+    pub fn new(
+        session_id: u64,
+        stream_info: Share<StreamInfo>,
+        wasm_plugin: Arc<WasmPlugin>,
+        wasm_stream_info: Share<WasmStreamInfo>,
+    ) -> Self {
+        let r = stream_info.get().http_r.clone();
         let scc = stream_info.get().scc.clone();
-        Self { stream_info, scc }
+        let wasm_stream_info_map = stream_info.get().wasm_stream_info_map.clone();
+        Self {
+            session_id,
+            stream_info,
+            wasm_plugin,
+            scc,
+            wasm_stream_info,
+            wasm_stream_info_map,
+            r,
+        }
     }
 }
 
@@ -78,149 +133,116 @@ impl WasiView for ServerWasiView {
 
 pub async fn run_wasm_plugin(
     wasm_plugin_conf: &WasmPluginConf,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
+    wasm_host: WasmHost,
 ) -> Result<crate::Error> {
-    if wasm_plugin_conf.wasm_main_timeout_config.is_some() {
-        run_wasm_plugin_timeout(wasm_plugin_conf, plugin, wasm_plugin).await
-    } else {
-        run_wasm_plugin_main(wasm_plugin_conf, plugin, wasm_plugin).await
-    }
-}
-
-pub async fn run_wasm_plugin_timeout(
-    wasm_plugin_conf: &WasmPluginConf,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
+    let config = &wasm_plugin_conf.wasm_main_config;
+    let stream_info = &wasm_host.stream_info.clone();
     tokio::select! {
         biased;
-        ret = run_wasm_plugin_main(wasm_plugin_conf, plugin.clone(), wasm_plugin) => {
+        ret = do_run_wasm_plugin(None, config, wasm_host) => {
             return ret;
         }
-        ret = wasm_plugin_main_timeout(wasm_plugin_conf.wasm_main_timeout_config.as_ref().unwrap(), plugin, wasm_plugin) => {
-            return ret;
+        _ = wasm_wait_spawn(stream_info) => {
+            return Ok(crate::Error::Error);
         }
         else => {
-            return Err(anyhow!("err:select"));
+            return Ok(crate::Error::Error);
+        }
+    }
+}
+/*
+pub async fn do_run_wasm_plugin(
+    tye: Option<i64>,
+    config: &Option<String>,
+    plugin: WasmHost,
+) -> Result<crate::Error> {
+    let wasm_stream_info = plugin.wasm_stream_info.clone();
+    let plugin_spawn = plugin.clone();
+    tokio::select! {
+        biased;
+        ret = run_wasm(tye, config, plugin) => {
+            return ret;
+        }
+        _ = check_timer_timeout(1000, &wasm_stream_info) => {
+            return Ok(crate::Error::Error);
+        }
+        _ = wasm_wait_spawn(plugin_spawn) => {
+            return Ok(crate::Error::Error);
+        }
+        else => {
+            return Ok(crate::Error::Error);
         }
     }
 }
 
-pub async fn run_wasm_plugin_main(
-    wasm_plugin_conf: &WasmPluginConf,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
+pub async fn wasm_wait_spawn(plugin: WasmHost) -> Result<()> {
+    let executors = plugin.stream_info.get().executors.clone().unwrap();
+    let mut wasm_spawn_receiver = plugin.wasm_stream_info.get().wasm_spawn_receiver.clone();
+    loop {
+        let (tye, config, wasm_host) = wasm_spawn_receiver
+            .recv()
+            .await
+            .map_err(|e| anyhow!("err:{:?}", e))?;
+        executors.clone()._start_and_free(move |_| async move {
+            let session_id = wasm_host.session_id;
+            let wasm_stream_info_map = wasm_host.wasm_stream_info_map.clone();
+            if let Err(e) = do_run_wasm_plugin(tye, &config, wasm_host).await {
+                log::error!("err:do_run_wasm_plugin => e:{}", e);
+            }
+            wasm_stream_info_map.get_mut().remove(&session_id);
+            Ok(())
+        });
+    }
+}
+
+ */
+
+pub async fn do_run_wasm_plugin(
+    tye: Option<i64>,
+    config: &Option<String>,
+    wasm_host: WasmHost,
 ) -> Result<crate::Error> {
-    if wasm_plugin_conf.wasm_main_ext1_config.is_some()
-        || wasm_plugin_conf.wasm_main_ext2_config.is_some()
-        || wasm_plugin_conf.wasm_main_ext3_config.is_some()
-    {
-        tokio::select! {
-            biased;
-            ret = wasm_plugin_main(
-                &wasm_plugin_conf.wasm_main_config,
-                plugin.clone(),
-                wasm_plugin,
-            ) => {
-                return ret;
-            }
-            ret = run_wasm_plugin_main_ext1(wasm_plugin_conf, plugin, wasm_plugin) => {
-                return ret;
-            }
-            else => {
-                return Err(anyhow!("err:select"));
-            }
+    let wasm_stream_info = wasm_host.wasm_stream_info.clone();
+    tokio::select! {
+        biased;
+        ret = run_wasm(tye, config, wasm_host) => {
+            return ret;
         }
-    } else {
-        wasm_plugin_main(&wasm_plugin_conf.wasm_main_config, plugin, wasm_plugin).await
-    }
-}
-
-pub async fn run_wasm_plugin_main_ext1(
-    wasm_plugin_conf: &WasmPluginConf,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    if wasm_plugin_conf.wasm_main_ext1_config.is_some() {
-        if wasm_plugin_conf.wasm_main_ext2_config.is_some()
-            || wasm_plugin_conf.wasm_main_ext3_config.is_some()
-        {
-            tokio::select! {
-                biased;
-                ret = wasm_plugin_main_ext1(
-                    wasm_plugin_conf.wasm_main_ext1_config.as_ref().unwrap(),
-                    plugin.clone(),
-                    wasm_plugin,
-                ) => {
-                    return ret;
-                }
-                ret = run_wasm_plugin_main_ext2(wasm_plugin_conf, plugin, wasm_plugin) => {
-                    return ret;
-                }
-                else => {
-                    return Err(anyhow!("err:select"));
-                }
-            }
-        } else {
-            wasm_plugin_main_ext1(
-                wasm_plugin_conf.wasm_main_ext1_config.as_ref().unwrap(),
-                plugin.clone(),
-                wasm_plugin,
-            )
-            .await
+        _ = check_timer_timeout(1000, &wasm_stream_info) => {
+            return Ok(crate::Error::Error);
         }
-    } else {
-        run_wasm_plugin_main_ext2(wasm_plugin_conf, plugin, wasm_plugin).await
-    }
-}
-
-pub async fn run_wasm_plugin_main_ext2(
-    wasm_plugin_conf: &WasmPluginConf,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    if wasm_plugin_conf.wasm_main_ext2_config.is_some() {
-        if wasm_plugin_conf.wasm_main_ext3_config.is_some() {
-            tokio::select! {
-                biased;
-                ret = wasm_plugin_main_ext2(
-                    wasm_plugin_conf.wasm_main_ext2_config.as_ref().unwrap(),
-                    plugin.clone(),
-                    wasm_plugin,
-                ) => {
-                    return ret;
-                }
-                ret =  wasm_plugin_main_ext3(wasm_plugin_conf.wasm_main_ext3_config.as_ref().unwrap(), plugin, wasm_plugin) => {
-                    return ret;
-                }
-                else => {
-                    return Err(anyhow!("err:select"));
-                }
-            }
-        } else {
-            wasm_plugin_main_ext2(
-                wasm_plugin_conf.wasm_main_ext2_config.as_ref().unwrap(),
-                plugin.clone(),
-                wasm_plugin,
-            )
-            .await
+        else => {
+            return Ok(crate::Error::Error);
         }
-    } else {
-        wasm_plugin_main_ext3(
-            wasm_plugin_conf.wasm_main_ext3_config.as_ref().unwrap(),
-            plugin,
-            wasm_plugin,
-        )
-        .await
     }
 }
 
-pub async fn wasm_plugin_main(
-    config: &str,
+pub async fn wasm_wait_spawn(stream_info: &Share<StreamInfo>) -> Result<()> {
+    let executors = stream_info.get().executors.clone().unwrap();
+    let wasm_spawn_receiver = stream_info.get().wasm_spawn_receiver.clone();
+    loop {
+        let (tye, config, wasm_host) = wasm_spawn_receiver
+            .recv()
+            .await
+            .map_err(|e| anyhow!("err:{:?}", e))?;
+        executors.clone()._start_and_free(move |_| async move {
+            let session_id = wasm_host.session_id;
+            let wasm_stream_info_map = wasm_host.wasm_stream_info_map.clone();
+            if let Err(e) = do_run_wasm_plugin(tye, &config, wasm_host).await {
+                log::error!("err:do_run_wasm_plugin => e:{}", e);
+            }
+            wasm_stream_info_map.get_mut().remove(&session_id);
+            Ok(())
+        });
+    }
+}
+
+pub async fn run_wasm(
+    typ: Option<i64>,
+    config: &Option<String>,
     plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
 ) -> Result<crate::Error> {
+    let wasm_plugin = plugin.wasm_plugin.clone();
     let wasi_view = ServerWasiView::new(plugin);
     let mut store = Store::new(&wasm_plugin.engine, wasi_view);
     let (instance, _) =
@@ -228,131 +250,15 @@ pub async fn wasm_plugin_main(
             .await
             .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
 
-    let config = if config.len() <= 0 {
+    let config = if config.is_none() {
         None
     } else {
-        Some(config)
+        Some(config.as_ref().unwrap().as_str())
     };
 
     let ret: std::result::Result<wasm_std::Error, String> = instance
         .interface0
-        .call_wasm_main(&mut store, config)
-        .await
-        .map_err(|e| anyhow!("err:call_add_headers => err:{}", e))?;
-    if let Err(e) = &ret {
-        return Err(anyhow::anyhow!("err:call_run => err{}", e));
-    }
-    return Ok(wasm_error_to_error(ret.unwrap()));
-}
-
-pub async fn wasm_plugin_main_timeout(
-    config: &str,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    let wasi_view = ServerWasiView::new(plugin);
-    let mut store = Store::new(&wasm_plugin.engine, wasi_view);
-    let (instance, _) =
-        WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &wasm_plugin.linker)
-            .await
-            .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
-
-    let config = if config.len() <= 0 {
-        None
-    } else {
-        Some(config)
-    };
-
-    let ret: std::result::Result<wasm_std::Error, String> = instance
-        .interface0
-        .call_wasm_main_timeout(&mut store, config)
-        .await
-        .map_err(|e| anyhow!("err:call_add_headers => err:{}", e))?;
-    if let Err(e) = &ret {
-        return Err(anyhow::anyhow!("err:call_run => err{}", e));
-    }
-    return Ok(wasm_error_to_error(ret.unwrap()));
-}
-
-pub async fn wasm_plugin_main_ext1(
-    config: &str,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    let wasi_view = ServerWasiView::new(plugin);
-    let mut store = Store::new(&wasm_plugin.engine, wasi_view);
-    let (instance, _) =
-        WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &wasm_plugin.linker)
-            .await
-            .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
-
-    let config = if config.len() <= 0 {
-        None
-    } else {
-        Some(config)
-    };
-
-    let ret: std::result::Result<wasm_std::Error, String> = instance
-        .interface0
-        .call_wasm_main_ext1(&mut store, config)
-        .await
-        .map_err(|e| anyhow!("err:call_add_headers => err:{}", e))?;
-    if let Err(e) = &ret {
-        return Err(anyhow::anyhow!("err:call_run => err{}", e));
-    }
-    return Ok(wasm_error_to_error(ret.unwrap()));
-}
-
-pub async fn wasm_plugin_main_ext2(
-    config: &str,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    let wasi_view = ServerWasiView::new(plugin);
-    let mut store = Store::new(&wasm_plugin.engine, wasi_view);
-    let (instance, _) =
-        WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &wasm_plugin.linker)
-            .await
-            .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
-
-    let config = if config.len() <= 0 {
-        None
-    } else {
-        Some(config)
-    };
-
-    let ret: std::result::Result<wasm_std::Error, String> = instance
-        .interface0
-        .call_wasm_main_ext2(&mut store, config)
-        .await
-        .map_err(|e| anyhow!("err:call_add_headers => err:{}", e))?;
-    if let Err(e) = &ret {
-        return Err(anyhow::anyhow!("err:call_run => err{}", e));
-    }
-    return Ok(wasm_error_to_error(ret.unwrap()));
-}
-
-pub async fn wasm_plugin_main_ext3(
-    config: &str,
-    plugin: WasmHost,
-    wasm_plugin: &WasmPlugin,
-) -> Result<crate::Error> {
-    let wasi_view = ServerWasiView::new(plugin);
-    let mut store = Store::new(&wasm_plugin.engine, wasi_view);
-    let (instance, _) =
-        WasmServer::instantiate_async(&mut store, &wasm_plugin.component, &wasm_plugin.linker)
-            .await
-            .map_err(|e| anyhow!("err:instantiate => err:{}", e))?;
-
-    let config = if config.len() <= 0 {
-        None
-    } else {
-        Some(config)
-    };
-
-    let ret: std::result::Result<wasm_std::Error, String> = instance
-        .interface0
-        .call_wasm_main_ext3(&mut store, config)
+        .call_wasm_main(&mut store, typ, config)
         .await
         .map_err(|e| anyhow!("err:call_add_headers => err:{}", e))?;
     if let Err(e) = &ret {
@@ -378,10 +284,12 @@ pub fn wasm_err(err: String) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, err)
 }
 
+use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::stream::connect;
 use crate::wasm::component::server::wasm_socket;
 use any_base::stream_flow::StreamFlow;
 use any_base::util::ArcString;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 pub async fn get_socket_connect(
@@ -454,4 +362,64 @@ pub async fn socket_connect(
         .await
         .map_err(|e| anyhow::anyhow!("err:connect => err:{}", e))?;
     Ok(stream)
+}
+
+async fn get_timer_timeout(
+    time_ms: u64,
+    wasm_stream_info: &Share<WasmStreamInfo>,
+) -> wasmtime::Result<Vec<(i64, Vec<u8>)>> {
+    let stream_info = &mut *wasm_stream_info.get_mut();
+    let mut expire_keys = Vec::with_capacity(10);
+    for (cmd, (_time_ms, _)) in &mut stream_info.wasm_timers.iter_mut() {
+        *_time_ms -= time_ms as i64;
+        if *_time_ms <= 0 {
+            expire_keys.push(*cmd);
+        }
+    }
+
+    let mut values = Vec::with_capacity(10);
+    for cmd in expire_keys {
+        let timer = stream_info.wasm_timers.remove(&cmd);
+        if timer.is_none() {
+            continue;
+        }
+        let (_, value) = timer.unwrap();
+        values.push((cmd, value));
+    }
+
+    Ok(values)
+}
+
+async fn check_timer_timeout(
+    time_ms: u64,
+    wasm_stream_info: &Share<WasmStreamInfo>,
+) -> wasmtime::Result<()> {
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(time_ms)).await;
+        let values = get_timer_timeout(time_ms, wasm_stream_info).await?;
+        for (key, value) in values {
+            let wasm_session_sender = wasm_stream_info.get().wasm_session_sender.clone();
+            let _ = wasm_session_sender.send((key, value, None)).await;
+        }
+    }
+}
+
+async fn session_send(
+    wasm_stream_info_map: &ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
+    session_id: u64,
+    cmd: i64,
+    value: Vec<u8>,
+) -> wasmtime::Result<std::result::Result<(), String>> {
+    let ret: Result<()> = async {
+        let stream_info = wasm_stream_info_map.get().get(&session_id).cloned();
+        if stream_info.is_none() {
+            return Err(anyhow::anyhow!("stream_info.is_none"));
+        }
+        let stream_info = stream_info.unwrap();
+        let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+        wasm_session_sender.send((cmd, value, None)).await?;
+        Ok(())
+    }
+    .await;
+    Ok(ret.map_err(|e| e.to_string()))
 }

@@ -20,6 +20,7 @@ pub async fn set_body_filter(plugin: PluginHttpFilter) -> Result<()> {
 }
 
 pub async fn http_filter_body_range(r: Arc<HttpStreamRequest>) -> Result<()> {
+    log::trace!(target: "ext2", "r.session_id:{}, http_filter_body_range", r.session_id);
     do_http_filter_body_range(&r).await?;
     let next = BODY_FILTER_NEXT.get().await;
     if next.is_some() {
@@ -29,31 +30,34 @@ pub async fn http_filter_body_range(r: Arc<HttpStreamRequest>) -> Result<()> {
 }
 
 pub async fn do_http_filter_body_range(r: &HttpStreamRequest) -> Result<()> {
-    let r_ctx = &mut *r.ctx.get_mut();
-    let in_body_buf = r_ctx.in_body_buf.take().unwrap();
-    r_ctx.r_in.curr_slice_start += in_body_buf.size;
+    let rctx = &mut *r.ctx.get_mut();
+    let in_body_buf = rctx.in_body_buf.take().unwrap();
+    rctx.r_in.curr_slice_start += in_body_buf.size;
 
     let seek = in_body_buf.seek;
     let mut range_start = in_body_buf.seek;
     let mut range_end = range_start + in_body_buf.size - 1;
 
-    //start <= end
-    //0-1  1  2,    0-0  1 ,  1-1 2
-    if range_start > r_ctx.r_in.range.range_end {
-        return Ok(());
+    if rctx.is_request_cache && rctx.r_out.transfer_encoding.is_none() {
+        //start <= end
+        //0-1  1  2,    0-0  1 ,  1-1 2
+        if range_start > rctx.r_in.range.range_end {
+            return Ok(());
+        }
+
+        if range_end < rctx.r_in.range.range_start {
+            return Ok(());
+        }
+
+        if range_start < rctx.r_in.range.range_start {
+            range_start = rctx.r_in.range.range_start;
+        }
+
+        if range_end > rctx.r_in.range.range_end {
+            range_end = rctx.r_in.range.range_end;
+        }
     }
 
-    if range_end < r_ctx.r_in.range.range_start {
-        return Ok(());
-    }
-
-    if range_start < r_ctx.r_in.range.range_start {
-        range_start = r_ctx.r_in.range.range_start;
-    }
-
-    if range_end > r_ctx.r_in.range.range_end {
-        range_end = r_ctx.r_in.range.range_end;
-    }
     let out_body_buf = match in_body_buf.buf {
         HttpBodyBuf::Bytes(buf) => {
             let MsgWriteBufBytes { data } = buf;
@@ -83,8 +87,8 @@ pub async fn do_http_filter_body_range(r: &HttpStreamRequest) -> Result<()> {
                 size: _,
             } = buf;
 
-            let body_start = if r.http_cache_file.is_some() {
-                let cache_file_node = r
+            let body_start = if rctx.http_cache_file.is_some() {
+                let cache_file_node = rctx
                     .http_cache_file
                     .ctx_thread
                     .get()
@@ -117,7 +121,17 @@ pub async fn do_http_filter_body_range(r: &HttpStreamRequest) -> Result<()> {
             }
         }
     };
-    r_ctx.r_in.left_content_length -= out_body_buf.size as i64;
-    r_ctx.out_body_buf = Some(out_body_buf);
+
+    let out_body_buf_size = out_body_buf.size as i64;
+    if out_body_buf_size > rctx.r_in.left_content_length {
+        if rctx.is_request_cache && rctx.r_out.transfer_encoding.is_none() {
+            return Err(anyhow::anyhow!(
+                "out_body_buf_size > rctx.r_in.left_content_length"
+            ));
+        }
+    } else {
+        rctx.r_in.left_content_length -= out_body_buf_size;
+    }
+    rctx.out_body_buf = Some(out_body_buf);
     return Ok(());
 }

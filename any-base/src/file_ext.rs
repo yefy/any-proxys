@@ -206,7 +206,7 @@ impl FileExt {
 
         if let Err(e) = unlink(file_path.as_str(), file_id) {
             self.fix.is_del_file.store(true, Ordering::SeqCst);
-            log::trace!(target: "ext", "err:unlink file(wait count == 1 start remove_file):{} => e:{}",
+            log::trace!(target: "ext_tmp", "err:unlink file(wait count == 1 start remove_file):{} => e:{}",
                                 file_path.as_str(), e);
         }
     }
@@ -313,9 +313,10 @@ pub fn unlink(file_path: &str, file_id: Option<u64>) -> std::io::Result<()> {
     let ret = {
         #[cfg(unix)]
         {
-            use libc::c_char;
             log::trace!(target: "ext", "unlink:{}", file_path_tmp);
-            let res = unsafe { libc::unlink(file_path_tmp.as_ptr() as *const c_char) };
+            use std::ffi::CString;
+            let c_filename = CString::new(file_path_tmp.as_bytes())?;
+            let res = unsafe { libc::unlink(c_filename.as_ptr()) };
             if res != 0 {
                 Err(std::io::Error::last_os_error())
             } else {

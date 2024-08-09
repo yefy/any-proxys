@@ -3,6 +3,7 @@ use crate::wasm_http;
 use crate::wasm_socket;
 use crate::wasm_std;
 use crate::wasm_websocket;
+use anyhow::Result;
 
 use serde::{Deserialize, Serialize};
 
@@ -12,11 +13,11 @@ pub struct WasmConf {
     pub name: String,
 }
 
-pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
+pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error> {
     if config.is_none() {
         return Ok(wasm_std::Error::Ok);
     }
-    let wasm_conf: WasmConf = toml::from_str(&config.unwrap()).map_err(|e| e.to_string())?;
+    let wasm_conf: WasmConf = toml::from_str(&config.unwrap())?;
     info!("wasm_conf:{:?}", wasm_conf);
 
     let mut headers =wasm_http::Headers::new();
@@ -36,17 +37,17 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error, String> {
         body: None,
     };
     let timeout_ms = 1000 * 10;
-    let fd = wasm_websocket::socket_connect(wasm_socket::SocketType::Tcp, &request, timeout_ms)?;
-    let msg = wasm_websocket::socket_read(fd, timeout_ms)?;
+    let fd = wasm_websocket::socket_connect(wasm_socket::SocketType::Tcp, &request, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let msg = wasm_websocket::socket_read(fd, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     info!(
         "msg:{}",
-        String::from_utf8(msg.clone()).map_err(|e| e.to_string())?
+        String::from_utf8(msg.clone())?
     );
 
     let session_id = wasm_std::curr_session_id();
-    wasm_websocket::socket_write(session_id, msg.as_slice(), timeout_ms)?;
-    wasm_websocket::socket_flush(session_id, timeout_ms)?;
-    wasm_websocket::socket_close(session_id, timeout_ms)?;
+    wasm_websocket::socket_write(session_id, msg.as_slice(), timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_websocket::socket_flush(session_id, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
+    wasm_websocket::socket_close(session_id, timeout_ms).map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(wasm_std::Error::Ok)
 }

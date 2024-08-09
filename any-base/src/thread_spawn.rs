@@ -14,6 +14,7 @@ pub struct AsyncThreadContext {
     pub shutdown_thread_tx: broadcast::Sender<bool>,
     pub run_wait_group_worker: Option<Worker>,
     pub err_wait_group_worker: Worker,
+    pub index: usize,
 }
 
 impl AsyncThreadContext {
@@ -24,6 +25,7 @@ impl AsyncThreadContext {
         shutdown_thread_tx: broadcast::Sender<bool>,
         run_wait_group_worker: Option<Worker>,
         err_wait_group_worker: Worker,
+        index: usize,
     ) -> AsyncThreadContext {
         return AsyncThreadContext {
             group_version,
@@ -32,6 +34,7 @@ impl AsyncThreadContext {
             shutdown_thread_tx,
             run_wait_group_worker,
             err_wait_group_worker,
+            index,
         };
     }
     pub fn complete(&self) {
@@ -88,6 +91,7 @@ impl ThreadSpawn {
         S: FnOnce(AsyncThreadContext) -> Result<()> + Send + 'static,
     {
         let index = self.wait_group_worker.count() as usize;
+        let thread_index = index;
         let cpu_affinity = self.cpu_affinity;
         let version = self.version;
         log::info!(
@@ -148,6 +152,7 @@ impl ThreadSpawn {
                 shutdown_thread_tx,
                 run_wait_group_worker,
                 err_wait_group_worker,
+                thread_index,
             );
             let ret = service(async_context).map_err(|e| anyhow!("err:service_run => e:{}", e));
             if let Err(e) = ret {
@@ -168,8 +173,9 @@ impl ThreadSpawn {
     }
 
     pub async fn stop(&self, is_fast_shutdown: bool, shutdown_timeout: u64) {
-        log::info!("stop version:{}", self.version);
+        log::debug!(target: "main", "thread_spawn stop version:{}, wait_group:{}", self.version,  self.wait_group.count());
         let _ = self.shutdown_thread_tx.send(is_fast_shutdown);
+        let mut num = 0;
         loop {
             tokio::select! {
                 biased;
@@ -180,9 +186,18 @@ impl ThreadSpawn {
                     break;
                 },
                 _ = tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
+                    num += 1;
+                    if num > 2 {
+                        log::error!(
+                        "thread_spawn stop timeout: version:{}, wait_group.count:{}",
+                        self.version,
+                            self.wait_group.count(),
+                        );
+                        break;
+                    }
                     let _ = self.shutdown_thread_tx.send(is_fast_shutdown);
-                        log::warn!(
-                        "stop timeout: version:{}, wait_group.count:{}",
+                        log::info!(
+                        "thread_spawn next stop timeout: version:{}, wait_group.count:{}",
                         self.version,
                             self.wait_group.count(),
                         );
@@ -196,11 +211,11 @@ impl ThreadSpawn {
         let thread_handles = unsafe { self.thread_handles.take() };
         if thread_handles.is_some() {
             let thread_handles = thread_handles.unwrap();
-            log::info!("stop join version:{}", self.version);
+            log::info!("thread_spawn stop join version:{}", self.version);
             for handle in thread_handles.into_iter() {
                 handle.join().unwrap();
             }
-            log::info!("stop done version:{}", self.version);
+            log::info!("thread_spawn stop done version:{}", self.version);
         }
     }
 }

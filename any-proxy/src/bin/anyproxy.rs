@@ -89,10 +89,6 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "anyproxy-openssl")]
     log::info!("anyproxy-openssl");
 
-    anymodule::add_modules()?;
-    use any_base::module::module;
-    module::parse_modules()?;
-
     let arg_config = ArgsConfig::load_from_args();
     log::info!("arg_config:{:?}", arg_config);
     if Anyproxy::parse_args(&arg_config)? {
@@ -113,6 +109,10 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    anymodule::add_modules()?;
+    use any_base::module::module;
+    module::parse_modules()?;
+
     executor_local_spawn::_block_on(
         1,
         512,
@@ -123,6 +123,7 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main(executor: ExecutorLocalSpawn) -> Result<()> {
+    //console_subscriber::init();
     let mut anyproxy = Anyproxy::new(executor)?;
     anyproxy.start().await
 }

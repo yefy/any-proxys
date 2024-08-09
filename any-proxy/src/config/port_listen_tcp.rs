@@ -1,5 +1,6 @@
 use crate::config as conf;
 use crate::config::config_toml::TcpListen;
+use crate::proxy::MsConfigContext;
 use crate::tcp::server as tcp_server;
 use any_base::module::module;
 use any_base::typ;
@@ -158,7 +159,6 @@ async fn port_listen_tcp(
     use crate::config::socket_tcp;
     use crate::proxy::port_config::PortConfigContext;
     use crate::proxy::port_config::PortConfigListen;
-    use crate::proxy::StreamConfigContext;
     use crate::stream::server;
     use crate::util;
     let net_server_conf = net_server::curr_conf(conf_arg.curr_conf());
@@ -178,15 +178,14 @@ async fn port_listen_tcp(
         net_server_core_conf.is_port_listen = Some(true);
     }
 
-    let scc = Arc::new(StreamConfigContext::new(
-        ms.clone(),
+    let scc = Arc::new(MsConfigContext::new(
         net_server_conf.net_confs.clone(),
         net_server_conf.server_confs.clone(),
         conf_arg.curr_conf().clone(),
         common_core_any_conf,
     ));
 
-    let port_config_context = Arc::new(PortConfigContext { scc: scc.clone() });
+    let port_config_context = Arc::new(PortConfigContext { scc });
 
     let sock_addrs = util::util::str_to_socket_addrs(&tcp_listen.address)
         .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;

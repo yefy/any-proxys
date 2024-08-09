@@ -473,7 +473,49 @@ async fn init_work_thread_confs(
     Ok(())
 }
 
-async fn drop_confs(_ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+async fn drop_confs(ms: module::Modules, conf: typ::ArcUnsafeAny) -> Result<()> {
+    let main_index = M.get().main_index;
+    if main_index < 0 {
+        panic!("main_index:{}", main_index)
+    }
+    let main_confs = conf.get_mut::<Vec<typ::ArcUnsafeAny>>();
+    let net_main_conf = main_confs[main_index as usize].clone();
+    let net_confs = net_main_conf.get_mut::<Vec<typ::ArcUnsafeAny>>().clone();
+
+    for module in ms.get_modules() {
+        let (typ, ctx_index, func, name, main_index) = {
+            let module_ = &*module.get();
+            (
+                module_.typ,
+                module_.ctx_index,
+                module_.func.clone(),
+                module_.name.clone(),
+                module_.main_index,
+            )
+        };
+        if typ & conf::MODULE_TYPE_NET == 0 {
+            continue;
+        }
+        log::trace!(target: "main",
+                    "net init_main_confs name:{}, typ:{}, main_index:{}, ctx_index:{}",
+                    name,
+                    typ,
+                    main_index,
+                    ctx_index
+        );
+
+        if func.drop_conf.is_none() {
+            continue;
+        }
+
+        let drop_conf = func.drop_conf.as_ref().unwrap();
+        (drop_conf)(
+            ms.clone(),
+            conf.clone(),
+            net_confs[ctx_index as usize].clone(),
+        )
+        .await?;
+    }
     let net_confs = {
         let main_index = M.get().main_index;
         if main_index < 0 {

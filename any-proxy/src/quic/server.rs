@@ -113,6 +113,7 @@ impl Listener {
 impl Listener {
     async fn do_accept(&mut self) -> Result<(Box<dyn server::Connection>, bool)> {
         let new_conn = self.endpoint.accept().await;
+        log::debug!(target: "ext3", "quic accept");
         if new_conn.is_none() {
             return Err(anyhow!("quic accept nil addr:{}", self.addr));
         }
@@ -257,6 +258,8 @@ impl server::Connection for Connection {
                         domain: Some(self.domain.clone()),
                         is_tls: true,
                         raw_fd,
+                        listen_shutdown_tx: None.into(),
+                        listen_worker: None.into(),
                     },
                 )));
             }

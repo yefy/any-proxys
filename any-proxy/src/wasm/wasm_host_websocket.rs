@@ -1,14 +1,13 @@
 use crate::wasm::component::server::wasm_http;
 use crate::wasm::component::server::wasm_socket;
 use crate::wasm::component::server::wasm_websocket;
-use crate::wasm::socket_connect;
 use crate::wasm::WasmHost;
+use crate::wasm::{socket_connect, WasmStreamInfo};
 use any_base::typ::{ArcMutexTokio, Share};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::atomic::Ordering;
 
-use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::websocket_proxy::WebSocketStreamTrait;
 use futures_util::{SinkExt, StreamExt};
 
@@ -36,22 +35,16 @@ impl WasmHost {
         fd: &u64,
     ) -> Option<(
         ArcMutexTokio<Box<dyn WebSocketStreamTrait>>,
-        Share<StreamInfo>,
+        Share<WasmStreamInfo>,
     )> {
         let stream = self
-            .stream_info
+            .wasm_stream_info
             .get_mut()
             .wasm_websocket_map
             .get(fd)
             .cloned();
         let stream = if stream.is_none() {
-            let stream_info = self
-                .stream_info
-                .get_mut()
-                .wasm_stream_info_map
-                .get()
-                .get(&fd)
-                .cloned();
+            let stream_info = self.wasm_stream_info_map.get().get(&fd).cloned();
             if stream_info.is_none() {
                 return None;
             }
@@ -63,7 +56,7 @@ impl WasmHost {
             }
             Some((stream.unwrap(), stream_info.clone()))
         } else {
-            Some((stream.unwrap(), self.stream_info.clone()))
+            Some((stream.unwrap(), self.wasm_stream_info.clone()))
         };
         stream
     }
@@ -148,7 +141,7 @@ impl wasm_websocket::Host for WasmHost {
                 session_id
             };
 
-            self.stream_info
+            self.wasm_stream_info
                 .get_mut()
                 .wasm_websocket_map
                 .insert(session_id, stream);

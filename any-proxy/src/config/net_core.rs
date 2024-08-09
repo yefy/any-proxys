@@ -218,6 +218,7 @@ pub struct Conf {
     pub tmp_file_cache_size: usize,
     pub expires: usize,
     pub domain_from_http_v1: Arc<DomainFromHttpV1>,
+    pub transfer_encoding_chunked: bool,
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
@@ -286,6 +287,7 @@ impl Conf {
             tmp_file_cache_size: 100,
             expires: 0,
             domain_from_http_v1: Arc::new(DomainFromHttpV1::new()),
+            transfer_encoding_chunked: false,
         }
     }
 }
@@ -618,6 +620,16 @@ lazy_static! {
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_SERVER,
         },
+        module::Cmd {
+            name: "transfer_encoding_chunked".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(transfer_encoding_chunked(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
     ]);
 }
 
@@ -838,6 +850,10 @@ async fn merge_conf(
 
         if !child_conf.domain_from_http_v1.is_open {
             child_conf.domain_from_http_v1 = parent_conf.domain_from_http_v1.clone();
+        }
+
+        if !child_conf.transfer_encoding_chunked {
+            child_conf.transfer_encoding_chunked = parent_conf.transfer_encoding_chunked.clone();
         }
 
         child_conf.download = Arc::new(ConfStream::new(
@@ -1510,6 +1526,19 @@ async fn domain_from_http_v1(
 
     c.domain_from_http_v1 = Arc::new(domain_from_http_v1);
     log::trace!(target: "main", "c.domain_from_http_v1:{:?}", c.domain_from_http_v1);
+    return Ok(());
+}
+
+async fn transfer_encoding_chunked(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let transfer_encoding_chunked = conf_arg.value.get::<bool>().clone();
+    c.transfer_encoding_chunked = transfer_encoding_chunked;
+    log::trace!(target: "main", "c.transfer_encoding_chunked:{:?}", c.transfer_encoding_chunked);
     return Ok(());
 }
 

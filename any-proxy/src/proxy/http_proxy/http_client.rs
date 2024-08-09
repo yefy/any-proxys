@@ -1,6 +1,6 @@
 use crate::config::config_toml::HttpServerProxyConfig;
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
-use crate::proxy::http_proxy::http_stream::HttpStream;
+use crate::proxy::http_proxy::http_server_proxy::HttpStream;
 use crate::proxy::http_proxy::HyperExecutorLocal;
 use crate::proxy::stream_info::StreamInfo;
 use crate::stream::connect::{Connect, ConnectInfo};
@@ -18,7 +18,7 @@ impl HttpStream {
         version: Version,
         connect_func: Arc<Box<dyn Connect>>,
         config: &HttpServerProxyConfig,
-        stream_info: Share<StreamInfo>,
+        stream_info: &Share<StreamInfo>,
         protocol7: &str,
     ) -> Result<Arc<hyper::Client<HttpHyperConnector>>> {
         let scc = stream_info.get().scc.clone();

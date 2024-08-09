@@ -1,9 +1,9 @@
 use crate::config as conf;
-use crate::upstream::UpstreamData;
+use crate::upstream::{UpstreamData, UpstreamVarAddr};
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
 use any_base::typ::ShareRw;
+use any_base::typ::{ArcUnsafeAny, OptionExt};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ pub struct Conf {
     pub upstream_name: String,
     pub upstream_data: ShareRw<UpstreamData>,
     pub is_port_listen: Option<bool>,
+    pub upstream_var_addr: OptionExt<Arc<UpstreamVarAddr>>,
 }
 
 impl Conf {
@@ -20,6 +21,7 @@ impl Conf {
             upstream_name: String::new(),
             upstream_data: ShareRw::default(),
             is_port_listen: None,
+            upstream_var_addr: None.into(),
         }
     }
 }

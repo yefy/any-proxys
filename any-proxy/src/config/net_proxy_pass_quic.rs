@@ -1,5 +1,8 @@
 use crate::config as conf;
 use crate::config::config_toml::ProxyPassQuic;
+use crate::config::upstream_core::GetConnectI;
+use crate::config::upstream_proxy_pass_quic::UpstreamQuic;
+use crate::upstream::UpstreamVarAddr;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
@@ -152,6 +155,22 @@ async fn proxy_pass_quic(
     use crate::config::upstream_block;
     use crate::config::upstream_core;
     use crate::config::upstream_core_plugin;
+    use crate::util::var::Var;
+
+    let address_vars = Var::new(&proxy_pass_conf.address, "")?;
+    if address_vars.is_var {
+        let net_server_core_conf = net_server_core::curr_conf_mut(conf_arg.curr_conf());
+        if net_server_core_conf.upstream_name.len() > 0 {
+            return Err(anyhow!("err:str:{}", str));
+        }
+
+        let ups_tcp = Box::new(UpstreamQuic::new(Some(address_vars), proxy_pass_conf));
+        let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+        net_server_core_conf.upstream_name = "upstream_var_quic".to_string();
+        net_server_core_conf.upstream_var_addr =
+            Some(Arc::new(UpstreamVarAddr::new(get_connect))).into();
+        return Ok(());
+    }
 
     let mut upstream_block = upstream_block::Conf::new();
     upstream_block.name = format!("quic_{:?}", proxy_pass_conf);

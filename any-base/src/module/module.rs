@@ -1,5 +1,6 @@
 use crate::executor_local_spawn::ExecutorLocalSpawn;
 use crate::typ::{ArcMutex, ArcRwLock, ArcUnsafeAny};
+use crate::DropMsExecutor;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_recursion::async_recursion;
@@ -236,6 +237,7 @@ pub struct ConfArg {
     pub is_block: bool,
     pub any: ArcUnsafeAny,
     pub parent_module_confs: Vec<ArcUnsafeAny>,
+    pub last_module_confs: ArcUnsafeAny,
     pub curr_module_confs: ArcUnsafeAny,
 
     //临时用的
@@ -264,11 +266,14 @@ impl ConfArg {
             value: ArcUnsafeAny::default(),
             is_block: false,
             any: ArcUnsafeAny::default(),
+            last_module_confs: ArcUnsafeAny::default(),
             curr_module_confs: ArcUnsafeAny::default(),
             parent_module_confs: Vec::new(),
         }
     }
-
+    pub fn last_conf(&self) -> &ArcUnsafeAny {
+        &self.last_module_confs
+    }
     pub fn curr_conf(&self) -> &ArcUnsafeAny {
         &self.curr_module_confs
     }
@@ -470,9 +475,6 @@ fn i8s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -489,9 +491,6 @@ fn i16s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -508,9 +507,6 @@ fn i32s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -527,9 +523,6 @@ fn isizes_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -546,9 +539,6 @@ fn i64s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -565,9 +555,6 @@ fn u8s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -584,9 +571,6 @@ fn u16s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -603,9 +587,6 @@ fn u32s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -622,9 +603,6 @@ fn usizes_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -641,9 +619,6 @@ fn u64s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -660,9 +635,6 @@ fn f64s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v);
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -680,9 +652,6 @@ fn strs_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         vs.push(v.to_string());
     }
 
-    if vs.len() <= 0 {
-        return ret_err(conf_arg, "").map_err(|e| anyhow!("err:e:{}", e));
-    }
     conf_arg.value.set(Box::new(vs));
     return Ok(());
 }
@@ -862,25 +831,23 @@ pub struct Modules {
     main_indexs: ArcMutex<Vec<i32>>,
     init_master_thread_confs_map: ArcMutex<HashMap<i32, (String, InitMasterThreadConfs)>>,
     init_work_thread_confs_map: ArcMutex<HashMap<i32, (String, InitWorkThreadConfs)>>,
-    drop_confs_map: ArcMutex<HashMap<i32, (String, DropConfs)>>,
+    pub drop_confs_map: ArcMutex<HashMap<i32, (String, DropConfs)>>,
     is_work_thread: bool,
     curr_module_confs: ArcUnsafeAny,
     cmd_conf_type: usize,
     _drop_test: Arc<ModuleDropTest>,
+    pub drop_ms_executor: ArcMutex<DropMsExecutor>,
+    pub ms_tx: Option<async_channel::Sender<Modules>>,
 }
+
 impl Drop for Modules {
     fn drop(&mut self) {
+        log::trace!(target: "ms", "drop modules session_id:{}, count:{}", self.session_id, Arc::strong_count(&self._drop_test));
         if Arc::strong_count(&self._drop_test) == 1 {
-            let drop_confs_map = unsafe { self.drop_confs_map.take() };
-            if drop_confs_map.is_none() {
-                return;
+            if self.ms_tx.is_some() {
+                let ms_tx = self.ms_tx.take().unwrap();
+                let _ = ms_tx.send_blocking(self.clone());
             }
-            let drop_confs_map = drop_confs_map.unwrap();
-            log::debug!(target: "ms", "ms session_id:{}, count:{} => drop Modules", self.session_id(), self.count());
-            let ms = self.clone();
-            tokio::task::spawn(async move {
-                let _ = ms.drop_confs(drop_confs_map).await;
-            });
         }
     }
 }
@@ -903,10 +870,12 @@ impl Modules {
     }
 
     pub fn new(old_ms: Option<Modules>, is_work_thread: bool) -> Modules {
-        let old_ms = if old_ms.is_some() {
-            ArcMutex::new(old_ms.unwrap())
+        let (old_ms, ms_tx) = if old_ms.is_some() {
+            let old_ms = old_ms.unwrap();
+            let ms_tx = old_ms.ms_tx.clone();
+            (ArcMutex::new(old_ms), ms_tx)
         } else {
-            ArcMutex::default()
+            (ArcMutex::default(), None.into())
         };
 
         let session_id = get_session_id();
@@ -927,6 +896,8 @@ impl Modules {
             curr_module_confs: ArcUnsafeAny::default(),
             cmd_conf_type: 0,
             _drop_test: Arc::new(ModuleDropTest::new(session_id)),
+            drop_ms_executor: ArcMutex::default(),
+            ms_tx,
         }
     }
 
@@ -954,11 +925,10 @@ impl Modules {
         G_MODULES.get().main_index_len()
     }
 
-    pub async fn init_master_thread(
-        &self,
-        executor: ExecutorLocalSpawn,
-        ms_executor: ExecutorLocalSpawn,
-    ) -> Result<()> {
+    pub async fn init_master_thread(&self, dmse: DropMsExecutor) -> Result<()> {
+        let executor = dmse.executor();
+        let ms_executor = dmse.ms_executor();
+        self.drop_ms_executor.set(dmse);
         for (_, main_index) in self.main_indexs.get().iter().enumerate() {
             {
                 let v = self
@@ -983,7 +953,9 @@ impl Modules {
         return Ok(());
     }
 
-    pub async fn init_work_thread(&self, ms_executor: ExecutorLocalSpawn) -> Result<()> {
+    pub async fn init_work_thread(&self, dmse: DropMsExecutor) -> Result<()> {
+        let ms_executor = dmse.ms_executor();
+        self.drop_ms_executor.set(dmse);
         let main_indexs = self.main_indexs.get().clone();
         for (_, main_index) in main_indexs.iter().enumerate() {
             {
@@ -1515,6 +1487,7 @@ impl Modules {
         conf_arg.file_name = path.file_name().unwrap().to_str().unwrap().to_string();
         conf_arg.path = path.parent().unwrap().to_str().unwrap().to_string();
         conf_arg.reader = ArcMutex::new(reader);
+        conf_arg.line_num.store(0, Ordering::Relaxed);
 
         self.parse_config(conf_arg, module_confs).await?;
         return Ok(());
@@ -1545,8 +1518,9 @@ impl Modules {
                 break;
             }
             log::trace!(target: "main", "str_raw:{:?}", str_raw);
-            let str_left = str_raw.trim_start();
+            log::trace!(target: "ms", "read modules session_id:{}, count:{}, str_raw:{:?} ", self.session_id, Arc::strong_count(&self._drop_test), str_raw);
 
+            let str_left = str_raw.trim_start();
             if str_left.find(LINE_COMMENTS) == Some(0) {
                 continue;
             }
@@ -1755,6 +1729,7 @@ impl Modules {
                 let is_sub_file = conf_arg.is_sub_file;
                 let file_name = conf_arg.file_name.clone();
                 let path = conf_arg.path.clone();
+                let line = conf_arg.line_num.load(Ordering::Relaxed);
                 let reader = conf_arg.reader.clone();
 
                 conf_arg.is_sub_file = true;
@@ -1764,6 +1739,7 @@ impl Modules {
                 conf_arg.is_sub_file = is_sub_file;
                 conf_arg.file_name = file_name;
                 conf_arg.path = path;
+                conf_arg.line_num.store(line, Ordering::Relaxed);
                 conf_arg.reader = reader;
                 continue;
             }
@@ -1869,7 +1845,8 @@ impl Modules {
                 }
             }
             if !is_find {
-                return ret_err(conf_arg, &str_key).map_err(|e| anyhow!("err:e:{}", e));
+                return ret_err(conf_arg, &str_key)
+                    .map_err(|e| anyhow!("err:not is_find => e:{}", e));
             }
         }
         return Ok(());

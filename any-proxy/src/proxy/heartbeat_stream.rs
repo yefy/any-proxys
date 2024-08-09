@@ -25,6 +25,7 @@ impl HeartbeatStream {
             .await
             .map_err(|e| anyhow!("err:anyproxy::read_heartbeat => e:{}", e))?;
         if heartbeat.is_none() {
+            stream_info.get_mut().add_work_time1("heartbeat end");
             return Ok(Some((client_buf_reader, stream_info)));
         }
 
@@ -33,7 +34,7 @@ impl HeartbeatStream {
             async {
                 tokio::select! {
                     biased;
-                    ret = HeartbeatStream::do_heartbeat_stream(client_buf_reader.to_io_buf_reader(), stream_info, heartbeat) => {
+                    ret = HeartbeatStream::do_heartbeat_stream(client_buf_reader.to_io_buf_reader(), &stream_info, heartbeat) => {
                         ret.map_err(|e| anyhow!("err:do_heartbeat_stream => e:{}", e))?;
                         return Ok(());
                     }
@@ -53,7 +54,7 @@ impl HeartbeatStream {
 
     pub async fn do_heartbeat_stream(
         client_buf_reader: any_base::io::buf_reader::BufReader<stream_flow::StreamFlow>,
-        stream_info: Share<StreamInfo>,
+        stream_info: &Share<StreamInfo>,
         mut heartbeat: Option<AnyproxyHeartbeat>,
     ) -> Result<()> {
         stream_info.get_mut().err_status = ErrStatus::Ok;

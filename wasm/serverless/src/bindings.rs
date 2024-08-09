@@ -969,6 +969,24 @@ pub mod component {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 当前插件在主服务的唯一id，简称session_id, 也是session_send函数参数
+            pub fn main_session_id() -> u64 {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "component:server/wasm-std")]
+                    extern "C" {
+                        #[link_name = "main-session-id"]
+                        fn wit_import() -> i64;
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import() -> i64 {
+                        unreachable!()
+                    }
+                    let ret = wit_import();
+                    ret as u64
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
             pub fn curr_session_id() -> u64 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -988,12 +1006,12 @@ pub mod component {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 当前链接在主服务的唯一id，简称fd，可以读取客户端流信息
-            pub fn curr_fd() -> u64 {
+            pub fn main_fd() -> u64 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "component:server/wasm-std")]
                     extern "C" {
-                        #[link_name = "curr-fd"]
+                        #[link_name = "main-fd"]
                         fn wit_import() -> i64;
                     }
 
@@ -1028,7 +1046,7 @@ pub mod component {
             /// 用于插件之间通讯， 根据session_id发送到哪个插件
             pub fn session_send(
                 session_id: u64,
-                cmd: u64,
+                cmd: i64,
                 value: &[u8],
             ) -> Result<(), _rt::String> {
                 unsafe {
@@ -1081,7 +1099,7 @@ pub mod component {
             #[allow(unused_unsafe, clippy::all)]
             pub fn session_request(
                 session_id: u64,
-                cmd: u64,
+                cmd: i64,
                 value: &[u8],
             ) -> Result<Option<_rt::Vec<u8>>, _rt::String> {
                 unsafe {
@@ -1150,7 +1168,7 @@ pub mod component {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 插件接收信息
-            pub fn session_recv() -> Result<(u64, u64, _rt::Vec<u8>), _rt::String> {
+            pub fn session_recv() -> Result<(u64, i64, _rt::Vec<u8>), _rt::String> {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 32]);
@@ -1180,7 +1198,7 @@ pub mod component {
 
                                 (
                                     l2 as u64,
-                                    l3 as u64,
+                                    l3,
                                     _rt::Vec::from_raw_parts(l4.cast(), len6, len6),
                                 )
                             };
@@ -1194,6 +1212,69 @@ pub mod component {
                                 let bytes9 = _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
 
                                 _rt::string_lift(bytes9)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn session_try_recv() -> Result<Option<(u64, i64, _rt::Vec<u8>)>, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 40]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 40]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "component:server/wasm-std")]
+                    extern "C" {
+                        #[link_name = "session-try-recv"]
+                        fn wit_import(_: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(ptr0);
+                    let l1 = i32::from(*ptr0.add(0).cast::<u8>());
+                    match l1 {
+                        0 => {
+                            let e = {
+                                let l2 = i32::from(*ptr0.add(8).cast::<u8>());
+
+                                match l2 {
+                                    0 => None,
+                                    1 => {
+                                        let e = {
+                                            let l3 = *ptr0.add(16).cast::<i64>();
+                                            let l4 = *ptr0.add(24).cast::<i64>();
+                                            let l5 = *ptr0.add(32).cast::<*mut u8>();
+                                            let l6 = *ptr0.add(36).cast::<usize>();
+                                            let len7 = l6;
+
+                                            (
+                                                l3 as u64,
+                                                l4,
+                                                _rt::Vec::from_raw_parts(l5.cast(), len7, len7),
+                                            )
+                                        };
+                                        Some(e)
+                                    }
+                                    _ => _rt::invalid_enum_discriminant(),
+                                }
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l8 = *ptr0.add(8).cast::<*mut u8>();
+                                let l9 = *ptr0.add(12).cast::<usize>();
+                                let len10 = l9;
+                                let bytes10 = _rt::Vec::from_raw_parts(l8.cast(), len10, len10);
+
+                                _rt::string_lift(bytes10)
                             };
                             Err(e)
                         }
@@ -1254,7 +1335,7 @@ pub mod component {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 增加定时器
-            pub fn add_timer(time_ms: u64, key: u64, value: &[u8]) {
+            pub fn add_timer(time_ms: u64, cmd: i64, value: &[u8]) {
                 unsafe {
                     let vec0 = value;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
@@ -1273,7 +1354,7 @@ pub mod component {
                     }
                     wit_import(
                         _rt::as_i64(&time_ms),
-                        _rt::as_i64(&key),
+                        _rt::as_i64(&cmd),
                         ptr0.cast_mut(),
                         len0,
                     );
@@ -1281,7 +1362,7 @@ pub mod component {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 删除定时器
-            pub fn del_timer(key: u64) {
+            pub fn del_timer(cmd: i64) {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "component:server/wasm-std")]
@@ -1294,12 +1375,12 @@ pub mod component {
                     fn wit_import(_: i64) {
                         unreachable!()
                     }
-                    wit_import(_rt::as_i64(&key));
+                    wit_import(_rt::as_i64(&cmd));
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
             /// 获取过期定时器
-            pub fn get_timer_timeout(time_ms: u64) -> _rt::Vec<(u64, _rt::Vec<u8>)> {
+            pub fn get_timer_timeout(time_ms: u64) -> _rt::Vec<(i64, _rt::Vec<u8>)> {
                 unsafe {
                     #[repr(align(4))]
                     struct RetArea([::core::mem::MaybeUninit<u8>; 8]);
@@ -1330,7 +1411,7 @@ pub mod component {
                             let l5 = *base.add(12).cast::<usize>();
                             let len6 = l5;
 
-                            (l3 as u64, _rt::Vec::from_raw_parts(l4.cast(), len6, len6))
+                            (l3, _rt::Vec::from_raw_parts(l4.cast(), len6, len6))
                         };
                         result7.push(e7);
                     }
@@ -2427,6 +2508,64 @@ pub mod component {
                                 let bytes12 = _rt::Vec::from_raw_parts(l10.cast(), len12, len12);
 
                                 _rt::string_lift(bytes12)
+                            };
+                            Err(e)
+                        }
+                        _ => _rt::invalid_enum_discriminant(),
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            pub fn spawn(typ: Option<i64>, config: Option<&str>) -> Result<u64, _rt::String> {
+                unsafe {
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                    let (result0_0, result0_1) = match typ {
+                        Some(e) => (1i32, _rt::as_i64(e)),
+                        None => (0i32, 0i64),
+                    };
+                    let (result2_0, result2_1, result2_2) = match config {
+                        Some(e) => {
+                            let vec1 = e;
+                            let ptr1 = vec1.as_ptr().cast::<u8>();
+                            let len1 = vec1.len();
+
+                            (1i32, ptr1.cast_mut(), len1)
+                        }
+                        None => (0i32, ::core::ptr::null_mut(), 0usize),
+                    };
+                    let ptr3 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "component:server/wasm-std")]
+                    extern "C" {
+                        #[link_name = "spawn"]
+                        fn wit_import(_: i32, _: i64, _: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fn wit_import(_: i32, _: i64, _: i32, _: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import(result0_0, result0_1, result2_0, result2_1, result2_2, ptr3);
+                    let l4 = i32::from(*ptr3.add(0).cast::<u8>());
+                    match l4 {
+                        0 => {
+                            let e = {
+                                let l5 = *ptr3.add(8).cast::<i64>();
+
+                                l5 as u64
+                            };
+                            Ok(e)
+                        }
+                        1 => {
+                            let e = {
+                                let l6 = *ptr3.add(8).cast::<*mut u8>();
+                                let l7 = *ptr3.add(12).cast::<usize>();
+                                let len8 = l7;
+                                let bytes8 = _rt::Vec::from_raw_parts(l6.cast(), len8, len8);
+
+                                _rt::string_lift(bytes8)
                             };
                             Err(e)
                         }
@@ -6047,22 +6186,34 @@ pub mod exports {
                 #[allow(non_snake_case)]
                 pub unsafe fn _export_wasm_main_cabi<T: Guest>(
                     arg0: i32,
-                    arg1: *mut u8,
-                    arg2: usize,
+                    arg1: i64,
+                    arg2: i32,
+                    arg3: *mut u8,
+                    arg4: usize,
                 ) -> *mut u8 {
-                    let result1 = T::wasm_main(match arg0 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let len0 = arg2;
-                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
+                    let result1 = T::wasm_main(
+                        match arg0 {
+                            0 => None,
+                            1 => {
+                                let e = arg1;
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                        match arg2 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let len0 = arg4;
+                                    let bytes0 = _rt::Vec::from_raw_parts(arg3.cast(), len0, len0);
 
-                                _rt::string_lift(bytes0)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    });
+                                    _rt::string_lift(bytes0)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        },
+                    );
                     let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result1 {
                         Ok(e) => {
@@ -6094,265 +6245,27 @@ pub mod exports {
                         }
                     }
                 }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_wasm_main_timeout_cabi<T: Guest>(
-                    arg0: i32,
-                    arg1: *mut u8,
-                    arg2: usize,
-                ) -> *mut u8 {
-                    let result1 = T::wasm_main_timeout(match arg0 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let len0 = arg2;
-                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
-
-                                _rt::string_lift(bytes0)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    });
-                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
-                    match result1 {
-                        Ok(e) => {
-                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
-                            *ptr2.add(4).cast::<u8>() = (e.clone() as i32) as u8;
-                        }
-                        Err(e) => {
-                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec3 = (e.into_bytes()).into_boxed_slice();
-                            let ptr3 = vec3.as_ptr().cast::<u8>();
-                            let len3 = vec3.len();
-                            ::core::mem::forget(vec3);
-                            *ptr2.add(8).cast::<usize>() = len3;
-                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
-                        }
-                    };
-                    ptr2
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn __post_return_wasm_main_timeout<T: Guest>(arg0: *mut u8) {
-                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
-                    match l0 {
-                        0 => (),
-                        _ => {
-                            let l1 = *arg0.add(4).cast::<*mut u8>();
-                            let l2 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l1, l2, 1);
-                        }
-                    }
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_wasm_main_ext1_cabi<T: Guest>(
-                    arg0: i32,
-                    arg1: *mut u8,
-                    arg2: usize,
-                ) -> *mut u8 {
-                    let result1 = T::wasm_main_ext1(match arg0 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let len0 = arg2;
-                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
-
-                                _rt::string_lift(bytes0)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    });
-                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
-                    match result1 {
-                        Ok(e) => {
-                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
-                            *ptr2.add(4).cast::<u8>() = (e.clone() as i32) as u8;
-                        }
-                        Err(e) => {
-                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec3 = (e.into_bytes()).into_boxed_slice();
-                            let ptr3 = vec3.as_ptr().cast::<u8>();
-                            let len3 = vec3.len();
-                            ::core::mem::forget(vec3);
-                            *ptr2.add(8).cast::<usize>() = len3;
-                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
-                        }
-                    };
-                    ptr2
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn __post_return_wasm_main_ext1<T: Guest>(arg0: *mut u8) {
-                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
-                    match l0 {
-                        0 => (),
-                        _ => {
-                            let l1 = *arg0.add(4).cast::<*mut u8>();
-                            let l2 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l1, l2, 1);
-                        }
-                    }
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_wasm_main_ext2_cabi<T: Guest>(
-                    arg0: i32,
-                    arg1: *mut u8,
-                    arg2: usize,
-                ) -> *mut u8 {
-                    let result1 = T::wasm_main_ext2(match arg0 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let len0 = arg2;
-                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
-
-                                _rt::string_lift(bytes0)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    });
-                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
-                    match result1 {
-                        Ok(e) => {
-                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
-                            *ptr2.add(4).cast::<u8>() = (e.clone() as i32) as u8;
-                        }
-                        Err(e) => {
-                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec3 = (e.into_bytes()).into_boxed_slice();
-                            let ptr3 = vec3.as_ptr().cast::<u8>();
-                            let len3 = vec3.len();
-                            ::core::mem::forget(vec3);
-                            *ptr2.add(8).cast::<usize>() = len3;
-                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
-                        }
-                    };
-                    ptr2
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn __post_return_wasm_main_ext2<T: Guest>(arg0: *mut u8) {
-                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
-                    match l0 {
-                        0 => (),
-                        _ => {
-                            let l1 = *arg0.add(4).cast::<*mut u8>();
-                            let l2 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l1, l2, 1);
-                        }
-                    }
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_wasm_main_ext3_cabi<T: Guest>(
-                    arg0: i32,
-                    arg1: *mut u8,
-                    arg2: usize,
-                ) -> *mut u8 {
-                    let result1 = T::wasm_main_ext3(match arg0 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let len0 = arg2;
-                                let bytes0 = _rt::Vec::from_raw_parts(arg1.cast(), len0, len0);
-
-                                _rt::string_lift(bytes0)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    });
-                    let ptr2 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
-                    match result1 {
-                        Ok(e) => {
-                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
-                            *ptr2.add(4).cast::<u8>() = (e.clone() as i32) as u8;
-                        }
-                        Err(e) => {
-                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec3 = (e.into_bytes()).into_boxed_slice();
-                            let ptr3 = vec3.as_ptr().cast::<u8>();
-                            let len3 = vec3.len();
-                            ::core::mem::forget(vec3);
-                            *ptr2.add(8).cast::<usize>() = len3;
-                            *ptr2.add(4).cast::<*mut u8>() = ptr3.cast_mut();
-                        }
-                    };
-                    ptr2
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn __post_return_wasm_main_ext3<T: Guest>(arg0: *mut u8) {
-                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
-                    match l0 {
-                        0 => (),
-                        _ => {
-                            let l1 = *arg0.add(4).cast::<*mut u8>();
-                            let l2 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l1, l2, 1);
-                        }
-                    }
-                }
                 pub trait Guest {
-                    fn wasm_main(config: Option<_rt::String>) -> Result<Error, _rt::String>;
-                    fn wasm_main_timeout(config: Option<_rt::String>)
-                        -> Result<Error, _rt::String>;
-                    fn wasm_main_ext1(config: Option<_rt::String>) -> Result<Error, _rt::String>;
-                    fn wasm_main_ext2(config: Option<_rt::String>) -> Result<Error, _rt::String>;
-                    fn wasm_main_ext3(config: Option<_rt::String>) -> Result<Error, _rt::String>;
+                    fn wasm_main(
+                        typ: Option<i64>,
+                        config: Option<_rt::String>,
+                    ) -> Result<Error, _rt::String>;
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_component_server_wasm_service_cabi{
-  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+        ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-    #[export_name = "component:server/wasm-service#wasm-main"]
-    unsafe extern "C" fn export_wasm_main(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_wasm_main_cabi::<$ty>(arg0, arg1, arg2)
-    }
-    #[export_name = "cabi_post_component:server/wasm-service#wasm-main"]
-    unsafe extern "C" fn _post_return_wasm_main(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_wasm_main::<$ty>(arg0)
-    }
-    #[export_name = "component:server/wasm-service#wasm-main-timeout"]
-    unsafe extern "C" fn export_wasm_main_timeout(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_wasm_main_timeout_cabi::<$ty>(arg0, arg1, arg2)
-    }
-    #[export_name = "cabi_post_component:server/wasm-service#wasm-main-timeout"]
-    unsafe extern "C" fn _post_return_wasm_main_timeout(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_wasm_main_timeout::<$ty>(arg0)
-    }
-    #[export_name = "component:server/wasm-service#wasm-main-ext1"]
-    unsafe extern "C" fn export_wasm_main_ext1(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_wasm_main_ext1_cabi::<$ty>(arg0, arg1, arg2)
-    }
-    #[export_name = "cabi_post_component:server/wasm-service#wasm-main-ext1"]
-    unsafe extern "C" fn _post_return_wasm_main_ext1(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_wasm_main_ext1::<$ty>(arg0)
-    }
-    #[export_name = "component:server/wasm-service#wasm-main-ext2"]
-    unsafe extern "C" fn export_wasm_main_ext2(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_wasm_main_ext2_cabi::<$ty>(arg0, arg1, arg2)
-    }
-    #[export_name = "cabi_post_component:server/wasm-service#wasm-main-ext2"]
-    unsafe extern "C" fn _post_return_wasm_main_ext2(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_wasm_main_ext2::<$ty>(arg0)
-    }
-    #[export_name = "component:server/wasm-service#wasm-main-ext3"]
-    unsafe extern "C" fn export_wasm_main_ext3(arg0: i32,arg1: *mut u8,arg2: usize,) -> *mut u8 {
-      $($path_to_types)*::_export_wasm_main_ext3_cabi::<$ty>(arg0, arg1, arg2)
-    }
-    #[export_name = "cabi_post_component:server/wasm-service#wasm-main-ext3"]
-    unsafe extern "C" fn _post_return_wasm_main_ext3(arg0: *mut u8,) {
-      $($path_to_types)*::__post_return_wasm_main_ext3::<$ty>(arg0)
-    }
-  };);
-}
+          #[export_name = "component:server/wasm-service#wasm-main"]
+          unsafe extern "C" fn export_wasm_main(arg0: i32,arg1: i64,arg2: i32,arg3: *mut u8,arg4: usize,) -> *mut u8 {
+            $($path_to_types)*::_export_wasm_main_cabi::<$ty>(arg0, arg1, arg2, arg3, arg4)
+          }
+          #[export_name = "cabi_post_component:server/wasm-service#wasm-main"]
+          unsafe extern "C" fn _post_return_wasm_main(arg0: *mut u8,) {
+            $($path_to_types)*::__post_return_wasm_main::<$ty>(arg0)
+          }
+        };);
+      }
                 #[doc(hidden)]
                 pub(crate) use __export_component_server_wasm_service_cabi;
                 #[repr(align(4))]
@@ -6579,8 +6492,8 @@ pub(crate) use __export_wasm_server_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.21.0:wasm-server:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4218] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf8\x1f\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 4239] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x8d\x20\x01A\x02\x01\
 A\x12\x01B\x12\x01m\x03\x03tcp\x03ssl\x04quic\x04\0\x0bsocket-type\x03\0\0\x01ks\
 \x01j\x01w\x01s\x01@\x04\x03typ\x01\x04addrs\x0assl-domain\x02\x0atimeout-msw\0\x03\
 \x04\0\x0esocket-connect\x01\x04\x01p}\x01j\x01\x05\x01s\x01@\x03\x02fdw\x04size\
@@ -6597,29 +6510,31 @@ method\x0e\x03uri\x0c\x07headers\x08\x06params\x0a\x04body\x0f\x04\0\x07request\
 \0\x10\x01k\x08\x01r\x03\x06status\x03\x07headers\x12\x04body\x0f\x04\0\x08respo\
 nse\x03\0\x13\x01j\x01\x14\x01s\x01@\x03\x03typ\x01\x03req\x11\x0atimeout-msw\0\x15\
 \x04\0\x0bhandle-http\x01\x16\x03\x01\x1acomponent:server/wasm-http\x05\x02\x02\x03\
-\0\x01\x08response\x02\x03\0\x01\x07request\x01BG\x02\x03\x02\x01\x03\x04\0\x08r\
+\0\x01\x08response\x02\x03\0\x01\x07request\x01BP\x02\x03\x02\x01\x03\x04\0\x08r\
 esponse\x03\0\0\x02\x03\x02\x01\x04\x04\0\x07request\x03\0\x02\x01m\x08\x02ok\x05\
 break\x06finish\x05error\x06return\x04ext1\x04ext2\x04ext3\x04\0\x05error\x03\0\x04\
 \x01j\x01s\x01s\x01@\0\0\x06\x04\0\x10anyproxy-version\x01\x07\x01ks\x01j\x01\x08\
 \x01s\x01@\x01\x03keys\0\x09\x04\0\x08variable\x01\x0a\x01@\x01\x07time-msw\x01\0\
-\x04\0\x05sleep\x01\x0b\x01@\0\0w\x04\0\x0fcurr-session-id\x01\x0c\x04\0\x07curr\
--fd\x01\x0c\x04\0\x0enew-session-id\x01\x0c\x01p}\x01j\0\x01s\x01@\x03\x0asessio\
-n-idw\x03cmdw\x05value\x0d\0\x0e\x04\0\x0csession-send\x01\x0f\x01k\x0d\x01j\x01\
-\x10\x01s\x01@\x03\x0asession-idw\x03cmdw\x05value\x0d\0\x11\x04\0\x0fsession-re\
-quest\x01\x12\x01o\x03ww\x0d\x01j\x01\x13\x01s\x01@\0\0\x14\x04\0\x0csession-rec\
-v\x01\x15\x01@\x02\x02fdw\x05value\x10\0\x0e\x04\0\x10session-response\x01\x16\x01\
-@\x03\x07time-msw\x03keyw\x05value\x0d\x01\0\x04\0\x09add-timer\x01\x17\x01@\x01\
-\x03keyw\x01\0\x04\0\x09del-timer\x01\x18\x01o\x02w\x0d\x01p\x19\x01@\x01\x07tim\
-e-msw\0\x1a\x04\0\x11get-timer-timeout\x01\x1b\x01o\x02ss\x01p\x1c\x01@\x01\x07h\
-eaders\x1d\0\x0e\x04\0\x0ein-add-headers\x01\x1e\x01@\x02\x03keys\x05values\0\x0e\
-\x04\0\x0din-add-header\x01\x1f\x01ps\x01@\x01\x07headers\x20\0\x0e\x04\0\x0ein-\
-del-headers\x01!\x01@\x01\x03keys\0\x0e\x04\0\x0din-del-header\x01\"\x01j\x01\x7f\
-\x01s\x01@\x01\x03keys\0#\x04\0\x0cin-is-header\x01$\x04\0\x0din-get-header\x01\x0a\
-\x01j\x01\x03\x01s\x01@\0\0%\x04\0\x0ein-get-request\x01&\x01j\x01\x0d\x01s\x01@\
-\0\0'\x04\0\x12in-body-read-exact\x01(\x04\0\x0fout-add-headers\x01\x1e\x04\0\x0e\
-out-add-header\x01\x1f\x04\0\x0fout-del-headers\x01!\x04\0\x0eout-del-header\x01\
-\"\x04\0\x0dout-is-header\x01$\x04\0\x0eout-get-header\x01\x0a\x01@\x01\x03res\x01\
-\0\x0e\x04\0\x10out-set-response\x01)\x04\0\x0cout-response\x01)\x03\x01\x19comp\
+\x04\0\x05sleep\x01\x0b\x01@\0\0w\x04\0\x0fmain-session-id\x01\x0c\x04\0\x0fcurr\
+-session-id\x01\x0c\x04\0\x07main-fd\x01\x0c\x04\0\x0enew-session-id\x01\x0c\x01\
+p}\x01j\0\x01s\x01@\x03\x0asession-idw\x03cmdx\x05value\x0d\0\x0e\x04\0\x0csessi\
+on-send\x01\x0f\x01k\x0d\x01j\x01\x10\x01s\x01@\x03\x0asession-idw\x03cmdx\x05va\
+lue\x0d\0\x11\x04\0\x0fsession-request\x01\x12\x01o\x03wx\x0d\x01j\x01\x13\x01s\x01\
+@\0\0\x14\x04\0\x0csession-recv\x01\x15\x01k\x13\x01j\x01\x16\x01s\x01@\0\0\x17\x04\
+\0\x10session-try-recv\x01\x18\x01@\x02\x02fdw\x05value\x10\0\x0e\x04\0\x10sessi\
+on-response\x01\x19\x01@\x03\x07time-msw\x03cmdx\x05value\x0d\x01\0\x04\0\x09add\
+-timer\x01\x1a\x01@\x01\x03cmdx\x01\0\x04\0\x09del-timer\x01\x1b\x01o\x02x\x0d\x01\
+p\x1c\x01@\x01\x07time-msw\0\x1d\x04\0\x11get-timer-timeout\x01\x1e\x01o\x02ss\x01\
+p\x1f\x01@\x01\x07headers\x20\0\x0e\x04\0\x0ein-add-headers\x01!\x01@\x02\x03key\
+s\x05values\0\x0e\x04\0\x0din-add-header\x01\"\x01ps\x01@\x01\x07headers#\0\x0e\x04\
+\0\x0ein-del-headers\x01$\x01@\x01\x03keys\0\x0e\x04\0\x0din-del-header\x01%\x01\
+j\x01\x7f\x01s\x01@\x01\x03keys\0&\x04\0\x0cin-is-header\x01'\x04\0\x0din-get-he\
+ader\x01\x0a\x01j\x01\x03\x01s\x01@\0\0(\x04\0\x0ein-get-request\x01)\x01j\x01\x0d\
+\x01s\x01@\0\0*\x04\0\x12in-body-read-exact\x01+\x04\0\x0fout-add-headers\x01!\x04\
+\0\x0eout-add-header\x01\"\x04\0\x0fout-del-headers\x01$\x04\0\x0eout-del-header\
+\x01%\x04\0\x0dout-is-header\x01'\x04\0\x0eout-get-header\x01\x0a\x01@\x01\x03re\
+s\x01\0\x0e\x04\0\x10out-set-response\x01,\x04\0\x0cout-response\x01,\x01kx\x01j\
+\x01w\x01s\x01@\x02\x03typ-\x06config\x08\0.\x04\0\x05spawn\x01/\x03\x01\x19comp\
 onent:server/wasm-std\x05\x05\x01B\x0b\x01m\x05\x05error\x04warn\x04info\x05debu\
 g\x05trace\x04\0\x05level\x03\0\0\x01@\x01\x05level\x01\0\x7f\x04\0\x0blog-enabl\
 ed\x01\x02\x01j\0\x01s\x01@\x01\x03strs\0\x03\x04\0\x09log-error\x01\x04\x04\0\x08\
@@ -6671,13 +6586,12 @@ hget-string\x01N\x03\x01\x1bcomponent:server/wasm-store\x05\x07\x01B\x11\x02\x03
 msw\0\x07\x04\0\x0bsocket-read\x01\x08\x01j\0\x01s\x01@\x03\x02fdw\x04data\x06\x0a\
 timeout-msw\0\x09\x04\0\x0csocket-write\x01\x0a\x01@\x02\x02fdw\x0atimeout-msw\0\
 \x09\x04\0\x0csocket-flush\x01\x0b\x04\0\x0csocket-close\x01\x0b\x03\x01\x1fcomp\
-onent:server/wasm-websocket\x05\x08\x02\x03\0\x02\x05error\x01B\x0a\x02\x03\x02\x01\
-\x09\x04\0\x05error\x03\0\0\x01ks\x01j\x01\x01\x01s\x01@\x01\x06config\x02\0\x03\
-\x04\0\x09wasm-main\x01\x04\x04\0\x11wasm-main-timeout\x01\x04\x04\0\x0ewasm-mai\
-n-ext1\x01\x04\x04\0\x0ewasm-main-ext2\x01\x04\x04\0\x0ewasm-main-ext3\x01\x04\x04\
-\x01\x1dcomponent:server/wasm-service\x05\x0a\x04\x01\x1ccomponent:server/wasm-s\
-erver\x04\0\x0b\x11\x01\0\x0bwasm-server\x03\0\0\0G\x09producers\x01\x0cprocesse\
-d-by\x02\x0dwit-component\x070.201.0\x10wit-bindgen-rust\x060.21.0";
+onent:server/wasm-websocket\x05\x08\x02\x03\0\x02\x05error\x01B\x07\x02\x03\x02\x01\
+\x09\x04\0\x05error\x03\0\0\x01kx\x01ks\x01j\x01\x01\x01s\x01@\x02\x03typ\x02\x06\
+config\x03\0\x04\x04\0\x09wasm-main\x01\x05\x04\x01\x1dcomponent:server/wasm-ser\
+vice\x05\x0a\x04\x01\x1ccomponent:server/wasm-server\x04\0\x0b\x11\x01\0\x0bwasm\
+-server\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.20\
+1.0\x10wit-bindgen-rust\x060.21.0";
 
 #[inline(never)]
 #[doc(hidden)]

@@ -146,7 +146,7 @@ impl client::Connection for Connection {
                     ssl.set_verify(ssl_verify_mode);
                     //ssl.set_verify(SslVerifyMode::FAIL_IF_NO_PEER_CERT);
                     //ssl.set_ca_file("cert/www.yefyyun.cn.pem")?;
-                    ssl.set_alpn_protos(b"\x02h2\x08http/1.1")?;
+                    ssl.set_alpn_protos(util_openssl::PROTOCOL)?;
                     //let cache = ArcMutex::new(util_cache::SessionCache::new());
                     let cache = util_openssl::session_cache();
                     ssl.set_session_cache_mode(SslSessionCacheMode::CLIENT);
@@ -200,7 +200,7 @@ impl client::Connection for Connection {
                                 util_rustls::SkipServerVerification::new(),
                             )
                             .with_no_client_auth();
-                    client_crypto.alpn_protocols = vec![b"http/1.1".to_vec(), b"h2".to_vec()];
+                    client_crypto.alpn_protocols = util_rustls::get_protocols();
                     client_crypto.key_log = Arc::new(rustls::KeyLogFile::new());
 
                     let connector = TlsConnector::from(Arc::new(client_crypto));

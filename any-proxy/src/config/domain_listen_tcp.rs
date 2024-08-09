@@ -2,6 +2,7 @@ use crate::config as conf;
 use crate::config::config_toml::TcpListen;
 use crate::config::net_core::{DomainFromHttpV1, TCP_CONFIG_NAME_DEFAULT};
 use crate::proxy::domain_config::DomainConfigListenMerge;
+use crate::proxy::MsConfigContext;
 use crate::tcp::server as tcp_server;
 use any_base::module::module;
 use any_base::typ;
@@ -162,7 +163,6 @@ async fn domain_listen_tcp(
     use crate::config::net_server;
     use crate::config::net_server_core;
     use crate::proxy::domain_config::DomainConfigContext;
-    use crate::proxy::StreamConfigContext;
     use crate::util;
     let net_server_conf = net_server::curr_conf(conf_arg.curr_conf());
     let net_core_conf = net_core::curr_conf(conf_arg.curr_conf());
@@ -183,15 +183,14 @@ async fn domain_listen_tcp(
         net_server_core_conf.is_port_listen = Some(false);
     }
 
-    let scc = Arc::new(StreamConfigContext::new(
-        ms.clone(),
+    let scc = Arc::new(MsConfigContext::new(
         net_server_conf.net_confs.clone(),
         net_server_conf.server_confs.clone(),
         conf_arg.curr_conf().clone(),
         common_core_any_conf,
     ));
 
-    let domain_config_context = Arc::new(DomainConfigContext { scc: scc.clone() });
+    let domain_config_context = Arc::new(DomainConfigContext { scc });
 
     let sock_addrs = util::util::str_to_socket_addrs(&tcp_listen.address)
         .map_err(|e| anyhow!("err:util::addrs => e:{}", e))?;

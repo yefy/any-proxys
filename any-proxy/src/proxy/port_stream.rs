@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct PortStream {
-    ms: Modules,
+    ms: Arc<Modules>,
     executors: ExecutorsLocal,
     server_stream_info: Arc<ServerStreamInfo>,
     tunnel_publish: Option<tunnel_server::Publish>,
@@ -36,7 +36,7 @@ pub struct PortStream {
 
 impl PortStream {
     pub fn new(
-        ms: Modules,
+        ms: Arc<Modules>,
         executors: ExecutorsLocal,
         server_stream_info: ServerStreamInfo,
         tunnel_publish: Option<tunnel_server::Publish>,
@@ -73,7 +73,7 @@ impl PortStream {
 
             let scc = self.port_config_listen.port_config_context.scc.clone();
             let net_core_conf = scc.net_core_conf();
-            StreamInfo::new(
+            let mut stream_info = StreamInfo::new(
                 self.server_stream_info.clone(),
                 net_core_conf.debug_is_open_stream_work_times,
                 Some(self.executors.clone()),
@@ -83,11 +83,13 @@ impl PortStream {
                 net_core_conf.debug_is_open_print,
                 session_id,
                 wasm_stream_info_map,
-            )
+            );
+            stream_info.scc = Some(scc.to_arc_scc(self.ms.clone())).into();
+            stream_info
         };
         let stream_info = Share::new(stream_info);
         let shutdown_thread_rx = self.executors.context.shutdown_thread_tx.subscribe();
-        stream_start::do_start(self, stream_info, shutdown_thread_rx).await
+        stream_start::do_start(self, &stream_info, shutdown_thread_rx).await
     }
 }
 
@@ -98,6 +100,7 @@ impl proxy::Stream for PortStream {
         _client_stream.set_stream_info(Some(stream_info.get().client_stream_flow_info.clone()));
 
         let scc = self.port_config_listen.port_config_context.scc.clone();
+        let scc = scc.to_arc_scc(self.ms.clone());
         stream_info.get_mut().scc = Some(scc.clone()).into();
 
         #[cfg(feature = "anyproxy-ebpf")]
@@ -106,9 +109,7 @@ impl proxy::Stream for PortStream {
             && _client_stream.raw_fd() > 0
         {
             stream_info.get_mut().add_work_time1("connect_and_ebpf");
-            let ret =
-                StreamStream::connect_and_ebpf(scc.clone(), stream_info.clone(), _client_stream)
-                    .await?;
+            let ret = StreamStream::connect_and_ebpf(&scc, &stream_info, _client_stream).await?;
             if ret.is_none() {
                 return Ok(());
             }
@@ -124,7 +125,7 @@ impl proxy::Stream for PortStream {
             self.tunnel2_publish.clone(),
             self.server_stream_info.clone(),
             client_buf_reader,
-            stream_info.clone(),
+            &stream_info,
             self.executors.clone(),
         )
         .await
@@ -212,13 +213,18 @@ impl proxy::Stream for PortStream {
             );
         }
 
-        if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+        stream_info
+            .get_mut()
+            .add_work_time1("run_plugin_handle_access");
+        if run_plugin_handle_access(&scc, &stream_info).await? {
             return Ok(());
         }
 
+        stream_info
+            .get_mut()
+            .add_work_time1("run_plugin_handle_serverless");
         let client_buf_reader =
-            run_plugin_handle_serverless(scc.clone(), stream_info.clone(), client_buf_reader)
-                .await?;
+            run_plugin_handle_serverless(&scc, &stream_info, client_buf_reader).await?;
         if client_buf_reader.is_none() {
             return Ok(());
         }
@@ -228,6 +234,6 @@ impl proxy::Stream for PortStream {
         let client_buffer = &buf[pos..cap];
 
         stream_info.get_mut().add_work_time1("connect_and_stream");
-        StreamStream::connect_and_stream(stream_info, client_buffer, _client_stream).await
+        StreamStream::connect_and_stream(&stream_info, client_buffer, _client_stream).await
     }
 }

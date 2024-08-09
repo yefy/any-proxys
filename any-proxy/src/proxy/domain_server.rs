@@ -11,6 +11,7 @@ use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
+use awaitgroup::{Worker, WorkerInner};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -43,7 +44,7 @@ impl DomainServer {
         })
     }
 
-    pub async fn start(&self, ms: Modules) -> Result<()> {
+    pub async fn start(&self, ms: Arc<Modules>, worker_inner: WorkerInner) -> Result<()> {
         log::trace!(target: "main", "domain server start");
         let listen_server = self.listen_server.clone();
         let listen_addr = listen_server
@@ -84,16 +85,18 @@ impl DomainServer {
         let common_core_conf = common_core::main_conf_mut(&ms).await;
         let shutdown_timeout = common_core_conf.shutdown_timeout;
         for listen in listens.into_iter() {
+            let worker = worker_inner.worker();
             self.do_start(
                 shutdown_timeout,
                 executor.clone(),
                 listen,
                 tunnel_publish.clone(),
                 tunnel2_publish.clone(),
+                worker,
             )
             .await?;
         }
-
+        worker_inner.done();
         drop(ms);
         let mut shutdown_thread_tx = self.executors.context.shutdown_thread_tx.subscribe();
         tokio::select! {
@@ -121,15 +124,17 @@ impl DomainServer {
         listen: Box<dyn Listener>,
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
+        worker: Worker,
     ) -> Result<()> {
         let listen_server = self.listen_server.clone();
         let key = self.key.clone();
         let domain_config_listen_map = self.domain_config_listen_map.clone();
         let listen_shutdown_tx = self.listen_shutdown_tx.clone();
         let domain_context = self.domain_context.clone();
+        let worker_inner = worker.add();
         executor._start(
             #[cfg(feature = "anyspawn-count")]
-            None,
+            Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
                 server::listen(
                     #[cfg(feature = "anyspawn-count")]
@@ -137,9 +142,11 @@ impl DomainServer {
                     executors,
                     shutdown_timeout,
                     listen_shutdown_tx,
+                    worker_inner,
                     listen_server,
                     listen,
                     move |stream, server_stream_info, executors| async move {
+                        log::debug!(target: "ext3", "domain_server.rs");
                         let (domain_config_listen, ms) = {
                             let domain_config_listen_map = domain_config_listen_map.get();
                             let domain_listen = domain_config_listen_map.get(&key);

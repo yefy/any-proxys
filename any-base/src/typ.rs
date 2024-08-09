@@ -534,6 +534,10 @@ impl<T> OptionExt<T> {
     pub unsafe fn take(&mut self) -> T {
         self.d.take().unwrap()
     }
+
+    pub unsafe fn take_op(&mut self) -> Option<T> {
+        self.d.take()
+    }
 }
 
 impl<T> std::ops::Deref for OptionExt<T> {

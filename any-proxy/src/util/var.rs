@@ -440,12 +440,11 @@ impl Var {
         let mut vars = vars_str;
         let var_start = "${";
         let var_end = "}";
-        let mut is_var = true;
+        let mut is_var = false;
 
         loop {
             let var_start_index = vars.find(var_start);
             if var_start_index.is_none() {
-                is_var = false;
                 let item = Arc::new(VarItem {
                     is_var: false,
                     data: vars.to_string(),
@@ -458,6 +457,7 @@ impl Var {
                 datas.push(data);
                 break;
             }
+            is_var = true;
             let var_start_index = var_start_index.unwrap();
             if var_start_index > 0 {
                 let data = &vars[..var_start_index];

@@ -22,7 +22,7 @@ impl WasmHost {
         &self,
         version: Version,
         connect_func: Arc<Box<dyn Connect>>,
-        stream_info: Share<StreamInfo>,
+        stream_info: &Share<StreamInfo>,
     ) -> Result<Arc<hyper::Client<HttpHyperConnector>>> {
         let session_id = stream_info.get().session_id;
         let scc = stream_info.get().scc.clone();
@@ -137,7 +137,7 @@ impl wasm_http::Host for WasmHost {
             .await?;
 
             let client = self
-                .get_http_client(http_req.version(), connect_func, self.stream_info.clone())
+                .get_http_client(http_req.version(), connect_func, &self.stream_info)
                 .await?;
 
             //let client = hyper::Client::new();

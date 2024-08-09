@@ -10,9 +10,10 @@ exclude = [
     "wasm/http-filter-headers-pre",
     "wasm/http-filter-headers",
     "wasm/wit",
-    "any-proxy/examples/anyproxy",
     "any-proxy/examples",
-    "any-proxy/tests",
+    "any-test",
+    "any-example",
+    "any-ebpf",
 ]
 
 [profile.dev]
@@ -29,7 +30,7 @@ strip = false
 #rpath = false
 
 [profile.release]
-debug = false
+debug = true
 panic = "abort"
 opt-level = 3
 #这个特性开起来会导致rpm打包失败， deb正常
@@ -37,9 +38,9 @@ lto = false
 codegen-units = 1
 incremental = false
 rpath = false
-debug-assertions = false
-overflow-checks = false
+#debug-assertions = false
+#overflow-checks = false
 #性能调试用这个
 #debug = true
 #删除调试信息
-strip = true
+strip = false

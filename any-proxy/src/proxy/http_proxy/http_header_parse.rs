@@ -301,39 +301,6 @@ pub fn http_respons_to_vec(response: &Response<Body>) -> Vec<u8> {
     return data;
 }
 
-pub fn get_http_host<T>(request: &mut Request<T>) -> Result<String> {
-    let version = request.version();
-    let host_value = request.headers().get(hyper::http::header::HOST);
-    let http_host = match host_value {
-        None => "",
-        Some(t) => match t.to_str() {
-            Err(e) => return Err(e)?,
-            Ok(t) => t,
-        },
-    };
-
-    let http_host = match http_host {
-        "" => match (version, request.uri().host(), request.uri().port_u16()) {
-            (Version::HTTP_2, Some(host), Some(port)) => format!("{}:{}", host, port),
-            (Version::HTTP_2, Some(host), None) => format!("{}", host),
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "err:http_host nil => http_host:{:?}",
-                    http_host
-                ))?
-            }
-        },
-        _ => http_host.to_string(),
-    };
-
-    if version == Version::HTTP_2 && host_value == None && http_host.len() > 0 {
-        request
-            .headers_mut()
-            .insert("host", HeaderValue::from_bytes(http_host.as_bytes())?);
-    }
-    Ok(http_host)
-}
-
 pub fn e_tag(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<HeaderValue> {
     use http::header::ETAG;
     let etag = headers.get(ETAG).cloned();
@@ -404,6 +371,17 @@ pub fn content_length(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<u
     let content_length = content_length.unwrap().to_str()?.trim();
     let content_length = content_length.parse::<u64>()?;
     return Ok(content_length);
+}
+
+pub fn transfer_encoding(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<Option<String>> {
+    use http::header::TRANSFER_ENCODING;
+    let transfer_encoding = headers.get(TRANSFER_ENCODING);
+    if transfer_encoding.is_none() {
+        return Ok(None);
+    }
+    return Ok(Some(
+        transfer_encoding.unwrap().to_str()?.trim().to_string(),
+    ));
 }
 
 pub fn last_modified(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<(HeaderValue, u64)> {
@@ -654,23 +632,38 @@ pub fn http_headers_size(
     size
 }
 
-pub fn copy_request_parts<T>(
-    stream_info: Share<StreamInfo>,
+pub fn parse_request_parts<T>(
+    stream_info: &Share<StreamInfo>,
     request: &Request<T>,
-) -> Result<HttpParts> {
+) -> Result<(Option<String>, HttpParts)> {
+    let mut headers = request.headers().clone();
     let scheme = if stream_info.get().server_stream_info.is_tls {
         "https"
     } else {
         "http"
     };
+    let mut is_add_req_host = false;
+    let req_host = headers.get(HOST).cloned();
+    let req_host = if req_host.is_none() {
+        let host = request.uri().host().ok_or(anyhow!("err:host nil"))?;
+        let port = request.uri().port_u16();
+        let req_host = if port.is_none() {
+            format!("{}", host)
+        } else {
+            format!("{}:{}", host, port.unwrap())
+        };
+        is_add_req_host = true;
+        headers.insert(HOST, http::HeaderValue::from_bytes(req_host.as_bytes())?);
+        req_host
+    } else {
+        let req_host = req_host.unwrap();
+        let req_host = req_host
+            .to_str()
+            .map_err(|e| anyhow!("err: host => e:{}", e))?;
+        req_host.to_string()
+    };
 
-    let req_host = request.headers().get(HOST).cloned();
-    if req_host.is_none() {
-        return Err(anyhow!("host nil"));
-    }
-    let req_host = req_host.unwrap();
-    let req_host = req_host.to_str().unwrap();
-    let (domain, port) = host_and_port(req_host);
+    let (domain, port) = host_and_port(&req_host);
     let port = if port.len() <= 0 {
         if stream_info.get().server_stream_info.is_tls {
             "443"
@@ -693,12 +686,22 @@ pub fn copy_request_parts<T>(
             .unwrap_or("/")
     );
     let uri: http::Uri = uri.parse()?;
-    Ok(HttpParts {
-        method: request.method().clone(),
-        uri,
-        version: request.version().clone(),
-        headers: request.headers().clone(),
-    })
+
+    let req_host = if is_add_req_host {
+        Some(req_host)
+    } else {
+        None
+    };
+
+    Ok((
+        req_host,
+        HttpParts {
+            method: request.method().clone(),
+            uri,
+            version: request.version().clone(),
+            headers,
+        },
+    ))
 }
 
 pub fn is_request_body_nil(method: &http::Method) -> bool {

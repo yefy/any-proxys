@@ -1,4 +1,3 @@
-use super::StreamConfigContext;
 use crate::config::config_toml::Listen;
 use crate::stream::server::Server;
 use crate::util;
@@ -8,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 pub struct DomainConfigContext {
-    pub scc: Arc<StreamConfigContext>,
+    pub scc: Arc<MsConfigContext>,
 }
 
 #[derive(Clone)]
@@ -27,6 +26,7 @@ type DomainConfigFunc =
     fn(ArcMutex<DomainConfigListenMerge>) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 use crate::config::net_core::DomainFromHttpV1;
 use crate::config::net_server_core_plugin::PluginHandleProtocol;
+use crate::proxy::MsConfigContext;
 use any_base::module::module;
 use any_base::typ::{ArcMutex, ArcRwLockTokio};
 

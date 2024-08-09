@@ -7,6 +7,9 @@ use lazy_static::lazy_static;
 use std::sync::Arc;
 
 use crate::config::config_toml::ProxyPassTcp;
+use crate::config::upstream_core::GetConnectI;
+use crate::config::upstream_proxy_pass_tcp::UpstreamTcp;
+use crate::upstream::UpstreamVarAddr;
 use any_base::typ::ArcUnsafeAny;
 
 pub struct Conf {}
@@ -155,6 +158,23 @@ async fn proxy_pass_tcp(
     use crate::config::upstream_block;
     use crate::config::upstream_core;
     use crate::config::upstream_core_plugin;
+    use crate::util::var::Var;
+
+    let address_vars = Var::new(&proxy_pass_conf.address, "")?;
+    if address_vars.is_var {
+        let net_server_core_conf = net_server_core::curr_conf_mut(conf_arg.curr_conf());
+        if net_server_core_conf.upstream_name.len() > 0 {
+            return Err(anyhow!("err:str:{}", str));
+        }
+
+        let ups_tcp = Box::new(UpstreamTcp::new(Some(address_vars), proxy_pass_conf));
+        let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+        net_server_core_conf.upstream_name = "upstream_var_tcp".to_string();
+        net_server_core_conf.upstream_var_addr =
+            Some(Arc::new(UpstreamVarAddr::new(get_connect))).into();
+        return Ok(());
+    }
+
     let mut upstream_block = upstream_block::Conf::new();
     upstream_block.name = format!("tcp_{:?}", proxy_pass_conf);
     upstream_block.balancer = upstream_core_plugin::ROUND_ROBIN.into();

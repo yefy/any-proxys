@@ -24,6 +24,12 @@ impl Conf {
     }
 }
 
+impl Drop for Conf {
+    fn drop(&mut self) {
+        log::debug!(target: "ms", "drop domain_core");
+    }
+}
+
 lazy_static! {
     pub static ref MODULE_CMDS: Arc<Vec<module::Cmd>> = Arc::new(vec![]);
 }
@@ -39,7 +45,11 @@ lazy_static! {
         ),
         init_master_thread: None,
         init_work_thread: None,
-        drop_conf: None,
+        drop_conf: Some(|ms, parent_conf, child_conf| Box::pin(drop_conf(
+            ms,
+            parent_conf,
+            child_conf
+        ))),
     });
 }
 
@@ -141,6 +151,23 @@ async fn init_conf(
         let func = { value.get().func };
         func(value.clone()).await?;
     }
+    conf.domain_config_listen_merge_map.clear();
+    return Ok(());
+}
+
+async fn drop_conf(
+    _ms: module::Modules,
+    _main_confs: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let conf = conf.get_mut::<Conf>();
+
+    for (_, v) in conf.domain_config_listen_map.iter_mut() {
+        v.domain_config_context_map.clear()
+    }
+    conf.domain_config_listen_merge_map.clear();
+    conf.domain_config_listen_map.clear();
+
     return Ok(());
 }
 

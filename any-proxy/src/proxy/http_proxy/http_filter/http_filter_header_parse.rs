@@ -1,13 +1,13 @@
 use crate::config::net_core_plugin::PluginHttpFilter;
 use crate::proxy::http_proxy::http_header_parse::{
-    cache_control_time, content_length, content_range, e_tag, last_modified,
+    cache_control_time, content_length, content_range, e_tag, last_modified, transfer_encoding,
 };
-use crate::proxy::http_proxy::http_stream::HttpStream;
+use crate::proxy::http_proxy::http_server_proxy::HttpStream;
 use crate::proxy::http_proxy::http_stream_request::{HttpResponseInfo, HttpStreamRequest};
 use any_base::typ::ArcRwLockTokio;
 use anyhow::anyhow;
 use anyhow::Result;
-use http::HeaderValue;
+use http::{HeaderValue, StatusCode};
 use lazy_static::lazy_static;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -24,7 +24,7 @@ pub async fn set_header_filter(plugin: PluginHttpFilter) -> Result<()> {
 }
 
 pub async fn http_filter_header_parse(r: Arc<HttpStreamRequest>) -> Result<()> {
-    log::trace!(target: "main", "r.session_id:{}, http_filter_header_parse", r.session_id);
+    log::trace!(target: "ext2", "r.session_id:{}, http_filter_header_parse", r.session_id);
     do_http_filter_header_parse(&r).await?;
     let next = HEADER_FILTER_NEXT.get().await;
     if next.is_some() {
@@ -34,21 +34,29 @@ pub async fn http_filter_header_parse(r: Arc<HttpStreamRequest>) -> Result<()> {
 }
 
 pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
-    let is_upstream_cache = {
-        let r_ctx = &mut *r.ctx.get_mut();
-        let mut content_range = content_range(&r_ctx.r_out.headers)
+    let scc = r.http_arg.stream_info.get().scc.clone();
+    let is_upstream_cache: Result<bool> = async {
+        let rctx = &mut *r.ctx.get_mut();
+        let mut content_range = content_range(&rctx.r_out.headers)
             .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;
 
-        let content_length = content_length(&r_ctx.r_out.headers)
+        let transfer_encoding = transfer_encoding(&rctx.r_out.headers)?;
+
+        let mut content_length = content_length(&rctx.r_out.headers)
             .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;
+
+        if transfer_encoding.is_some() && content_length > 0 {
+            log::warn!("err:transfer_encoding.is_some() && content_length > 0");
+            content_length = 0;
+        }
 
         if content_range.is_range {
             if content_range.content_length != content_length {
                 return Err(anyhow!(
                     "status:{:?}, version:{:?}, content_range:{:?}",
-                    r_ctx.r_out.status,
-                    r_ctx.r_out.version,
-                    r_ctx.r_out.headers
+                    rctx.r_out.status,
+                    rctx.r_out.version,
+                    rctx.r_out.headers
                 ));
             }
         } else {
@@ -60,9 +68,10 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             }
         }
 
-        let left_content_length = if r_ctx.r_in.curr_upstream_method.is_some() {
-            let curr_upstream_method = r_ctx.r_in.curr_upstream_method.clone().unwrap();
-            if curr_upstream_method == http::method::Method::HEAD {
+        let left_content_length = if rctx.r_in.curr_upstream_method.is_some() {
+            let curr_upstream_method = rctx.r_in.curr_upstream_method.clone().unwrap();
+            if curr_upstream_method == http::method::Method::HEAD && rctx.r_out.status.is_success()
+            {
                 0
             } else {
                 content_range.content_length as i64
@@ -71,27 +80,47 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             0
         };
 
-        if r_ctx.is_out_status_ok() {
+        let left_content_length = if rctx.r_out.status == StatusCode::NOT_MODIFIED
+            || rctx.r_out.status == StatusCode::PRECONDITION_FAILED
+        {
+            rctx.r_out.headers.remove(http::header::CONTENT_LENGTH);
+            rctx.r_out.headers.remove(http::header::CONTENT_RANGE);
+            0
+        } else {
+            left_content_length
+        };
+
+        rctx.r_out.left_content_length = left_content_length;
+        rctx.r_out.out_content_length = left_content_length;
+        rctx.r_out.transfer_encoding = transfer_encoding.into();
+        rctx.r_out.is_cache_err = false;
+
+        if !rctx.is_request_cache {
+            rctx.r_out.is_cache = false;
+            return Ok(false);
+        }
+
+        if rctx.is_out_status_ok() {
             let expires = {
-                let net_core_conf = r.scc.net_core_conf();
+                let net_core_conf = scc.net_core_conf();
                 net_core_conf.expires
             };
 
-            if expires > 0 && r_ctx.r_out.headers.get("cache-control").is_none() {
+            if expires > 0 && rctx.r_out.headers.get("cache-control").is_none() {
                 use http::header::CACHE_CONTROL;
-                r_ctx.r_out.headers.insert(
+                rctx.r_out.headers.insert(
                     CACHE_CONTROL,
                     HeaderValue::from_bytes(format!("max-age={}", expires).as_bytes())?,
                 );
             }
         } else {
             use crate::config::net_core_proxy;
-            let net_curr_conf = r.scc.net_curr_conf();
+            let net_curr_conf = scc.net_curr_conf();
             let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
             if !net_core_proxy_conf.proxy_cache_valids.is_empty() {
                 let expires = net_core_proxy_conf
                     .proxy_cache_valids
-                    .get(&r_ctx.r_out.status.as_u16())
+                    .get(&rctx.r_out.status.as_u16())
                     .cloned();
                 let expires = if expires.is_some() {
                     expires.unwrap()
@@ -104,27 +133,26 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
                     }
                 };
 
-                if expires > 0 && r_ctx.r_out.headers.get("cache-control").is_none() {
+                if expires > 0 && rctx.r_out.headers.get("cache-control").is_none() {
                     use http::header::CACHE_CONTROL;
-                    r_ctx.r_out.headers.insert(
+                    rctx.r_out.headers.insert(
                         CACHE_CONTROL,
                         HeaderValue::from_bytes(format!("max-age={}", expires).as_bytes())?,
                     );
 
                     use http::header::ETAG;
-                    if r_ctx.r_out.headers.get(ETAG).is_none() {
-                        r_ctx
-                            .r_out
+                    if rctx.r_out.headers.get(ETAG).is_none() {
+                        rctx.r_out
                             .headers
                             .insert(ETAG, HeaderValue::from_bytes(b"default")?);
                     }
 
                     use http::header::LAST_MODIFIED;
-                    if r_ctx.r_out.headers.get(LAST_MODIFIED).is_none() {
+                    if rctx.r_out.headers.get(LAST_MODIFIED).is_none() {
                         let modified = SystemTime::now();
                         let last_modified = httpdate::HttpDate::from(modified);
                         let last_modified = last_modified.to_string();
-                        r_ctx.r_out.headers.insert(
+                        rctx.r_out.headers.insert(
                             LAST_MODIFIED,
                             HeaderValue::from_bytes(last_modified.as_bytes())?,
                         );
@@ -133,33 +161,34 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             }
         }
 
-        let e_tag = e_tag(&r_ctx.r_out.headers).map_err(|e| anyhow!("err:e_tag =>e:{}", e))?;
-        let (last_modified, last_modified_time) = last_modified(&r_ctx.r_out.headers)
+        let e_tag = e_tag(&rctx.r_out.headers).map_err(|e| anyhow!("err:e_tag =>e:{}", e))?;
+        let (last_modified, last_modified_time) = last_modified(&rctx.r_out.headers)
             .map_err(|e| anyhow!("err:last_modified =>e:{}", e))?;
         let (cache_control_time, expires_time, expires_time_sys) =
-            cache_control_time(&r_ctx.r_out.headers)
+            cache_control_time(&rctx.r_out.headers)
                 .map_err(|e| anyhow!("err:cache_control_time =>e:{}", e))?;
 
         use http::header::EXPIRES;
-        if expires_time_sys.is_some() && r_ctx.r_out.headers.get(EXPIRES).is_none() {
+        if expires_time_sys.is_some() && rctx.r_out.headers.get(EXPIRES).is_none() {
             let v = httpdate::fmt_http_date(expires_time_sys.unwrap());
-            r_ctx
-                .r_out
+            rctx.r_out
                 .headers
                 .insert(EXPIRES, HeaderValue::from_str(&v)?);
         }
 
-        r_ctx.r_in.bitmap_curr_slice_start = r_ctx.r_in.curr_slice_start;
-        r_ctx.r_in.bitmap_last_slice_start = r_ctx.r_in.curr_slice_start;
+        rctx.r_in.bitmap_curr_slice_start = rctx.r_in.curr_slice_start;
+        rctx.r_in.bitmap_last_slice_start = rctx.r_in.curr_slice_start;
 
-        r_ctx.r_out.is_cache_err = false;
-        r_ctx.r_out.is_cache = !(!r_ctx.is_request_cache
+        rctx.r_out.is_cache = !(!rctx.is_request_cache
             || cache_control_time <= 0
             || e_tag.is_empty()
-            || last_modified.is_empty());
+            || last_modified.is_empty()
+            || rctx.r_out.transfer_encoding.is_some());
 
-        let is_upstream_cache =
-            !(cache_control_time <= 0 || e_tag.is_empty() || last_modified.is_empty());
+        let is_upstream_cache = !(cache_control_time <= 0
+            || e_tag.is_empty()
+            || last_modified.is_empty()
+            || rctx.r_out.transfer_encoding.is_some());
 
         let response_info = Arc::new(HttpResponseInfo {
             last_modified_time,
@@ -168,14 +197,15 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             cache_control_time,
             expires_time,
             range: content_range,
-            head: r_ctx.r_out.head.clone(),
+            head: rctx.r_out.head.clone(),
         });
-        r_ctx.r_out.response_info = Some(response_info);
-        r_ctx.r_out.left_content_length = left_content_length;
-        is_upstream_cache
-    };
+        rctx.r_out.response_info = Some(response_info);
+        Ok(is_upstream_cache)
+    }
+    .await;
 
     if r.ctx.get_mut().is_try_cache {
+        let is_upstream_cache = is_upstream_cache?;
         HttpStream::set_is_last_upstream_cache(r, is_upstream_cache).await?;
     }
 

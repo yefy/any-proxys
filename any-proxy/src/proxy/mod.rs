@@ -48,8 +48,64 @@ use std::collections::LinkedList;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+pub struct MsConfigContext {
+    net_confs: Vec<typ::ArcUnsafeAny>,
+    server_confs: Vec<typ::ArcUnsafeAny>,
+    curr_conf: ArcUnsafeAny,
+    common_conf: ArcUnsafeAny,
+}
+
+impl MsConfigContext {
+    pub fn new(
+        net_confs: Vec<typ::ArcUnsafeAny>,
+        server_confs: Vec<typ::ArcUnsafeAny>,
+        curr_conf: ArcUnsafeAny,
+        common_conf: ArcUnsafeAny,
+    ) -> Self {
+        MsConfigContext {
+            net_confs,
+            server_confs,
+            curr_conf,
+            common_conf,
+        }
+    }
+    pub fn common_core_conf(&self) -> &common_core::Conf {
+        common_core::curr_conf(&self.common_conf)
+    }
+    pub fn net_core_conf(&self) -> &net_core::Conf {
+        net_core::curr_conf(&self.curr_conf)
+    }
+    pub fn net_main_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+        &self.net_confs
+    }
+    //___wait___ 如果支持了local 这个函数不应该存在, 就使用net_curr_conf
+    pub fn net_server_confs(&self) -> &Vec<typ::ArcUnsafeAny> {
+        &self.server_confs
+    }
+    pub fn common_core_any_conf(&self) -> &typ::ArcUnsafeAny {
+        &self.common_conf
+    }
+    pub fn net_curr_conf(&self) -> &typ::ArcUnsafeAny {
+        &self.curr_conf
+    }
+
+    pub fn to_scc(&self, ms: Arc<module::Modules>) -> StreamConfigContext {
+        StreamConfigContext::new(
+            ms,
+            self.net_confs.clone(),
+            self.server_confs.clone(),
+            self.curr_conf.clone(),
+            self.common_conf.clone(),
+        )
+    }
+
+    pub fn to_arc_scc(&self, ms: Arc<module::Modules>) -> Arc<StreamConfigContext> {
+        Arc::new(self.to_scc(ms))
+    }
+}
+
 pub struct StreamConfigContext {
-    ms: module::Modules,
+    ms: Arc<module::Modules>,
     net_confs: Vec<typ::ArcUnsafeAny>,
     server_confs: Vec<typ::ArcUnsafeAny>,
     curr_conf: ArcUnsafeAny,
@@ -64,7 +120,7 @@ impl Drop for StreamConfigContext {
 
 impl StreamConfigContext {
     pub fn new(
-        ms: module::Modules,
+        ms: Arc<module::Modules>,
         net_confs: Vec<typ::ArcUnsafeAny>,
         server_confs: Vec<typ::ArcUnsafeAny>,
         curr_conf: ArcUnsafeAny,
@@ -306,7 +362,7 @@ impl StreamTimeout {
 
 #[derive(Clone)]
 pub struct ServerArg {
-    ms: Modules,
+    ms: Arc<Modules>,
     executors: ExecutorsLocal,
     stream_info: Share<StreamInfo>,
     domain_config_listen: Arc<domain_config::DomainConfigListen>,

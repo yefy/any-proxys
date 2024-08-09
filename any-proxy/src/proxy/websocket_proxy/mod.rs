@@ -1,10 +1,9 @@
-pub mod websocket_echo_server;
-pub mod websocket_server;
-pub mod websocket_static_server;
+pub mod websocket_server_echo;
+pub mod websocket_server_proxy;
+pub mod websocket_server_static;
 use crate::protopack::anyproxy::AnyproxyHello;
 use crate::proxy::ServerArg;
 use crate::proxy::{util as proxy_util, StreamConfigContext};
-use crate::util::util::host_and_port;
 use crate::Protocol77;
 use any_base::io::buf_stream::BufStream;
 use any_base::stream_flow::StreamFlow;
@@ -15,11 +14,14 @@ use base64::{engine::general_purpose, Engine as _};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::WebSocketStream;
 
-use crate::proxy::http_proxy::http_header_parse::{copy_request_parts, get_http_host, HttpParts};
+use crate::proxy::http_proxy::http_header_parse::{parse_request_parts, HttpParts};
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
+use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::util::{
-    find_local, run_plugin_handle_access, run_plugin_handle_websocket_serverless,
+    find_local, run_plugin_handle_access, run_plugin_handle_websocket,
+    run_plugin_handle_websocket_serverless,
 };
+use any_base::io::buf_reader::BufReader;
 use futures_core::Stream;
 use futures_sink::Sink;
 use hyper::Body;
@@ -42,6 +44,25 @@ lazy_static! {
     pub static ref WEBSOCKET_HELLO_KEY: String = "websocket_hello".to_string();
 }
 
+pub async fn server_handle(arg: ServerArg, client_buf_reader: BufReader<StreamFlow>) -> Result<()> {
+    arg.stream_info.get_mut().add_work_time1("websocket");
+    let client_buf_stream = any_base::io::buf_stream::BufStream::from(
+        any_base::io::buf_writer::BufWriter::new(client_buf_reader),
+    );
+
+    arg.stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
+    let value = stream_parse(arg.clone(), client_buf_stream).await?;
+    if value.is_none() {
+        return Ok(());
+    }
+
+    let (_, scc, client_stream) = value.unwrap();
+    let ret = run_plugin_handle_websocket(&scc, &arg, client_stream).await;
+    arg.stream_info.get_mut().http_r.set_nil();
+    ret?;
+    Ok(())
+}
+
 pub async fn stream_parse(
     arg: ServerArg,
     stream: BufStream<StreamFlow>,
@@ -59,13 +80,25 @@ pub async fn stream_parse(
         stream_info.get_mut().client_protocol77 = Some(Protocol77::WebSocket);
     }
 
+    let domain_config_context = arg
+        .domain_config_listen
+        .domain_config_context_map
+        .iter()
+        .last();
+    if domain_config_context.is_some() {
+        let (_, domain_config_context) = domain_config_context.unwrap();
+        stream_info.get_mut().scc =
+            Some(domain_config_context.scc.to_arc_scc(arg.ms.clone())).into();
+    }
+
     let mut part: Option<HttpParts> = None;
 
     let copy_headers_callback =
         |request: &Request, response: Response| -> std::result::Result<Response, ErrorResponse> {
-            let parts = copy_request_parts(stream_info.clone(), request);
-            if parts.is_ok() {
-                part = Some(parts.unwrap());
+            let ret = parse_request_parts(&stream_info, request);
+            if ret.is_ok() {
+                let (_, parts) = ret.unwrap();
+                part = Some(parts);
             }
             Ok(response)
         };
@@ -84,10 +117,28 @@ pub async fn stream_parse(
     *request.headers_mut() = part.headers.clone();
     log::trace!(target: "main", "request.headers:{:?}", request.headers());
 
-    let http_host = get_http_host(&mut request)?;
-    let (domain, _) = host_and_port(&http_host);
-    let domain = ArcString::new(domain.to_string());
-    let hello_str = request.headers().get(&*WEBSOCKET_HELLO_KEY).cloned();
+    let session_id = stream_info.get().session_id;
+    let r = Arc::new(
+        HttpStreamRequest::new(
+            arg.clone(),
+            arg.clone(),
+            session_id,
+            None.into(),
+            part,
+            request,
+            None,
+        )
+        .await?,
+    );
+
+    r.http_arg.stream_info.get_mut().http_r = Some(r.clone()).into();
+
+    let (domain, hello_str) = {
+        let r_in = &mut r.ctx.get_mut().r_in;
+        let domain = ArcString::new(r_in.uri.host().unwrap().to_string());
+        let hello_str = r_in.upstream_headers.remove(&*WEBSOCKET_HELLO_KEY);
+        (domain, hello_str)
+    };
 
     let scc = proxy_util::parse_proxy_domain(
         &arg,
@@ -109,38 +160,21 @@ pub async fn stream_parse(
     )
     .await?;
 
-    if run_plugin_handle_access(scc.clone(), stream_info.clone()).await? {
+    arg.stream_info.get_mut().err_status = ErrStatus::AccessLimit;
+    if run_plugin_handle_access(&scc, &stream_info).await? {
         return Err(anyhow::anyhow!("run_plugin_handle_access"));
     }
+    arg.stream_info.get_mut().err_status = ErrStatus::ServerErr;
 
-    let session_id = stream_info.get().session_id;
-    let r = Arc::new(
-        HttpStreamRequest::new(
-            arg.clone(),
-            arg.clone(),
-            session_id,
-            None.into(),
-            part,
-            request,
-            false,
-            false,
-            None.into(),
-        )
-        .await?,
-    );
-
-    r.http_arg.stream_info.get_mut().http_r = Some(r.clone()).into();
-
-    find_local(stream_info.clone())?;
-    let scc = stream_info.get().scc.clone().unwrap();
+    find_local(&stream_info)?;
+    let scc = stream_info.get().scc.clone();
 
     let client_stream =
-        run_plugin_handle_websocket_serverless(scc.clone(), stream_info.clone(), client_stream)
-            .await?;
+        run_plugin_handle_websocket_serverless(&scc, &stream_info, client_stream).await?;
     if client_stream.is_none() {
         return Ok(None);
     }
     let client_stream = client_stream.unwrap();
 
-    Ok(Some((r, scc, client_stream)))
+    Ok(Some((r, scc.unwrap(), client_stream)))
 }

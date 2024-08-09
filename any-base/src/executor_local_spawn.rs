@@ -280,7 +280,7 @@ impl ExecutorLocalSpawn {
 
     pub async fn stop(&self, flag: &str, is_fast_shutdown: bool, shutdown_timeout: u64) {
         log::debug!(target: "main",
-            "stop version:{}, flag:{}, is_fast_shutdown:{}, \
+            "executor_local_spawn stop version:{}, flag:{}, is_fast_shutdown:{}, \
         shutdown_timeout:{}, wait_group.count:{}",
             self.executors.context.group_version,
             flag,
@@ -296,7 +296,7 @@ impl ExecutorLocalSpawn {
                 .shutdown_thread_tx
                 .send(is_fast_shutdown);
         }
-
+        let mut num = 0;
         loop {
             tokio::select! {
                 biased;
@@ -315,9 +315,19 @@ impl ExecutorLocalSpawn {
                     break;
                 },
                 _ = tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout)) => {
+                    num += 1;
+                    if num > 2 {
+                        log::error!(
+                        "executor_local_spawn stop timeout: version:{}, flag:{}, wait_group.count:{}",
+                        self.executors.context.group_version,
+                        flag,
+                            self.wait_group.count(),
+                        );
+                        break;
+                    }
                     let _ = self.executors.context.shutdown_thread_tx.send(is_fast_shutdown);
-                        log::warn!(
-                        "stop timeout: version:{}, flag:{}, wait_group.count:{}",
+                        log::info!(
+                        "executor_local_spawn next stop timeout: version:{}, flag:{}, wait_group.count:{}",
                         self.executors.context.group_version,
                         flag,
                             self.wait_group.count(),
@@ -373,11 +383,11 @@ pub fn _start<S, F>(
                         let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();
                         let count = count_map.get_mut(&name_defer);
                         if count.is_none() {
-                            log::error!("_start name {} nil", name_defer);
+                            log::error!("err:_start defer name {} nil", name_defer);
                         } else {
                             let count = count.unwrap();
                             *count -= 1;
-                            log::info!("_start name {} count:{}", name_defer, count);
+                            log::debug!(target: "main", "_start defer name {} count:{}", name_defer, count);
                         }
                     }
                 }
@@ -392,11 +402,11 @@ pub fn _start<S, F>(
                     let count = count_map.get_mut(&name);
                     if count.is_none() {
                         count_map.insert(name.to_string(), 1);
-                        log::info!("-start name {} count:{}", name, 1);
+                        log::debug!(target: "main", "_start name {} count:{}", name, 1);
                     } else {
                         let count = count.unwrap();
                         *count += 1;
-                        log::info!("-start name {} count:{}", name, count);
+                        log::debug!(target: "main", "_start name {} count:{}", name, count);
                     }
                 }
             }
