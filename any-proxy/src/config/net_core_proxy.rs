@@ -1,6 +1,8 @@
 use crate::config as conf;
+use crate::config::common_core::{get_session, get_tmp_file};
 use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeData};
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
+use crate::proxy::http_proxy::util::timer_check_proxy_cache;
 use crate::proxy::stream_info::StreamInfo;
 use crate::util::var::Var;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
@@ -15,11 +17,10 @@ use lazy_static::lazy_static;
 use radix_trie::Trie;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 pub struct ProxyRewrite {
     pub regex: regex::Regex,
@@ -156,7 +157,8 @@ impl ProxyHotFile {
 
 pub const DEFAULT_PROXY_EXPIRES_FILE_TIMER: u64 = 10;
 pub const CACHE_FILE_SLISE: u64 = 1024 * 1024;
-const DEFAULT_PROXY_CACHE_KEY: &str = "${http_ups_request_method}${http_ups_request_scheme}${http_ups_request_host}${http_ups_request_uri}";
+const DEFAULT_PROXY_CACHE_KEY: &str =
+    "${http_request_method}${http_request_domain}${http_request_uri}";
 lazy_static! {
     pub static ref CHECK_METHODS_MAP: ArcMutex<HashMap<String, bool>> = {
         let mut data = HashMap::new();
@@ -171,135 +173,76 @@ lazy_static! {
     };
 }
 
-pub struct Conf {
-    pub proxy_cache_names: Option<Vec<String>>,
-    pub proxy_cache_key: String,
-    pub proxy_cache_key_vars: Var,
-    pub proxy_cache_purge: bool,
-    pub proxy_request_slice: u64,
-    pub proxy_cache_methods: HashMap<String, bool>,
-    pub proxy_cache_valids: HashMap<u16, u64>,
-    pub proxy_cache_confs: Vec<ProxyCacheConf>,
-    pub proxy_caches: Vec<Arc<ProxyCache>>,
-    pub proxy_expires_file_timer: u64,
-    pub proxy_hot_file: ProxyHotFile,
-    pub proxy_max_open_file: usize,
-    pub proxy_get_to_get_range: bool,
-
-    pub proxy_cache_map: HashMap<String, Arc<ProxyCache>>,
-    pub proxy_cache_index_map: ArcRwLock<HashMap<Bytes, ArcRwLock<HashSet<String>>>>,
-    pub uri_trie: ArcRwLock<Trie<String, ArcRwLock<std::collections::HashSet<Bytes>>>>,
-    pub del_md5: ArcRwLock<VecDeque<Bytes>>,
-    pub proxy_expires_file_timer_instant: ArcRwLock<Instant>,
-    pub hot_io_percent_map: ArcRwLock<HashMap<String, u64>>,
-    pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
-    pub is_check: Arc<AtomicBool>,
-    pub is_init_master_thread: Arc<AtomicBool>,
-    pub rewrite: Vec<ProxyRewrite>,
+pub struct ProxyCacheIndex {
+    pub uri_trie: Trie<String, ArcRwLock<std::collections::HashSet<Bytes>>>,
+    pub index_map: HashMap<Bytes, ArcRwLock<HashMap<String, u64>>>,
 }
 
-impl Drop for Conf {
-    fn drop(&mut self) {
-        log::debug!(target: "ms", "drop net_core_proxy");
-    }
-}
-
-impl Conf {
+impl ProxyCacheIndex {
     pub fn new() -> Self {
-        Conf {
-            proxy_cache_map: HashMap::new(),
-            proxy_caches: Vec::with_capacity(10),
-            proxy_cache_confs: Vec::with_capacity(10),
-            proxy_cache_names: None,
-            proxy_request_slice: 1 * CACHE_FILE_SLISE,
-            proxy_cache_key: DEFAULT_PROXY_CACHE_KEY.to_string(),
-            proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
-            proxy_cache_methods: HashMap::new(),
-            proxy_cache_valids: HashMap::new(),
-            proxy_cache_index_map: ArcRwLock::new(HashMap::new()),
-            proxy_cache_purge: false,
-            uri_trie: ArcRwLock::new(Trie::new()),
-            del_md5: ArcRwLock::new(VecDeque::with_capacity(100)),
-            proxy_expires_file_timer: DEFAULT_PROXY_EXPIRES_FILE_TIMER,
-            proxy_expires_file_timer_instant: ArcRwLock::new(Instant::now()),
-            proxy_hot_file: ProxyHotFile::new(),
-            hot_io_percent_map: ArcRwLock::new(HashMap::new()),
-            cache_file_node_queue: ArcMutex::new(VecDeque::new()),
-            proxy_max_open_file: 0,
-            proxy_get_to_get_range: false,
-            is_check: Arc::new(AtomicBool::new(false)),
-            is_init_master_thread: Arc::new(AtomicBool::new(false)),
-            rewrite: Vec::new(),
+        Self {
+            uri_trie: Trie::new(),
+            index_map: HashMap::new(),
         }
     }
 
-    pub fn is_expires_file_timer(&self) -> bool {
-        let curr = Instant::now();
-        let elapsed = {
-            let expires_file_timer_instant = &*self.proxy_expires_file_timer_instant.get();
-            let elapsed = curr - *expires_file_timer_instant;
-            elapsed.as_secs()
-        };
-        if elapsed >= self.proxy_expires_file_timer {
-            *self.proxy_expires_file_timer_instant.get_mut() = curr;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn trie_insert(&self, url: String, md5: Bytes) -> Result<()> {
-        let value = self.uri_trie.get().get(&url).cloned();
+    pub fn insert(&mut self, url: String, md5: Bytes, proxy_cache_name: String, version: u64) {
+        let value = self.uri_trie.get(&url).cloned();
         let value = if value.is_none() {
             let value = ArcRwLock::new(std::collections::HashSet::new());
-            self.uri_trie.get_mut().insert(url, value.clone());
+            self.uri_trie.insert(url, value.clone());
             value
         } else {
             value.unwrap()
         };
-        value.get_mut().insert(md5);
-        return Ok(());
+        value.get_mut().insert(md5.clone());
+
+        let value = self.index_map.get(&md5).cloned();
+        let value = if value.is_none() {
+            let value = ArcRwLock::new(HashMap::new());
+            self.index_map.insert(md5, value.clone());
+            value
+        } else {
+            value.unwrap()
+        };
+        value.get_mut().insert(proxy_cache_name, version);
     }
 
-    pub fn trie_del(&self, url: &String, md5: &Bytes) {
-        let value = self.uri_trie.get().get(url).cloned();
+    pub fn del(&mut self, url: &String, md5: &Bytes, proxy_cache_name: &String, version: u64) {
+        log::debug!(target: "purge", "del file url:{}, md5:{}, proxy_cache_name:{}, version:{}", url, String::from_utf8_lossy(md5), proxy_cache_name, version);
+        let value = self.index_map.get(md5).cloned();
+        if value.is_some() {
+            let value = value.unwrap();
+            let value = &mut *value.get_mut();
+            let v = value.get(proxy_cache_name).cloned();
+            if v.is_some() {
+                let v = v.unwrap();
+                log::debug!(target: "purge", "find version:{}", v);
+                if v > version {
+                    return;
+                }
+                value.remove(proxy_cache_name);
+            }
+
+            if !value.is_empty() {
+                return;
+            }
+        }
+
+        let value = self.uri_trie.get(url).cloned();
         if value.is_none() {
             return;
         }
         let value = value.unwrap();
         let value = &mut *value.get_mut();
         value.remove(md5);
-        if value.len() <= 0 {
-            self.uri_trie.get_mut().remove(url);
+        if value.is_empty() {
+            self.uri_trie.remove(url);
         }
-        return;
-    }
-
-    pub fn index_insert(&self, md5: Bytes, proxy_cache_name: String) {
-        let value = self.proxy_cache_index_map.get().get(&md5).cloned();
-        let value = if value.is_none() {
-            let value = ArcRwLock::new(HashSet::new());
-            self.proxy_cache_index_map
-                .get_mut()
-                .insert(md5, value.clone());
-            value
-        } else {
-            value.unwrap()
-        };
-        value.get_mut().insert(proxy_cache_name);
-    }
-
-    pub fn index_del(&self, md5: &Bytes, proxy_cache_name: &String) {
-        let value = self.proxy_cache_index_map.get().get(md5).cloned();
-        if value.is_none() {
-            return;
-        }
-        let value = value.unwrap();
-        value.get_mut().remove(proxy_cache_name);
     }
 
     pub fn index_get_rand(&self, md5: &Bytes) -> Option<String> {
-        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        let value = self.index_map.get(md5).cloned();
         if value.is_none() {
             return None;
         }
@@ -309,14 +252,14 @@ impl Conf {
             return None;
         }
         use rand::Rng;
-        let values = value.iter().map(|data| data).collect::<Vec<&String>>();
+        let values = value.iter().map(|(data, _)| data).collect::<Vec<&String>>();
         let index: usize = rand::thread_rng().gen();
         let index = index % values.len();
         Some(values[index].to_string())
     }
 
     pub fn index_get(&self, md5: &Bytes) -> Option<Vec<String>> {
-        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        let value = self.index_map.get(md5).cloned();
         if value.is_none() {
             return None;
         }
@@ -327,13 +270,13 @@ impl Conf {
         }
         let values = value
             .iter()
-            .map(|data| data.clone())
+            .map(|(data, _)| data.clone())
             .collect::<Vec<String>>();
         Some(values)
     }
 
     pub fn index_contains(&self, md5: &Bytes, proxy_cache_name: &String) -> bool {
-        let value = self.proxy_cache_index_map.get().get(md5).cloned();
+        let value = self.index_map.get(md5).cloned();
         if value.is_none() {
             return false;
         }
@@ -342,12 +285,79 @@ impl Conf {
         if value.is_none() {
             return false;
         }
-        value.contains(proxy_cache_name)
+        value.get(proxy_cache_name).is_some()
+    }
+}
+
+#[derive(Clone)]
+pub struct ConfMain {
+    pub proxy_cache_confs: ArcRwLock<Vec<ProxyCacheConf>>,
+    pub proxy_expires_file_timer: u64,
+    pub proxy_max_open_file: usize,
+    pub proxy_cache_map: ArcRwLock<HashMap<String, Arc<ProxyCache>>>,
+    pub is_init_master_thread: Arc<AtomicBool>,
+    pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
+    pub hot_io_percent_map: ArcRwLock<HashMap<String, u64>>,
+    pub proxy_cache_index: ArcRwLock<ProxyCacheIndex>,
+    pub session_id: Arc<AtomicU64>,
+    pub tmp_file_id: Arc<AtomicU64>,
+}
+
+pub struct Conf {
+    pub proxy_cache_names: Option<Vec<String>>,
+    pub proxy_cache_key: String,
+    pub proxy_cache_key_vars: Var,
+    pub proxy_cache_purge: bool,
+    pub proxy_request_slice: u64,
+    pub proxy_cache_methods: HashMap<String, bool>,
+    pub proxy_cache_valids: HashMap<u16, u64>,
+    pub proxy_caches: Vec<Arc<ProxyCache>>,
+    pub proxy_hot_file: ProxyHotFile,
+    pub proxy_get_to_get_range: bool,
+    pub rewrite: Vec<ProxyRewrite>,
+    pub main: ConfMain,
+}
+
+impl Drop for Conf {
+    fn drop(&mut self) {
+        log::debug!(target: "ms", "drop net_core_proxy");
+    }
+}
+
+impl Conf {
+    pub fn new() -> Self {
+        let session_id = get_session();
+        let tmp_file_id = get_tmp_file();
+        Conf {
+            proxy_caches: Vec::with_capacity(10),
+            proxy_cache_names: None,
+            proxy_request_slice: 1 * CACHE_FILE_SLISE,
+            proxy_cache_key: DEFAULT_PROXY_CACHE_KEY.to_string(),
+            proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
+            proxy_cache_methods: HashMap::new(),
+            proxy_cache_valids: HashMap::new(),
+            proxy_cache_purge: false,
+            proxy_hot_file: ProxyHotFile::new(),
+            proxy_get_to_get_range: false,
+            rewrite: Vec::new(),
+            main: ConfMain {
+                proxy_cache_map: ArcRwLock::new(HashMap::new()),
+                proxy_cache_confs: ArcRwLock::new(Vec::with_capacity(10)),
+                proxy_cache_index: ArcRwLock::new(ProxyCacheIndex::new()),
+                proxy_expires_file_timer: DEFAULT_PROXY_EXPIRES_FILE_TIMER,
+                hot_io_percent_map: ArcRwLock::new(HashMap::new()),
+                cache_file_node_queue: ArcMutex::new(VecDeque::new()),
+                proxy_max_open_file: 0,
+                is_init_master_thread: Arc::new(AtomicBool::new(false)),
+                session_id,
+                tmp_file_id,
+            },
+        }
     }
 
     pub fn is_hot_io_percent(&self, name: &String, hot_io_percent: u64) -> bool {
         let value = {
-            let value = self.hot_io_percent_map.get().get(name).cloned();
+            let value = self.main.hot_io_percent_map.get().get(name).cloned();
             if value.is_none() {
                 0
             } else {
@@ -421,9 +431,7 @@ lazy_static! {
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
-            conf_typ: conf::CMD_CONF_TYPE_MAIN
-                | conf::CMD_CONF_TYPE_SERVER
-                | conf::CMD_CONF_TYPE_LOCAL,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
         },
         module::Cmd {
             name: "proxy_hot_file".to_string(),
@@ -585,16 +593,17 @@ async fn merge_conf(
             child_conf.proxy_cache_valids = parent_conf.proxy_cache_valids.clone();
         }
 
-        if child_conf.proxy_expires_file_timer == DEFAULT_PROXY_EXPIRES_FILE_TIMER {
-            child_conf.proxy_expires_file_timer = parent_conf.proxy_expires_file_timer.clone();
+        if child_conf.main.proxy_expires_file_timer == DEFAULT_PROXY_EXPIRES_FILE_TIMER {
+            child_conf.main.proxy_expires_file_timer =
+                parent_conf.main.proxy_expires_file_timer.clone();
         }
 
         if !child_conf.proxy_hot_file.is_open {
             child_conf.proxy_hot_file = parent_conf.proxy_hot_file.clone();
         }
 
-        if child_conf.proxy_max_open_file == 0 {
-            child_conf.proxy_max_open_file = parent_conf.proxy_max_open_file.clone();
+        if child_conf.main.proxy_max_open_file == 0 {
+            child_conf.main.proxy_max_open_file = parent_conf.main.proxy_max_open_file.clone();
         }
 
         if child_conf.proxy_get_to_get_range == false {
@@ -633,7 +642,9 @@ async fn merge_conf(
         let proxy_cache_names = child_conf.proxy_cache_names.as_ref().unwrap();
         for proxy_cache_name in proxy_cache_names {
             let proxy_cache = net_core_proxy
+                .main
                 .proxy_cache_map
+                .get()
                 .get(proxy_cache_name)
                 .cloned();
             if proxy_cache.is_none() {
@@ -660,21 +671,18 @@ async fn merge_old_conf(
     let conf = conf.get_mut::<Conf>();
     if old_conf.is_some() {
         let old_conf = old_conf.as_mut().unwrap().get_mut::<Conf>();
-        conf.proxy_cache_index_map = old_conf.proxy_cache_index_map.clone();
-        conf.uri_trie = old_conf.uri_trie.clone();
-        conf.del_md5 = old_conf.del_md5.clone();
-        conf.proxy_expires_file_timer_instant = old_conf.proxy_expires_file_timer_instant.clone();
-        conf.hot_io_percent_map = old_conf.hot_io_percent_map.clone();
-        conf.cache_file_node_queue = old_conf.cache_file_node_queue.clone();
-        conf.is_check = old_conf.is_check.clone();
-        conf.is_init_master_thread = old_conf.is_init_master_thread.clone();
+        conf.main.proxy_cache_index = old_conf.main.proxy_cache_index.clone();
+        conf.main.hot_io_percent_map = old_conf.main.hot_io_percent_map.clone();
+        conf.main.cache_file_node_queue = old_conf.main.cache_file_node_queue.clone();
+        conf.main.is_init_master_thread = old_conf.main.is_init_master_thread.clone();
     }
 
     use super::net_core_proxy;
     //当前可能是main  server local， ProxyCache必须到main_conf中读取
     let net_core_proxy = net_core_proxy::main_conf(&ms).await;
 
-    for proxy_cache_conf in &conf.proxy_cache_confs {
+    let proxy_cache_confs = conf.main.proxy_cache_confs.get().clone();
+    for proxy_cache_conf in proxy_cache_confs {
         if !proxy_cache_conf.is_open {
             continue;
         }
@@ -682,12 +690,16 @@ async fn merge_old_conf(
         if old_conf.is_some() {
             let old_conf = old_conf.as_mut().unwrap().get_mut::<Conf>();
             let proxy_cache = old_conf
+                .main
                 .proxy_cache_map
+                .get()
                 .get(&proxy_cache_conf.name)
                 .cloned();
             if proxy_cache.is_some() {
                 let proxy_cache = proxy_cache.unwrap();
-                conf.proxy_cache_map
+                conf.main
+                    .proxy_cache_map
+                    .get_mut()
                     .insert(proxy_cache_conf.name.clone(), proxy_cache);
                 continue;
             }
@@ -696,7 +708,9 @@ async fn merge_old_conf(
         let proxy_cache = ProxyCache::new(proxy_cache_conf.clone())?;
         let proxy_cache = Arc::new(proxy_cache);
         proxy_cache.load(net_core_proxy).await?;
-        conf.proxy_cache_map
+        conf.main
+            .proxy_cache_map
+            .get_mut()
             .insert(proxy_cache_conf.name.clone(), proxy_cache);
     }
     return Ok(());
@@ -720,7 +734,7 @@ async fn init_master_thread(
 ) -> Result<()> {
     let session_id = ms.session_id();
     let conf = conf.get_mut::<Conf>();
-    let ret = conf.is_init_master_thread.compare_exchange(
+    let ret = conf.main.is_init_master_thread.compare_exchange(
         false,
         true,
         Ordering::Acquire,
@@ -732,26 +746,24 @@ async fn init_master_thread(
                 Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
                 let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
-                let interval = 10;
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {
-                        }
-                        _ =  shutdown_thread_rx.recv() => {
-                            log::debug!(target: "ms", "ms session_id:{} => init_master_thread exit executor", session_id);
-                            return Ok(());
-                        }
-                        else => {
-                            return Err(anyhow!("err:select"));
-                        }
+                tokio::select! {
+                    biased;
+                    _ = timer_check_proxy_cache(ms) => {
                     }
-
-                    log::trace!(
-                        "session_id:{}, init_master_thread net_core_proxy once",
-                        session_id
-                    );
+                    _ =  shutdown_thread_rx.recv() => {
+                        log::debug!(target: "ms", "ms session_id:{} => init_master_thread exit executor", session_id);
+                        return Ok(());
+                    }
+                    else => {
+                        return Err(anyhow!("err:select"));
+                    }
                 }
+
+                log::trace!(
+                    "session_id:{}, init_master_thread net_core_proxy once",
+                    session_id
+                );
+                Ok(())
             },
         );
     }
@@ -766,6 +778,7 @@ async fn init_master_thread(
                 tokio::select! {
                     biased;
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {
+
                     }
                     _ =  shutdown_thread_rx.recv() => {
                         log::debug!(target: "ms", "ms session_id:{} => init_master_thread exit ms_executor", session_id);
@@ -852,8 +865,8 @@ async fn proxy_cache(
             .map_err(|e| anyhow!("err:create_dir_all => e:{}", e))?;
     }
 
-    c.proxy_cache_confs.push(proxy_cache_conf);
-    log::trace!(target: "main", "c.proxy_cache_confs:{:?}", c.proxy_cache_confs);
+    c.main.proxy_cache_confs.get_mut().push(proxy_cache_conf);
+    log::trace!(target: "main", "c.main.proxy_cache_confs:{:?}", &*c.main.proxy_cache_confs.get());
     return Ok(());
 }
 
@@ -880,7 +893,7 @@ async fn proxy_cache_key(
     c.proxy_cache_key = conf_arg.value.get::<String>().clone();
 
     if c.proxy_cache_key.len() <= 0 {
-        return Err(anyhow!("err:c.proxy_cache_names.len() <= 0"));
+        return Err(anyhow!("err:c.proxy_cache_key.len() <= 0"));
     }
 
     use crate::proxy::stream_var;
@@ -1018,8 +1031,8 @@ async fn proxy_expires_file_timer(
     let c = conf.get_mut::<Conf>();
     let proxy_expires_file_timer = conf_arg.value.get::<u64>().clone();
     if proxy_expires_file_timer > 0 {
-        c.proxy_expires_file_timer = proxy_expires_file_timer;
-        log::trace!(target: "main", "c.proxy_expires_file_timer:{:?}", c.proxy_expires_file_timer);
+        c.main.proxy_expires_file_timer = proxy_expires_file_timer;
+        log::trace!(target: "main", "c.main.proxy_expires_file_timer:{:?}", c.main.proxy_expires_file_timer);
     }
     return Ok(());
 }
@@ -1046,8 +1059,8 @@ async fn proxy_max_open_file(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let c = conf.get_mut::<Conf>();
-    c.proxy_max_open_file = conf_arg.value.get::<usize>().clone();
-    log::trace!(target: "main", "c.proxy_max_open_file:{:?}", c.proxy_max_open_file);
+    c.main.proxy_max_open_file = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.main.proxy_max_open_file:{:?}", c.main.proxy_max_open_file);
     return Ok(());
 }
 

@@ -45,7 +45,10 @@ loggers:
     additive: false
   ext_tmp:
     level: trace
-    additive: true
+    additive: false
+  purge:
+    level: trace
+    additive: false
 #"{d(%Y-%m-%d %H:%M:%S)} {h({l})} {T}:{I} {f}:{L} {M}: {m}{n}"
 #"{d(%Y-%m-%d %H:%M:%S)} {h({l:<6})} {I:<7} {f}:{L} {m}{n}"
 # error warn info  debug  trace

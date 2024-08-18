@@ -103,12 +103,18 @@ impl AccessLog {
 
     pub async fn access_log(stream_info: &Share<StreamInfo>) -> Result<()> {
         let stream_info = stream_info.get_mut();
+        if stream_info.is_discard_access_log
+            || stream_info.is_discard_flow
+            || stream_info.scc.is_none()
+        {
+            return Ok(());
+        }
         use crate::config::net_access_log;
         let scc = stream_info.scc.clone();
         let net_access_log_conf = net_access_log::curr_conf(scc.net_curr_conf());
 
         for (index, access) in net_access_log_conf.access.iter().enumerate() {
-            if !access.access_log || stream_info.is_discard_access_log {
+            if !access.access_log {
                 continue;
             }
 

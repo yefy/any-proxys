@@ -10,6 +10,7 @@ use crate::proxy::http_proxy::HttpHeaderResponse;
 use crate::stream::connect::Connect;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::io::async_write_msg::{MsgReadBufFile, MsgWriteBufBytes};
+use any_base::stream_flow::StreamFlowErr;
 use any_base::util::{ArcString, HttpHeaderExt};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -18,6 +19,7 @@ use http::Extensions;
 use hyper::http::request::Parts;
 use hyper::http::Request;
 use hyper::{Body, Response};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
@@ -156,7 +158,10 @@ pub struct HttpIn {
 
     //pub is_version1_upstream: bool,
     pub is_load_range: bool,
+    pub is_parse_range: bool,
     pub range: HttpRange,
+    pub multipart_range: OptionExt<HttpMultipartRange>,
+    pub multipart_range_header: OptionExt<HttpMultipartRangeHeader>,
     pub cache_control_time: i64,
     pub is_range: bool,
     pub is_head: bool,
@@ -187,7 +192,7 @@ pub struct HttpResponseInfo {
     pub cache_control_time: i64,
     //文件实际过期时间，创建文件生成的， 不能被改
     pub expires_time: u64,
-    pub range: HttpRange,
+    pub range: HttpContentRange,
     pub head: Option<Bytes>,
 }
 
@@ -215,12 +220,53 @@ pub struct HttpOut {
 }
 
 #[derive(Clone, Debug)]
+pub struct HttpContentRange {
+    pub is_range: bool,
+    pub raw_content_length: u64,
+    pub content_length: u64,
+    pub range_start: u64,
+    pub range_end: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct HttpRange {
     pub is_range: bool,
     pub raw_content_length: u64,
     pub content_length: u64,
     pub range_start: u64,
     pub range_end: u64,
+}
+
+impl HttpRange {
+    pub fn to_content_range(self) -> HttpContentRange {
+        let HttpRange {
+            is_range,
+            raw_content_length,
+            content_length,
+            range_start,
+            range_end,
+        } = self;
+        HttpContentRange {
+            is_range,
+            raw_content_length,
+            content_length,
+            range_start,
+            range_end,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HttpMultipartRange {
+    pub ranges: VecDeque<HttpRange>,
+    pub body: VecDeque<String>,
+    pub body_header_len: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct HttpMultipartRangeHeader {
+    pub body_len: u64,
+    pub header_value: String,
 }
 
 impl HttpRange {
@@ -304,6 +350,9 @@ pub struct HttpStreamRequestContext {
     pub http_cache_file: OptionExt<HttpCacheFile>,
     pub is_local_cache_req: bool,
     pub client: OptionExt<Arc<hyper::Client<HttpHyperConnector>>>,
+    pub upstream_err: Option<StreamFlowErr>,
+    pub client_err: Option<StreamFlowErr>,
+    pub is_no_cache: bool,
 }
 
 impl HttpStreamRequestContext {
@@ -455,7 +504,10 @@ impl HttpStreamRequest {
                     head_upstream_size: 0,
                     //is_version1_upstream,
                     is_load_range: false,
+                    is_parse_range: false,
                     range: HttpRange::new(),
+                    multipart_range: None.into(),
+                    multipart_range_header: None.into(),
                     cache_control_time: -1,
                     is_range,
                     is_head,
@@ -520,6 +572,9 @@ impl HttpStreamRequest {
                 http_request_slice: 0,
                 is_local_cache_req: false,
                 client: None.into(),
+                upstream_err: None,
+                client_err: None,
+                is_no_cache: false,
             }),
             cache_file_slice,
             arg,

@@ -22,17 +22,17 @@ impl WasmHost {
             .get(fd)
             .cloned();
         let stream = if stream.is_none() {
-            let stream_info = self.wasm_stream_info_map.get().get(&fd).cloned();
-            if stream_info.is_none() {
+            let wasm_stream_info = self.wasm_stream_info_map.get().get(&fd).cloned();
+            if wasm_stream_info.is_none() {
                 return None;
             }
-            let stream_info = stream_info.unwrap();
+            let wasm_stream_info = wasm_stream_info.unwrap();
 
-            let stream = stream_info.get_mut().wasm_socket_map.get(fd).cloned();
+            let stream = wasm_stream_info.get_mut().wasm_socket_map.get(fd).cloned();
             if stream.is_none() {
                 return None;
             }
-            Some((stream.unwrap(), stream_info.clone()))
+            Some((stream.unwrap(), wasm_stream_info.clone()))
         } else {
             Some((stream.unwrap(), self.wasm_stream_info.clone()))
         };
@@ -288,14 +288,14 @@ impl wasm_socket::Host for WasmHost {
             if stream.is_none() {
                 return Err(anyhow::anyhow!("stream.is_none"));
             }
-            let (stream, stream_info) = stream.unwrap();
+            let (stream, wasm_stream_info) = stream.unwrap();
             let stream = &mut *stream.get_mut().await;
             use tokio::io::AsyncWriteExt;
             match tokio::time::timeout(duration, stream.flush()).await {
                 Ok(data) => data?,
                 Err(_e) => return Err(anyhow::anyhow!("timeout")),
             };
-            stream_info.get_mut().wasm_socket_map.remove(&fd);
+            wasm_stream_info.get_mut().wasm_socket_map.remove(&fd);
 
             Ok(())
         }

@@ -38,7 +38,7 @@ impl WebsocketServer {
 
         let path = r.ctx.get().r_in.uri.path().to_string();
 
-        self.arg.stream_info.get_mut().err_status = ErrStatus::Ok;
+        self.arg.stream_info.get_mut().err_status = ErrStatus::OK;
         self.steam_to_stream(client_stream, &scc, path).await
     }
 

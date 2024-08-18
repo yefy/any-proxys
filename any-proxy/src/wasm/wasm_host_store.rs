@@ -1,3 +1,4 @@
+use crate::config::net_core_wasm;
 use crate::config::net_core_wasm::WasmHashValue;
 use crate::wasm::component::server::wasm_store;
 use crate::wasm::WasmHost;
@@ -11,10 +12,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: bool,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::Bool(value));
         Ok(Ok(()))
@@ -25,10 +23,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: i8,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::I8(value));
         Ok(Ok(()))
@@ -39,10 +34,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: i16,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::I16(value));
         Ok(Ok(()))
@@ -53,10 +45,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: i32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::I32(value));
         Ok(Ok(()))
@@ -67,10 +56,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: i64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::I64(value));
         Ok(Ok(()))
@@ -81,10 +67,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: u8,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::U8(value));
         Ok(Ok(()))
@@ -95,10 +78,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: u16,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::U16(value));
         Ok(Ok(()))
@@ -109,10 +89,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: u32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::U32(value));
         Ok(Ok(()))
@@ -123,10 +100,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: u64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::U64(value));
         Ok(Ok(()))
@@ -137,10 +111,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: f32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::F32(value));
         Ok(Ok(()))
@@ -151,10 +122,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: f64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::F64(value));
         Ok(Ok(()))
@@ -165,10 +133,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: char,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::Char(value));
         Ok(Ok(()))
@@ -179,10 +144,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         value: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        net_core_wasm_conf
-            .wash_hash
+        net_core_wasm::wash_hash()
             .get_mut()
             .insert(key, WasmHashValue::String(value));
         Ok(Ok(()))
@@ -194,10 +156,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: bool,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash
             .get_mut()
             .insert(field, WasmHashValue::Bool(value));
@@ -210,10 +169,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: i8,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::I8(value));
         Ok(Ok(()))
     }
@@ -224,10 +180,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: i16,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::I16(value));
         Ok(Ok(()))
     }
@@ -238,10 +191,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: i32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::I32(value));
         Ok(Ok(()))
     }
@@ -252,10 +202,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: i64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::I64(value));
         Ok(Ok(()))
     }
@@ -266,10 +213,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: u8,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::U8(value));
         Ok(Ok(()))
     }
@@ -280,10 +224,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: u16,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::U16(value));
         Ok(Ok(()))
     }
@@ -294,10 +235,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: u32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::U32(value));
         Ok(Ok(()))
     }
@@ -308,10 +246,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: u64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::U64(value));
         Ok(Ok(()))
     }
@@ -322,10 +257,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: f32,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::F32(value));
         Ok(Ok(()))
     }
@@ -336,10 +268,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: f64,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash.get_mut().insert(field, WasmHashValue::F64(value));
         Ok(Ok(()))
     }
@@ -350,10 +279,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: char,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash
             .get_mut()
             .insert(field, WasmHashValue::Char(value));
@@ -366,10 +292,7 @@ impl wasm_store::Host for WasmHost {
         field: String,
         value: String,
     ) -> wasmtime::Result<std::result::Result<(), String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let wash_hash =
-            get_or_create_wash_hash_hash(key, net_core_wasm_conf.wash_hash_hash.clone());
+        let wash_hash = get_or_create_wash_hash_hash(key, net_core_wasm::wash_hash_hash());
         wash_hash
             .get_mut()
             .insert(field, WasmHashValue::String(value));
@@ -380,9 +303,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<bool>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -397,9 +318,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<i8>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -414,9 +333,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<i16>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -430,9 +347,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<i32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -446,9 +361,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<i64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -463,9 +376,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<u8>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -480,9 +391,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<u16>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -496,9 +405,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<u32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -512,9 +419,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<u64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -529,9 +434,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<f32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -545,9 +448,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<f64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -562,9 +463,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<char>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -579,9 +478,7 @@ impl wasm_store::Host for WasmHost {
         &mut self,
         key: String,
     ) -> wasmtime::Result<std::result::Result<Option<String>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = net_core_wasm_conf.wash_hash.get().get(&key).cloned();
+        let value = net_core_wasm::wash_hash().get().get(&key).cloned();
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -597,9 +494,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<bool>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -615,9 +510,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<i8>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -633,9 +526,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<i16>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -650,9 +541,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<i32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -667,9 +556,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<i64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -685,9 +572,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<u8>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -703,9 +588,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<u16>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -720,9 +603,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<u32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -737,9 +618,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<u64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -755,9 +634,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<f32>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -772,9 +649,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<f64>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -790,9 +665,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<char>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -808,9 +681,7 @@ impl wasm_store::Host for WasmHost {
         key: String,
         field: String,
     ) -> wasmtime::Result<std::result::Result<Option<String>, String>> {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf(self.scc.ms()).await;
-        let value = get_wash_hash_value(key, field, net_core_wasm_conf.wash_hash_hash.clone());
+        let value = get_wash_hash_value(key, field, net_core_wasm::wash_hash_hash());
         if value.is_none() {
             return Ok(Ok(None));
         }
@@ -824,7 +695,7 @@ impl wasm_store::Host for WasmHost {
 
 pub fn get_or_create_wash_hash_hash(
     key: String,
-    wash_hash_hash: ArcRwLock<
+    wash_hash_hash: &ArcRwLock<
         std::collections::HashMap<
             String,
             ArcRwLock<std::collections::HashMap<String, WasmHashValue>>,
@@ -851,7 +722,7 @@ pub fn get_or_create_wash_hash_hash(
 pub fn get_wash_hash_value(
     key: String,
     field: String,
-    wash_hash_hash: ArcRwLock<
+    wash_hash_hash: &ArcRwLock<
         std::collections::HashMap<
             String,
             ArcRwLock<std::collections::HashMap<String, WasmHashValue>>,

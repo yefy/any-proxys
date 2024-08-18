@@ -37,8 +37,13 @@ impl HttpStream {
         }
     }
     async fn do_stream(&mut self, r: &Arc<HttpStreamRequest>) -> Result<()> {
-        r.ctx.get_mut().is_request_cache = true;
-        r.ctx.get_mut().r_in.http_cache_status = HttpCacheStatus::Hit;
+        {
+            let rctx = &mut *r.ctx.get_mut();
+            rctx.is_request_cache = true;
+            rctx.is_no_cache = true;
+            rctx.r_in.http_cache_status = HttpCacheStatus::Hit;
+        }
+
         let stream_info = r.http_arg.stream_info.clone();
         stream_info.get_mut().add_work_time1("http_server_static");
 

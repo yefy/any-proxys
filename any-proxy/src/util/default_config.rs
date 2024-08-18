@@ -117,6 +117,5 @@ lazy_static! {
         0,
         false,
         1001,
-        ArcRwLock::default(),
     );
 }

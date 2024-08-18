@@ -254,13 +254,9 @@ async fn wasm_access_log(
 }
 
 pub async fn access_log(stream_info: Share<StreamInfo>) -> Result<()> {
-    if !stream_info.get().is_discard_flow {
-        if stream_info.get().scc.is_some() {
-            AccessLog::access_log(&stream_info)
-                .await
-                .map_err(|e| anyhow!("err:AccessLog::access_log => e:{}", e))?;
-        }
-    }
+    AccessLog::access_log(&stream_info)
+        .await
+        .map_err(|e| anyhow!("err:AccessLog::access_log => e:{}", e))?;
 
     AccessLog::wasm_access_log(&stream_info)
         .await

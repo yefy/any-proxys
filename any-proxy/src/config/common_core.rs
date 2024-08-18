@@ -17,8 +17,17 @@ lazy_static! {
         Arc::new(AtomicU64::new(Local::now().timestamp() as u64));
 }
 
+pub fn get_session() -> Arc<AtomicU64> {
+    SESSION_ID.clone()
+}
+pub fn get_tmp_file() -> Arc<AtomicU64> {
+    TMPFILE_ID.clone()
+}
 pub fn get_session_id() -> u64 {
     SESSION_ID.fetch_add(1, Ordering::Relaxed)
+}
+pub fn get_tmp_file_id() -> u64 {
+    TMPFILE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct Conf {
@@ -32,7 +41,7 @@ pub struct Conf {
     pub memlock_rlimit_curr: u64,
     pub memlock_rlimit_max: u64,
     pub session_id: Arc<AtomicU64>,
-    pub tmpfile_id: Arc<AtomicU64>,
+    pub tmp_file_id: Arc<AtomicU64>,
 }
 
 impl Drop for Conf {
@@ -54,7 +63,7 @@ impl Conf {
             memlock_rlimit_curr: 128 << 20,
             memlock_rlimit_max: 128 << 20,
             session_id: SESSION_ID.clone(),
-            tmpfile_id: TMPFILE_ID.clone(),
+            tmp_file_id: TMPFILE_ID.clone(),
         };
         let core_ids = core_affinity::get_core_ids().unwrap();
         conf.worker_threads = core_ids.len();

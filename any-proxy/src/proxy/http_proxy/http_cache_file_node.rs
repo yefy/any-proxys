@@ -201,6 +201,9 @@ impl ProxyCacheFileNode {
 
         let path = cache_file_info.proxy_cache_path_tmp.clone();
         let file_len = body_start as u64 + response_info.range.raw_content_length;
+
+        log::debug!(target: "purge", "create file trie_url:{}, path:{}", cache_file_info.trie_url, path);
+
         let file_ext: Result<FileExt> = tokio::task::spawn_blocking(move || {
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
@@ -364,8 +367,9 @@ impl ProxyCacheFileNode {
             http_parse(&http_head_start).map_err(|_| anyhow!("http_parse"))?;
         let http_head = http_head_start.slice(0..http_head_size);
 
-        let mut content_range = content_range(file_res.headers())
+        let content_range = content_range(file_res.headers())
             .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;
+        let mut content_range = content_range.to_content_range();
 
         let content_length = content_length(file_res.headers())
             .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;

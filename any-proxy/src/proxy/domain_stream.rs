@@ -68,12 +68,6 @@ impl DomainStream {
         let common_core_conf = common_core::main_conf_mut(&ms).await;
         let session_id = common_core_conf.session_id.fetch_add(1, Ordering::Relaxed);
 
-        let wasm_stream_info_map = {
-            use crate::config::net_core_wasm;
-            let net_core_wasm_conf = net_core_wasm::main_conf_mut(&self.ms).await;
-            net_core_wasm_conf.wasm_stream_info_map.clone()
-        };
-
         let mut stream_info = StreamInfo::new(
             self.server_stream_info.clone(),
             net_core_conf.debug_is_open_stream_work_times,
@@ -83,7 +77,6 @@ impl DomainStream {
             net_core_conf.stream_so_singer_time,
             net_core_conf.debug_is_open_print,
             session_id,
-            wasm_stream_info_map,
         );
 
         let domain_config_context = self

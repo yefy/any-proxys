@@ -10,6 +10,8 @@ impl wasm_service::Guest for Component {
             return service::service::wasm_main(config).map_err(|e| e.to_string());
         } else if typ == 1 {
             return service::service_timeout::wasm_main(config).map_err(|e| e.to_string());
+        } else if typ == 2 {
+            return service::service_uniq::wasm_main(config).map_err(|e| e.to_string());
         }
         return service::service_timeout::wasm_main(config).map_err(|e| e.to_string());
     }

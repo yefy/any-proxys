@@ -35,7 +35,7 @@ where
 {
     arg.stream_info.get_mut().add_work_time1("hello");
     let hello = {
-        arg.stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
+        arg.stream_info.get_mut().err_status = ErrStatus::CLIENT_PROTO_ERR;
         let hello = hello_service().await?;
         match hello {
             Some((mut hello, hello_pack_size)) => {
@@ -127,7 +127,7 @@ pub async fn upstream_connect_info(
     stream_info: &Share<StreamInfo>,
     scc: &Arc<StreamConfigContext>,
 ) -> Result<HttpUpstreamConnectInfo> {
-    stream_info.get_mut().err_status = ErrStatus::ServiceUnavailable;
+    stream_info.get_mut().err_status = ErrStatus::SERVICE_UNAVAILABLE;
     use crate::config::net_server_core;
     let net_server_core_conf = net_server_core::curr_conf(scc.net_curr_conf());
     if net_server_core_conf.upstream_var_addr.is_some() {
@@ -255,7 +255,7 @@ pub async fn get_proxy_hello(
 ) -> Option<Arc<AnyproxyHello>> {
     let is_proxy_protocol_hello = {
         let mut stream_info = stream_info.get_mut();
-        stream_info.err_status = ErrStatus::Ok;
+        stream_info.err_status = ErrStatus::OK;
         let is_proxy_protocol_hello = if is_proxy_protocol_hello.is_none() {
             scc.net_core_conf().is_proxy_protocol_hello
         } else {
@@ -330,7 +330,7 @@ pub async fn run_plugin_handle_serverless(
         return Ok(Some(client_buf_reader));
     }
 
-    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().err_status = ErrStatus::OK;
     //stream_info.get_mut().is_discard_flow = true;
     stream_info.get_mut().is_discard_timeout = true;
     let client_buf_reader =
@@ -340,7 +340,7 @@ pub async fn run_plugin_handle_serverless(
     let client_buf_stream = ArcMutexTokio::new(client_buf_stream);
     let session_id = stream_info.get().session_id;
 
-    let mut wasm_stream_info = WasmStreamInfo::new();
+    let mut wasm_stream_info = WasmStreamInfo::new(None);
     wasm_stream_info
         .wasm_socket_map
         .insert(session_id, client_buf_stream);
@@ -409,14 +409,14 @@ pub async fn run_plugin_handle_websocket_serverless(
         return Ok(Some(client_stream));
     }
 
-    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().err_status = ErrStatus::OK;
     //stream_info.get_mut().is_discard_flow = true;
     stream_info.get_mut().is_discard_timeout = true;
     let client_stream: ArcMutexTokio<Box<dyn WebSocketStreamTrait>> =
         ArcMutexTokio::new(Box::new(client_stream));
     let session_id = stream_info.get().session_id;
 
-    let mut wasm_stream_info = WasmStreamInfo::new();
+    let mut wasm_stream_info = WasmStreamInfo::new(None);
     wasm_stream_info
         .wasm_websocket_map
         .insert(session_id, client_stream);
@@ -484,12 +484,12 @@ pub async fn run_plugin_handle_http_serverless(
         return Ok(false);
     }
 
-    stream_info.get_mut().err_status = ErrStatus::Ok;
+    stream_info.get_mut().err_status = ErrStatus::OK;
     //stream_info.get_mut().is_discard_flow = true;
     stream_info.get_mut().is_discard_timeout = true;
     let session_id = stream_info.get().session_id;
 
-    let wasm_stream_info = Share::new(WasmStreamInfo::new());
+    let wasm_stream_info = Share::new(WasmStreamInfo::new(None));
     stream_info
         .get_mut()
         .wasm_stream_info_map

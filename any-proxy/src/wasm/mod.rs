@@ -11,12 +11,12 @@ pub mod wasm_host_std;
 pub mod wasm_host_store;
 pub mod wasm_host_websocket;
 
-use crate::config::net_core_wasm::WasmPlugin;
+use crate::config::net_core_wasm::{wasm_uniq_map, WasmPlugin, WasmUniq};
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::websocket_proxy::WebSocketStreamTrait;
 use crate::proxy::StreamConfigContext;
 use crate::WasmPluginConf;
-use any_base::typ::{ArcMutexTokio, ArcRwLock, OptionExt, Share};
+use any_base::typ::{ArcMutexTokio, ArcRwLock, ArcRwLockTokio, OptionExt, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use component::server::wasm_std;
@@ -40,13 +40,42 @@ pub struct WasmStreamInfo {
         Vec<u8>,
         Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
     )>,
+    pub wasm_session_sender_quit: async_channel::Sender<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_receiver_quit: async_channel::Receiver<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
     pub wasm_session_response_map: HashMap<u64, tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
     pub wasm_timers: HashMap<i64, (i64, Vec<u8>)>,
 }
 
 impl WasmStreamInfo {
-    pub fn new() -> Self {
-        let (wasm_session_sender, wasm_session_receiver) = async_channel::unbounded();
+    pub fn new(
+        channel: Option<(
+            async_channel::Sender<(
+                i64,
+                Vec<u8>,
+                Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+            )>,
+            async_channel::Receiver<(
+                i64,
+                Vec<u8>,
+                Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+            )>,
+        )>,
+    ) -> Self {
+        let (wasm_session_sender, wasm_session_receiver) = if channel.is_some() {
+            channel.unwrap()
+        } else {
+            async_channel::bounded(1000)
+        };
+
+        let (wasm_session_sender_quit, wasm_session_receiver_quit) = async_channel::bounded(10);
         Self {
             wasm_socket_map: HashMap::new(),
             wasm_websocket_map: HashMap::new(),
@@ -54,6 +83,8 @@ impl WasmStreamInfo {
             wasm_session_receiver,
             wasm_session_response_map: HashMap::new(),
             wasm_timers: HashMap::new(),
+            wasm_session_sender_quit,
+            wasm_session_receiver_quit,
         }
     }
 }
@@ -68,6 +99,13 @@ pub struct WasmHost {
     r: OptionExt<Arc<HttpStreamRequest>>,
     //自己独有的
     wasm_stream_info: Share<WasmStreamInfo>,
+    pub wasm_session_sender_uniq: OptionExt<
+        async_channel::Sender<(
+            i64,
+            Vec<u8>,
+            Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+        )>,
+    >,
 }
 
 impl WasmHost {
@@ -88,6 +126,7 @@ impl WasmHost {
             wasm_stream_info,
             wasm_stream_info_map,
             r,
+            wasm_session_sender_uniq: None.into(),
         }
     }
 }
@@ -368,9 +407,9 @@ async fn get_timer_timeout(
     time_ms: u64,
     wasm_stream_info: &Share<WasmStreamInfo>,
 ) -> wasmtime::Result<Vec<(i64, Vec<u8>)>> {
-    let stream_info = &mut *wasm_stream_info.get_mut();
+    let wasm_stream_info = &mut *wasm_stream_info.get_mut();
     let mut expire_keys = Vec::with_capacity(10);
-    for (cmd, (_time_ms, _)) in &mut stream_info.wasm_timers.iter_mut() {
+    for (cmd, (_time_ms, _)) in &mut wasm_stream_info.wasm_timers.iter_mut() {
         *_time_ms -= time_ms as i64;
         if *_time_ms <= 0 {
             expire_keys.push(*cmd);
@@ -379,7 +418,7 @@ async fn get_timer_timeout(
 
     let mut values = Vec::with_capacity(10);
     for cmd in expire_keys {
-        let timer = stream_info.wasm_timers.remove(&cmd);
+        let timer = wasm_stream_info.wasm_timers.remove(&cmd);
         if timer.is_none() {
             continue;
         }
@@ -411,15 +450,34 @@ async fn session_send(
     value: Vec<u8>,
 ) -> wasmtime::Result<std::result::Result<(), String>> {
     let ret: Result<()> = async {
-        let stream_info = wasm_stream_info_map.get().get(&session_id).cloned();
-        if stream_info.is_none() {
-            return Err(anyhow::anyhow!("stream_info.is_none"));
+        let wasm_stream_info = wasm_stream_info_map.get().get(&session_id).cloned();
+        if wasm_stream_info.is_none() {
+            return Err(anyhow::anyhow!("wasm_stream_info.is_none"));
         }
-        let stream_info = stream_info.unwrap();
-        let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+        let wasm_stream_info = wasm_stream_info.unwrap();
+        let wasm_session_sender = wasm_stream_info.get().wasm_session_sender.clone();
         wasm_session_sender.send((cmd, value, None)).await?;
         Ok(())
     }
     .await;
     Ok(ret.map_err(|e| e.to_string()))
+}
+
+pub fn get_wasm_uniq(name: String) -> ArcRwLockTokio<WasmUniq> {
+    let wasm_uniq_map = wasm_uniq_map();
+    let wash_uniq = wasm_uniq_map.get().get(&name).cloned();
+    let wash_uniq = if wash_uniq.is_some() {
+        wash_uniq.unwrap()
+    } else {
+        let wasm_uniq_map = &mut wasm_uniq_map.get_mut();
+        let wash_uniq = wasm_uniq_map.get(&name).cloned();
+        if wash_uniq.is_some() {
+            wash_uniq.unwrap()
+        } else {
+            let wash_uniq = ArcRwLockTokio::new(WasmUniq::new());
+            wasm_uniq_map.insert(name, wash_uniq.clone());
+            wash_uniq
+        }
+    };
+    wash_uniq
 }

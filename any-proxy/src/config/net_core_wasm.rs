@@ -1,7 +1,7 @@
 use crate::config as conf;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcRwLock, ArcUnsafeAny, Share};
+use any_base::typ::{ArcRwLock, ArcRwLockTokio, ArcUnsafeAny, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
@@ -32,6 +32,33 @@ pub enum WasmHashValue {
     String(String),
 }
 
+pub struct WasmUniq {
+    pub ms_session_id: u64,
+    pub session_id: u64,
+    pub wasm_session_sender: async_channel::Sender<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+    pub wasm_session_receiver: async_channel::Receiver<(
+        i64,
+        Vec<u8>,
+        Option<tokio::sync::oneshot::Sender<Option<Vec<u8>>>>,
+    )>,
+}
+
+impl WasmUniq {
+    pub fn new() -> Self {
+        let (wasm_session_sender, wasm_session_receiver) = async_channel::bounded(1000);
+        Self {
+            ms_session_id: 0,
+            session_id: 0,
+            wasm_session_sender,
+            wasm_session_receiver,
+        }
+    }
+}
+
 lazy_static! {
     pub static ref WASH_HASH: ArcRwLock<HashMap<String, WasmHashValue>> =
         ArcRwLock::new(HashMap::new());
@@ -39,6 +66,25 @@ lazy_static! {
         ArcRwLock::new(HashMap::new());
     pub static ref WASM_STREAM_INFO_MAP: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>> =
         ArcRwLock::new(HashMap::new());
+    pub static ref WASM_UNIQ_MAP: ArcRwLock<HashMap<String, ArcRwLockTokio<WasmUniq>>> =
+        ArcRwLock::new(HashMap::new());
+}
+
+pub fn wash_hash() -> &'static ArcRwLock<HashMap<String, WasmHashValue>> {
+    &WASH_HASH
+}
+
+pub fn wash_hash_hash(
+) -> &'static ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>> {
+    &WASH_HASH_HASH
+}
+
+pub fn wasm_stream_info_map() -> &'static ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>> {
+    &WASM_STREAM_INFO_MAP
+}
+
+pub fn wasm_uniq_map() -> &'static ArcRwLock<HashMap<String, ArcRwLockTokio<WasmUniq>>> {
+    &WASM_UNIQ_MAP
 }
 
 pub struct WasmPlugin {
@@ -50,20 +96,12 @@ pub struct WasmPlugin {
 
 pub struct Conf {
     pub wasm_plugin_map: ArcRwLock<HashMap<String, ArcRwLock<VecDeque<Arc<WasmPlugin>>>>>,
-
-    pub wash_hash: ArcRwLock<HashMap<String, WasmHashValue>>,
-    pub wash_hash_hash: ArcRwLock<HashMap<String, ArcRwLock<HashMap<String, WasmHashValue>>>>,
-    pub wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
 }
 
 impl Conf {
     pub fn new() -> Self {
         Conf {
             wasm_plugin_map: ArcRwLock::new(HashMap::new()),
-
-            wash_hash: WASH_HASH.clone(),
-            wash_hash_hash: WASH_HASH_HASH.clone(),
-            wasm_stream_info_map: WASM_STREAM_INFO_MAP.clone(),
         }
     }
 

@@ -65,12 +65,6 @@ impl PortStream {
                 session_id
             };
 
-            let wasm_stream_info_map = {
-                use crate::config::net_core_wasm;
-                let net_core_wasm_conf = net_core_wasm::main_conf_mut(&self.ms).await;
-                net_core_wasm_conf.wasm_stream_info_map.clone()
-            };
-
             let scc = self.port_config_listen.port_config_context.scc.clone();
             let net_core_conf = scc.net_core_conf();
             let mut stream_info = StreamInfo::new(
@@ -82,7 +76,6 @@ impl PortStream {
                 net_core_conf.stream_so_singer_time,
                 net_core_conf.debug_is_open_print,
                 session_id,
-                wasm_stream_info_map,
             );
             stream_info.scc = Some(scc.to_arc_scc(self.ms.clone())).into();
             stream_info
@@ -150,7 +143,7 @@ impl proxy::Stream for PortStream {
 
         stream_info.get_mut().add_work_time1("hello");
         let hello = {
-            stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
+            stream_info.get_mut().err_status = ErrStatus::CLIENT_PROTO_ERR;
             //quic协议ssl_domain有值
             stream_info.get_mut().ssl_domain = self.server_stream_info.domain.clone();
             stream_info.get_mut().remote_domain = self.server_stream_info.domain.clone();

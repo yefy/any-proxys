@@ -50,7 +50,7 @@ pub async fn server_handle(arg: ServerArg, client_buf_reader: BufReader<StreamFl
         any_base::io::buf_writer::BufWriter::new(client_buf_reader),
     );
 
-    arg.stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
+    arg.stream_info.get_mut().err_status = ErrStatus::CLIENT_PROTO_ERR;
     let value = stream_parse(arg.clone(), client_buf_stream).await?;
     if value.is_none() {
         return Ok(());
@@ -160,11 +160,11 @@ pub async fn stream_parse(
     )
     .await?;
 
-    arg.stream_info.get_mut().err_status = ErrStatus::AccessLimit;
+    arg.stream_info.get_mut().err_status = ErrStatus::ACCESS_LIMIT;
     if run_plugin_handle_access(&scc, &stream_info).await? {
         return Err(anyhow::anyhow!("run_plugin_handle_access"));
     }
-    arg.stream_info.get_mut().err_status = ErrStatus::ServerErr;
+    arg.stream_info.get_mut().err_status = ErrStatus::SERVER_ERR;
 
     find_local(&stream_info)?;
     let scc = stream_info.get().scc.clone();

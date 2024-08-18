@@ -37,8 +37,9 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
     let scc = r.http_arg.stream_info.get().scc.clone();
     let is_upstream_cache: Result<bool> = async {
         let rctx = &mut *r.ctx.get_mut();
-        let mut content_range = content_range(&rctx.r_out.headers)
+        let content_range = content_range(&rctx.r_out.headers)
             .map_err(|e| anyhow!("err:content_length =>e:{}", e))?;
+        let mut content_range = content_range.to_content_range();
 
         let transfer_encoding = transfer_encoding(&rctx.r_out.headers)?;
 
@@ -89,6 +90,7 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
         } else {
             left_content_length
         };
+        log::debug!(target: "ext3", "out left_content_length:{}", left_content_length);
 
         rctx.r_out.left_content_length = left_content_length;
         rctx.r_out.out_content_length = left_content_length;
@@ -183,12 +185,15 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             || cache_control_time <= 0
             || e_tag.is_empty()
             || last_modified.is_empty()
-            || rctx.r_out.transfer_encoding.is_some());
+            || rctx.r_out.transfer_encoding.is_some()
+            || rctx.is_no_cache);
 
         let is_upstream_cache = !(cache_control_time <= 0
             || e_tag.is_empty()
             || last_modified.is_empty()
-            || rctx.r_out.transfer_encoding.is_some());
+            || rctx.r_out.transfer_encoding.is_some()
+            || rctx.is_no_cache);
+        log::debug!(target: "ext3", "is_cache:{}, is_upstream_cache:{}", rctx.r_out.is_cache, is_upstream_cache);
 
         let response_info = Arc::new(HttpResponseInfo {
             last_modified_time,

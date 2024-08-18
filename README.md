@@ -3,40 +3,42 @@
 采用异步rust语言编写高性能、内存安全、高度模块化、插件化、配置化、脚本化、跨平台多线程无锁并发协程框架，
 支持四层反向代理服务：包括TCP、QUIC、SSL、any-tunnel协议互转加速，内核态ebpf加速，
 支持七层反向代理服务：包括协议（HTTP、HTTP2、WebSocket）over（TCP、QUIC、SSL、any-tunnel），
-支持http文件缓存代理服务、负载均衡和故障转移策略，优雅的热加载配置文件，
+支持http文件存储、负载均衡和故障转移策略，优雅的热加载配置文件，
 无锁异步webassembly热更新脚本框架，支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-适用于构建高效、脚本热更新、灵活的网络代理和加速服务。
+适用于构建高效、脚本热更新框架和灵活的网络代理加速服务。
 ```
 # 特点
 ```
-内存安全的跨平台（Linux、Window、MacOS等）异步协程框架，性能媲美c/c++、开源nginx  
-Linux reuseport多线程无锁并发  
-没有reuseport平台支持多线程有锁并发  
-支持动态添加模块，能快速添加新协议监听和回源（包括tcp、quic、ssl、srt、kcp、http、websocket等）   
-无锁异步webassembly热更新脚本框架 
-支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承 
+内存安全的跨平台（Linux、Window、MacOS等）多线程无锁并发协程框架，性能媲美开源nginx
+无锁异步webassembly热更新脚本框架，媲美开源OpenResty  
+比开源Nginx和Squid更出色的http存储    
+优雅的配置文件reload热加载，无损耗、不阻塞、异步线程中执行，并能长连接复用    
+Linux平台支持reuseport多线程无锁并发     
+快速添加新模块支持新的传输协议（包括tcp、quic、ssl、srt、kcp、gRPC、http、websocket等） 
+支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、合并、继承、数据共享 
 可以快速基于tcp、quic、ssl、http、websocket添加插件和脚本开发业务  
-支持tcp、quic、ssl、any-tunnel四层代理协议相互转换加速  
-支持七层协议（http、https、http2、https2、websocket、websockets）over （TCP、QUIC、SSL、any-tunnel）
-支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能    
-优雅的配置文件热加载，linux reuseport环境支持程序热升级    
+支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能  
+linux reuseport环境支持程序热升级    
 支持any-tunnel在高延迟网络加速，socket流缓存    
-支持非常详细的access_log、err_log、跨服务器链路日志 
-纯端口代理模式、域名代理模式（多域名端口复用）  
-支持负载均衡和故障转移策略、心跳检查、动态域名解析  
-支持linux零拷贝技术sendfile和文件directio高速缓存控制
-支持预制变量和函数数据，可以由配置文件和webassembly脚本使用  
+支持非常详细的access_log、err_log、跨服务器链路日志  
+四层代理支持多域名端口复用  
+支持负载均衡和故障转移策略、心跳检查、动态域名解析   
+支持linux零拷贝技术sendfile和文件directio高速缓存控制  
+支持预制变量，可以配置复杂需求  
 ```
 # 功能模块
 ## 四层反向代理服务
 ```
-支持多种协议（包括TCP、QUIC、SSL、any-tunnel）互转加速
-支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能
-支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
-支持临时文件缓存、流量限制
+支持多种协议（包括TCP、QUIC、SSL、any-tunnel）互转加速  
+支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能  
+支持proxy_protocol_hello协议头，可以携带更多信息给上游服务  
+支持临时文件缓存、流量限制  
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
-支持port端口代理模式
-支持domain域名代理模式，多域名端口复用，相同端口可以配置多个域名（域名解析ssl的sni、http协议等获取）
+支持port端口代理模式  
+支持domain域名代理模式（多域名端口复用） 
+支持配置webassembly阶段     
+支持优雅的配置文件reload热加载，并能长连接复用  
+支持access_log
 ```
 ## 七层反向代理服务
 ```
@@ -45,19 +47,11 @@ Linux reuseport多线程无锁并发
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
 支持临时文件缓存、流量限制
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
+支持配置webassembly阶段  
+支持优雅的配置文件reload热加载，并能长连接复用  
+支持access_log
 ```
-## http静态文件服务（目前处于测试和完善阶段）
-```
-支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
-支持异步文件io
-支持linux零拷贝技术sendfile和文件directio高速缓存控制
-支持range请求
-支持流量限制
-支持301状态码
-支持last_modified if-match 412状态码
-支持if-modified-since if-none-match 304状态码
-```
-## http文件缓存代理服务（目前处于测试和完善阶段）
+## http文件存储（还在完善）
 ```
 支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
 支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
@@ -65,25 +59,34 @@ Linux reuseport多线程无锁并发
 支持非缓存情况下开启临时文件缓存
 支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
 支持文件缓存、过期文件校验、过期淘汰、缓存文件磁盘大小统计并启用过载淘汰、启动阶段预加载缓存文件
-支持并发请求合并回源
-支持range请求
+支持热点文件存储迁移，防止单磁盘io瓶颈, 高效异步内存迁移
+支持range请求，包括"Range: bytes=0-50, 100-150"
 支持配置切片大小回源加快响应速度
 支持配置多个存储路径
+支持灵活缓存key值
 支持热点文件负载存储，防止单磁盘io瓶颈
 支持linux零拷贝技术sendfile和文件directio高速缓存控制
 支持异步文件io
 支持文件句柄缓存
-支持301状态码
-支持last_modified if-match 412状态码
+支持rewrite 301|302
+支持if-unmodified-since if-match 412状态码
 支持if-modified-since if-none-match 304状态码
+支持if-range
 支持method类型缓存
 支持错误码缓存
+支持purge删除缓存：包括文件删除、目录删除，还可以设置延迟删除和马上删除 
+支持过期文件304校验，可以大大减少回源带宽
+支持并发请求合并回源，可以大大减少回源带宽
+支持get请求强制使用get range回源，可以大大减少回源带宽
+get请求和get range请求是共享存储，大大降低文件磁盘存储
+支持配置webassembly阶段  
+支持优雅的配置文件reload热加载，并能长连接复用  
+支持access_log
 ```
 ## 无锁异步webassembly热更新脚本框架
 ```
-支持无锁异步开发
 支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-支持reload优雅热升级，无需重启进程
+支持优雅的配置文件reload热加载，并能长连接复用  
 支持wasm_http异步http over （tcp quic ssl）网络库
 支持wasm_log打印日志
 支持wasm_store进程内全局共享存储
@@ -91,24 +94,48 @@ Linux reuseport多线程无锁并发
 支持wasm_std库与主服务交互，包括预制的变量读取、http数据修改
 支持wasm_websocket异步websocket over （tcp quic ssl）网络库
 支持WebAssembly脚本之间进行异步channel通讯
+支持spawn创建新WebAssembly脚本
+支持uniq_spawn创建全局唯一的WebAssembly脚本
 支持异步定时器
 主程序支持多阶段嵌入webassembly脚本开发：
     四层协议TCP、QUIC、SSL、any-tunnel有三个阶段：
-        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
-        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁异步并发
-        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+        wasm_access
+        wasm_serverless
+        wasm_access_log
     http协议有六个阶段：
-        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
-        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁并发的
-        wasm_http_in_headers阶段可以修改请求的原始http数据
-        wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
-        wasm_http_filter_headers阶段可以修改响应给客户端http数据
-        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+        wasm_access
+        wasm_serverless
+        wasm_http_in_headers
+        wasm_http_filter_headers_pre
+        wasm_http_filter_headers
+        wasm_access_log
     websocket协议有四个阶段：
-        wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发
-        wasm_serverless阶段可以解析协议做复杂业务开发，并且是无锁异步并发
-        wasm_http_in_headers阶段可以修改请求的原始http数据
-        wasm_access_log阶段可以获取全部预备变量，可以开发流量采集
+        wasm_access
+        wasm_serverless
+        wasm_http_in_headers
+        wasm_access_log
+        
+wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发，WAF
+wasm_serverless阶段可以解析协议做复杂业务开发
+wasm_http_in_headers阶段可以修改请求的原始http数据
+wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
+wasm_http_filter_headers阶段可以修改响应给客户端http数据
+wasm_access_log阶段可以获取全部预备变量，可以做任何数据统计（流量采集等）
+```
+## http静态文件服务（目前处于测试和完善阶段）
+```
+支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
+支持异步文件io
+支持linux零拷贝技术sendfile和文件directio高速缓存控制
+支持range请求，包括"Range: bytes=0-50, 100-150"
+支持流量限制
+支持rewrite 301|302
+支持if-unmodified-since if-match 412状态码
+支持if-modified-since if-none-match 304状态码
+支持if-range
+支持配置webassembly阶段  
+支持优雅的配置文件reload热加载
+支持access_log
 ```
 ## 负载均衡算法
 ```
@@ -127,7 +154,7 @@ Linux reuseport多线程无锁并发
 ```
 支持socket 高性能writev函数
 domain代理支持http_v1协议解析获取域名  
-http文件缓存代理服务  
+http文件存储  
 无锁异步webassembly热更新脚本框架  
 支持预制变量和函数数据，可以由配置文件和webassembly脚本使用
 用户态的stream delay，可以减少内存复制和系统调用    
@@ -176,7 +203,7 @@ sni域名解析
 支持文件io page_size对齐  
 支持openssl ssl和rustls ssl  
 支持any-tunnel包括socket多链接加速，socket流缓存，解决tcp三次握手， ssl多次握手等问题  
-支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、共享数据合并和继承 
+支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、合并、继承、数据共享 
 支持tcp、quic协议配置设置  
 支持配置主线程、线程池个数  
 ```

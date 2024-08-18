@@ -10,14 +10,16 @@ use any_base::util::ArcString;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ErrStatus {
-    Ok = 200,                 //正常响应
-    ClientProtoErr = 400,     //客户端请求协议出错
-    AccessLimit = 403,        //访问限制
-    ServerErr = 500,          //服务器内部错误
-    ServiceUnavailable = 503, //upstream 链接失败
-    GatewayTimeout = 504,     //upstream 链接超时
+pub struct ErrStatus {}
+
+impl ErrStatus {
+    pub const OK: usize = 200; //正常响应
+    pub const PARTIAL_CONTENT: usize = 206; //正常响应
+    pub const CLIENT_PROTO_ERR: usize = 400; //客户端请求协议出错
+    pub const ACCESS_LIMIT: usize = 403; //访问限制
+    pub const SERVER_ERR: usize = 500; //服务器内部错误
+    pub const SERVICE_UNAVAILABLE: usize = 503; //upstream 链接失败
+    pub const GATEWAY_TIMEOUT: usize = 504; //upstream 链接超时
 }
 
 use crate::proxy::StreamStreamContext;
@@ -189,7 +191,7 @@ impl ErrStatusInfo {
         } else if err == &stream_flow::StreamFlowErr::ReadErr {
             (false, Some(err_status_200.read_err()), false)
         } else {
-            (true, None, false)
+            (false, None, false)
         }
     }
 }
@@ -207,7 +209,7 @@ pub struct StreamInfo {
     pub protocol_hello: OptionExt<Arc<AnyproxyHello>>,
     pub upstream_protocol_hello_size: usize,
     pub is_err: bool,
-    pub err_status: ErrStatus,
+    pub err_status: usize,
     pub err_status_str: Option<ArcString>,
     pub client_stream_flow_info: ArcMutex<StreamFlowInfo>,
     pub upstream_connect_flow_info: ArcMutex<StreamFlowInfo>,
@@ -262,8 +264,11 @@ impl StreamInfo {
         stream_so_singer_time: usize,
         debug_is_open_print: bool,
         session_id: u64,
-        wasm_stream_info_map: ArcRwLock<HashMap<u64, Share<WasmStreamInfo>>>,
     ) -> StreamInfo {
+        let wasm_stream_info_map = {
+            use crate::config::net_core_wasm;
+            net_core_wasm::wasm_stream_info_map().clone()
+        };
         let (wasm_spawn_sender, wasm_spawn_receiver) = async_channel::unbounded();
         StreamInfo {
             executors,
@@ -278,7 +283,7 @@ impl StreamInfo {
             protocol_hello: OptionExt::default(),
             upstream_protocol_hello_size: 0,
             is_err: false,
-            err_status: ErrStatus::ClientProtoErr,
+            err_status: ErrStatus::CLIENT_PROTO_ERR,
             err_status_str: None,
             client_stream_flow_info: ArcMutex::new(StreamFlowInfo::new()),
             upstream_connect_flow_info: ArcMutex::new(StreamFlowInfo::new()),

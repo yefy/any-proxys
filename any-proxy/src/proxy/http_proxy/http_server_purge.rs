@@ -2,6 +2,7 @@ use crate::config::net_core_proxy;
 use crate::proxy::http_proxy::http_stream_request::{
     HttpCacheStatus, HttpResponse, HttpResponseBody, HttpStreamRequest,
 };
+use crate::proxy::http_proxy::util::{del_md5, set_expires_cache_file};
 use crate::proxy::http_proxy::HttpHeaderResponse;
 use crate::proxy::ServerArg;
 use anyhow::Result;
@@ -94,10 +95,25 @@ impl HttpStream {
         if !net_core_proxy_conf.proxy_cache_purge {
             return Ok(false);
         }
+        let is_purge_force = {
+            let rctx = &*r.ctx.get();
+            let purge_force = rctx.r_in.headers.get(http::header::HeaderName::from_bytes(
+                "purge_force".as_bytes(),
+            )?);
+            if purge_force.is_none() {
+                false
+            } else {
+                true
+            }
+        };
+
         let (is_dir, url) = {
             let purge_path = "/purge";
             let rctx = &*r.ctx.get();
             let uri = &rctx.r_in.uri;
+            log::trace!(target: "purge",
+                        "r.session_id:{}, purge request uri:{}",
+                        r.session_id, uri);
             let path_and_query = uri.path_and_query().map(|x| x.as_str()).unwrap_or("/");
 
             let purge = path_and_query.find(purge_path);
@@ -142,7 +158,7 @@ impl HttpStream {
             (is_dir, url)
         };
 
-        log::trace!(target: "ext",
+        log::trace!(target: "purge",
                     "r.session_id:{}, purge is_dir:{}, url:{}",
                     r.session_id, is_dir, url);
 
@@ -150,7 +166,7 @@ impl HttpStream {
         let net_core_proxy = net_core_proxy::main_conf(scc.ms()).await;
         let mut urls = Vec::with_capacity(10);
         let md5s = if is_dir {
-            let uri_trie = &*net_core_proxy.uri_trie.get();
+            let uri_trie = &net_core_proxy.main.proxy_cache_index.get().uri_trie;
             // use radix_trie::TrieCommon;
             // if log::log_enabled!(target: "ext", log::Level::Trace) {
             //     for (url, _md5s) in uri_trie.iter() {
@@ -172,9 +188,9 @@ impl HttpStream {
                         .iter()
                         .map(|data| data.clone())
                         .collect::<VecDeque<Bytes>>();
-                    if log::log_enabled!(target: "ext", log::Level::Trace) {
+                    if log::log_enabled!(target: "purge", log::Level::Trace) {
                         for md5 in &value {
-                            log::trace!(target: "ext",
+                            log::trace!(target: "purge",
                                         "r.session_id:{}, is_dir:{}, url:{}, md5:{}",
                                         r.session_id, is_dir, url, String::from_utf8_lossy(md5.as_ref()));
                         }
@@ -185,19 +201,26 @@ impl HttpStream {
                 Some(values)
             }
         } else {
-            let value = net_core_proxy.uri_trie.get_mut().remove(&url);
+            let value = net_core_proxy
+                .main
+                .proxy_cache_index
+                .get()
+                .uri_trie
+                .get(&url)
+                .cloned();
             if value.is_none() {
                 None
             } else {
                 let value = value.unwrap();
+                urls.push(url.clone());
                 let value = value
                     .get()
                     .iter()
                     .map(|data| data.clone())
                     .collect::<VecDeque<Bytes>>();
-                if log::log_enabled!(target: "ext", log::Level::Trace) {
+                if log::log_enabled!(target: "purge", log::Level::Trace) {
                     for md5 in &value {
-                        log::trace!(target: "ext", "r.session_id:{}, is_dir:{}, url:{}, md5:{}", r.session_id, is_dir, url, String::from_utf8_lossy(md5.as_ref()));
+                        log::trace!(target: "purge", "r.session_id:{}, is_dir:{}, url:{}, md5:{}", r.session_id, is_dir, url, String::from_utf8_lossy(md5.as_ref()));
                     }
                 }
                 Some(value)
@@ -205,20 +228,30 @@ impl HttpStream {
         };
 
         for url in urls {
-            log::trace!(target: "ext", "r.session_id:{}, remove url:{}, ", r.session_id, url);
-            net_core_proxy.uri_trie.get_mut().remove(&url);
+            log::trace!(target: "purge", "r.session_id:{}, remove url:{}, ", r.session_id, url);
+            //net_core_proxy.main.uri_trie.get_mut().remove(&url);
         }
 
         if md5s.is_none() {
             return Ok(false);
         }
 
-        let mut md5s = md5s.unwrap();
+        let md5s = md5s.unwrap();
         if md5s.len() <= 0 {
             return Ok(false);
         }
-
-        net_core_proxy.del_md5.get_mut().append(&mut md5s);
+        if !is_purge_force {
+            for md5 in &md5s {
+                set_expires_cache_file(&net_core_proxy.main, md5).await?;
+            }
+            return Ok(true);
+        }
+        log::trace!(target: "purge", "del_md5");
+        for md5 in &md5s {
+            if let Err(e) = del_md5(&net_core_proxy.main, &md5).await {
+                log::error!("err:del_md5 => e:{}", e);
+            }
+        }
 
         return Ok(true);
     }

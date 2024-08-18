@@ -171,18 +171,18 @@ macro_rules! anyhow {
         // Handle $:literal as a special case to make cargo-expanded code more
         // concise in the common case.
         //$crate::Error::msg($msg)
-        $crate::Error::msg($crate::private::format!("\n{}:{} {}", file!(), line!(), $msg))
+        $crate::Error::msg($crate::private::format!("@@@{}:{} {}", file!(), line!(), $msg))
     };
     ($err:expr $(,)?) => ({
         use $crate::private::kind::*;
         match $err {
             //error => (&error).anyhow_kind().new(error),
-            error => (&error).anyhow_kind().new($crate::private::format!("\n{}:{} {}", file!(), line!(), error)),
+            error => (&error).anyhow_kind().new($crate::private::format!("@@@{}:{} {}", file!(), line!(), error)),
         }
     });
     ($fmt:expr, $($arg:tt)*) => {
         //$crate::Error::msg($crate::private::format!($fmt, $($arg)*))
         //$crate::Error::msg($crate::private::format!($crate::private::concat!("{}:{} ", $fmt), file!(), line!(), $($arg)*))
-        $crate::Error::msg($crate::private::format!($crate::private::concat!("\n{}:{} ", $fmt), file!(), line!(), $($arg)*))
+        $crate::Error::msg($crate::private::format!($crate::private::concat!("@@@{}:{} ", $fmt), file!(), line!(), $($arg)*))
     };
 }

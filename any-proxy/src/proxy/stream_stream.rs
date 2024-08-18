@@ -140,7 +140,7 @@ impl StreamStream {
         let upstream_stream = proxy_util::upstream_do_connect(&stream_info, connect_func).await?;
 
         use crate::proxy::stream_info::ErrStatus;
-        stream_info.get_mut().err_status = ErrStatus::Ok;
+        stream_info.get_mut().err_status = ErrStatus::OK;
         stream_info.get_mut().add_work_time1("ebpf_and_stream");
         match Self::ebpf_and_stream(scc, stream_info, client_stream, upstream_stream).await {
             Ok(()) => Ok(None),

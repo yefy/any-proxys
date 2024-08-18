@@ -65,5 +65,53 @@ pub fn wasm_main(config: Option<String>) -> Result<wasm_std::Error> {
     })
     .map_err(|e| anyhow::anyhow!("{}", e))?;
 
+    wasm_std::uniq_session_send(
+        "http-demo",
+        Some(2),
+        0,
+        "service to service_uniq uniq_session_send false".as_bytes(),
+        false,
+    )
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let data = wasm_std::uniq_session_request(
+        "http-demo",
+        Some(2),
+        0,
+        "service to service_uniq uniq_session_request false".as_bytes(),
+        false,
+    )
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if data.is_some() {
+        info!(
+            "service_uniq to service data:{}",
+            String::from_utf8(data.unwrap())?
+        );
+    }
+
+    wasm_std::uniq_session_send(
+        "http-demo",
+        Some(2),
+        0,
+        "service to service_uniq uniq_session_send true".as_bytes(),
+        true,
+    )
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let data = wasm_std::uniq_session_request(
+        "http-demo",
+        Some(2),
+        0,
+        "service to service_uniq uniq_session_request true".as_bytes(),
+        true,
+    )
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if data.is_some() {
+        info!(
+            "service_uniq to service data:{}",
+            String::from_utf8(data.unwrap())?
+        );
+    }
+
     Ok(wasm_std::Error::Ok)
 }

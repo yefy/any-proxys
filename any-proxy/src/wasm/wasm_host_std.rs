@@ -3,7 +3,7 @@ use crate::proxy::util::http_serverless;
 use crate::util::default_config;
 use crate::wasm::component::server::wasm_http;
 use crate::wasm::component::server::wasm_std;
-use crate::wasm::{get_timer_timeout, session_send, WasmHost, WasmStreamInfo};
+use crate::wasm::{get_timer_timeout, get_wasm_uniq, session_send, WasmHost, WasmStreamInfo};
 use any_base::typ::Share;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -67,6 +67,24 @@ impl wasm_std::Host for WasmHost {
         Ok(session_id)
     }
 
+    async fn session_send_quit(
+        &mut self,
+        session_id: u64,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            let wasm_stream_info = self.wasm_stream_info_map.get().get(&session_id).cloned();
+            if wasm_stream_info.is_none() {
+                return Err(anyhow::anyhow!("wasm_stream_info.is_none"));
+            }
+            let wasm_stream_info = wasm_stream_info.unwrap();
+            let wasm_session_sender = wasm_stream_info.get().wasm_session_sender_quit.clone();
+            wasm_session_sender.send((-1, Vec::new(), None)).await?;
+            Ok(())
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
     async fn session_send(
         &mut self,
         session_id: u64,
@@ -76,6 +94,26 @@ impl wasm_std::Host for WasmHost {
         session_send(&self.wasm_stream_info_map, session_id, cmd, value).await
     }
 
+    async fn session_request_quit(
+        &mut self,
+        session_id: u64,
+    ) -> wasmtime::Result<std::result::Result<Option<Vec<u8>>, String>> {
+        let ret: Result<Option<Vec<u8>>> = async {
+            let wasm_stream_info = self.wasm_stream_info_map.get().get(&session_id).cloned();
+            if wasm_stream_info.is_none() {
+                return Err(anyhow::anyhow!("wasm_stream_info.is_none"));
+            }
+            let wasm_stream_info = wasm_stream_info.unwrap();
+            let wasm_session_sender = wasm_stream_info.get().wasm_session_sender_quit.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            wasm_session_sender.send((-1, Vec::new(), Some(tx))).await?;
+            let data = rx.await?;
+            Ok(data)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
     async fn session_request(
         &mut self,
         session_id: u64,
@@ -83,12 +121,12 @@ impl wasm_std::Host for WasmHost {
         value: Vec<u8>,
     ) -> wasmtime::Result<std::result::Result<Option<Vec<u8>>, String>> {
         let ret: Result<Option<Vec<u8>>> = async {
-            let stream_info = self.wasm_stream_info_map.get().get(&session_id).cloned();
-            if stream_info.is_none() {
-                return Err(anyhow::anyhow!("stream_info.is_none"));
+            let wasm_stream_info = self.wasm_stream_info_map.get().get(&session_id).cloned();
+            if wasm_stream_info.is_none() {
+                return Err(anyhow::anyhow!("wasm_stream_info.is_none"));
             }
-            let stream_info = stream_info.unwrap();
-            let wasm_session_sender = stream_info.get().wasm_session_sender.clone();
+            let wasm_stream_info = wasm_stream_info.unwrap();
+            let wasm_session_sender = wasm_stream_info.get().wasm_session_sender.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
             wasm_session_sender.send((cmd, value, Some(tx))).await?;
             let data = rx.await?;
@@ -127,7 +165,22 @@ impl wasm_std::Host for WasmHost {
     ) -> wasmtime::Result<std::result::Result<(u64, i64, Vec<u8>), String>> {
         let ret: Result<(u64, i64, Vec<u8>)> = async {
             let wasm_session_receiver = self.wasm_stream_info.get().wasm_session_receiver.clone();
-            let (cmd, data, tx) = wasm_session_receiver.recv().await?;
+            let wasm_session_receiver_quit = self
+                .wasm_stream_info
+                .get()
+                .wasm_session_receiver_quit
+                .clone();
+
+            use futures_util::FutureExt;
+            let (cmd, data, tx) = futures::select! {
+                ret = wasm_session_receiver_quit.recv().fuse() => {
+                    ret?
+                }
+                ret = wasm_session_receiver.recv().fuse() => {
+                    ret?
+                }
+            };
+
             let fd = if tx.is_some() {
                 let fd = self
                     .new_session_id()
@@ -152,15 +205,25 @@ impl wasm_std::Host for WasmHost {
     ) -> wasmtime::Result<std::result::Result<Option<(u64, i64, Vec<u8>)>, String>> {
         let ret: Result<Option<(u64, i64, Vec<u8>)>> = async {
             let wasm_session_receiver = self.wasm_stream_info.get().wasm_session_receiver.clone();
-            let ret = wasm_session_receiver.try_recv();
-            if let Err(e) = ret {
-                if let async_channel::TryRecvError::Empty = e {
-                    return Ok(None);
+            let wasm_session_receiver_quit = self
+                .wasm_stream_info
+                .get()
+                .wasm_session_receiver_quit
+                .clone();
+            let ret = wasm_session_receiver_quit.try_recv();
+            let (cmd, data, tx) = if ret.is_ok() {
+                ret.unwrap()
+            } else {
+                let ret = wasm_session_receiver.try_recv();
+                if let Err(e) = ret {
+                    if let async_channel::TryRecvError::Empty = e {
+                        return Ok(None);
+                    }
+                    return Err(e)?;
                 }
-                return Err(e)?;
-            }
+                ret.unwrap()
+            };
 
-            let (cmd, data, tx) = ret.unwrap();
             let fd = if tx.is_some() {
                 let fd = self
                     .new_session_id()
@@ -181,14 +244,16 @@ impl wasm_std::Host for WasmHost {
     }
 
     async fn add_timer(&mut self, time_ms: u64, cmd: i64, value: Vec<u8>) -> wasmtime::Result<()> {
-        let stream_info = &mut *self.wasm_stream_info.get_mut();
-        stream_info.wasm_timers.insert(cmd, (time_ms as i64, value));
+        let wasm_stream_info = &mut *self.wasm_stream_info.get_mut();
+        wasm_stream_info
+            .wasm_timers
+            .insert(cmd, (time_ms as i64, value));
         Ok(())
     }
 
     async fn del_timer(&mut self, cmd: i64) -> wasmtime::Result<()> {
-        let stream_info = &mut *self.wasm_stream_info.get_mut();
-        stream_info.wasm_timers.remove(&cmd);
+        let wasm_stream_info = &mut *self.wasm_stream_info.get_mut();
+        wasm_stream_info.wasm_timers.remove(&cmd);
         Ok(())
     }
 
@@ -518,7 +583,7 @@ impl wasm_std::Host for WasmHost {
             let stream_info = self.stream_info.clone();
             let wasm_plugin = self.wasm_plugin.clone();
             let wasm_stream_info_map = self.wasm_stream_info_map.clone();
-            let wasm_stream_info = WasmStreamInfo::new();
+            let wasm_stream_info = WasmStreamInfo::new(None);
             let wasm_stream_info = Share::new(wasm_stream_info);
             wasm_stream_info_map
                 .get_mut()
@@ -531,6 +596,125 @@ impl wasm_std::Host for WasmHost {
             );
             wasm_spawn_sender.send((tye, config, wasm_host)).await?;
             Ok(session_id)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn uniq_session_request(
+        &mut self,
+        name: String,
+        tye: Option<i64>,
+        cmd: i64,
+        value: Vec<u8>,
+        is_update: bool,
+    ) -> wasmtime::Result<std::result::Result<Option<Vec<u8>>, String>> {
+        let ret: Result<Option<Vec<u8>>> = async {
+            if self.wasm_session_sender_uniq.is_none() {
+                if self.scc.is_none() {
+                    return Err(anyhow::anyhow!("self.scc.is_none()"));
+                }
+                let ms_session_id = self.scc.ms().session_id();
+                let wasm_uniq = get_wasm_uniq(name);
+                let wasm_uniq = &mut *wasm_uniq.get_mut().await;
+                if (is_update && ms_session_id > wasm_uniq.ms_session_id)
+                    || wasm_uniq.ms_session_id <= 0
+                {
+                    if wasm_uniq.session_id > 0 {
+                        let _ = self.session_request_quit(wasm_uniq.session_id).await;
+                    }
+                    wasm_uniq.ms_session_id = ms_session_id;
+
+                    use crate::config::common_core::get_session_id;
+                    let session_id = get_session_id();
+                    wasm_uniq.session_id = session_id;
+
+                    let stream_info = self.stream_info.clone();
+                    let wasm_spawn_sender = stream_info.get().wasm_spawn_sender.clone();
+                    let wasm_plugin = self.wasm_plugin.clone();
+                    let wasm_stream_info_map = self.wasm_stream_info_map.clone();
+                    let wasm_stream_info = WasmStreamInfo::new(Some((
+                        wasm_uniq.wasm_session_sender.clone(),
+                        wasm_uniq.wasm_session_receiver.clone(),
+                    )));
+                    let wasm_stream_info = Share::new(wasm_stream_info);
+                    wasm_stream_info_map
+                        .get_mut()
+                        .insert(session_id, wasm_stream_info.clone());
+                    let wasm_host = WasmHost::new(
+                        session_id,
+                        stream_info,
+                        wasm_plugin,
+                        wasm_stream_info.clone(),
+                    );
+                    wasm_spawn_sender.send((tye, None, wasm_host)).await?;
+                }
+                self.wasm_session_sender_uniq = Some(wasm_uniq.wasm_session_sender.clone()).into();
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.wasm_session_sender_uniq
+                .send((cmd, value, Some(tx)))
+                .await?;
+            let data = rx.await?;
+            Ok(data)
+        }
+        .await;
+        Ok(ret.map_err(|e| e.to_string()))
+    }
+
+    async fn uniq_session_send(
+        &mut self,
+        name: String,
+        tye: Option<i64>,
+        cmd: i64,
+        value: Vec<u8>,
+        is_update: bool,
+    ) -> wasmtime::Result<std::result::Result<(), String>> {
+        let ret: Result<()> = async {
+            if self.wasm_session_sender_uniq.is_none() {
+                if self.scc.is_none() {
+                    return Err(anyhow::anyhow!("self.scc.is_none()"));
+                }
+                let ms_session_id = self.scc.ms().session_id();
+                let wasm_uniq = get_wasm_uniq(name);
+                let wasm_uniq = &mut *wasm_uniq.get_mut().await;
+                if (is_update && ms_session_id > wasm_uniq.ms_session_id)
+                    || wasm_uniq.ms_session_id <= 0
+                {
+                    if wasm_uniq.session_id > 0 {
+                        let _ = self.session_request_quit(wasm_uniq.session_id).await;
+                    }
+                    wasm_uniq.ms_session_id = ms_session_id;
+                    use crate::config::common_core::get_session_id;
+                    let session_id = get_session_id();
+                    wasm_uniq.session_id = session_id;
+
+                    let stream_info = self.stream_info.clone();
+                    let wasm_spawn_sender = stream_info.get().wasm_spawn_sender.clone();
+                    let wasm_plugin = self.wasm_plugin.clone();
+                    let wasm_stream_info_map = self.wasm_stream_info_map.clone();
+                    let wasm_stream_info = WasmStreamInfo::new(Some((
+                        wasm_uniq.wasm_session_sender.clone(),
+                        wasm_uniq.wasm_session_receiver.clone(),
+                    )));
+                    let wasm_stream_info = Share::new(wasm_stream_info);
+                    wasm_stream_info_map
+                        .get_mut()
+                        .insert(session_id, wasm_stream_info.clone());
+                    let wasm_host = WasmHost::new(
+                        session_id,
+                        stream_info,
+                        wasm_plugin,
+                        wasm_stream_info.clone(),
+                    );
+                    wasm_spawn_sender.send((tye, None, wasm_host)).await?;
+                }
+                self.wasm_session_sender_uniq = Some(wasm_uniq.wasm_session_sender.clone()).into();
+            }
+            self.wasm_session_sender_uniq
+                .send((cmd, value, None))
+                .await?;
+            Ok(())
         }
         .await;
         Ok(ret.map_err(|e| e.to_string()))

@@ -162,6 +162,12 @@ impl AnyproxyGroup {
     }
 
     pub async fn reload(&mut self, _executors: ExecutorsLocal) {
+        self.reload_count += 1;
+        log::info!(
+            "reload start group_version:{}, reload_count:{}",
+            self.group_version,
+            self.reload_count
+        );
         let ms = self.ms();
         let ret = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
@@ -220,13 +226,6 @@ impl AnyproxyGroup {
         self.shutdown_timeout = shutdown_timeout;
         self.ms = Some(ms.clone());
 
-        self.reload_count += 1;
-        log::info!(
-            "reload ok group_version:{}, reload_count:{}",
-            self.group_version,
-            self.reload_count
-        );
-
         #[cfg(unix)]
         {
             let common_conf = common_core::main_conf(&ms).await;
@@ -246,6 +245,11 @@ impl AnyproxyGroup {
             .unwrap()
             .send((ms, wait_group.clone()));
         let _ = wait_group.wait_complete(self.worker_threads).await;
+        log::info!(
+            "reload ok group_version:{}, reload_count:{}",
+            self.group_version,
+            self.reload_count
+        );
     }
 
     pub async fn stop(&mut self, is_fast_shutdown: bool) {
@@ -258,6 +262,7 @@ impl AnyproxyGroup {
     }
 
     pub async fn check(group_version: i32, executor: ExecutorLocalSpawn) -> Result<()> {
+        log::info!("check start group_version:{}", group_version);
         let ret: Result<Modules> = tokio::task::spawn_blocking(move || {
             executor_local_spawn::_block_on(1, 512, move |_executor| async move {
                 let anyproxy_conf_full_path = default_config::ANYPROXY_CONF_FULL_PATH.get();

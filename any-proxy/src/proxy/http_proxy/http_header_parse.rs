@@ -1,7 +1,7 @@
 use crate::proxy::http_proxy::http_stream_request::HttpRange;
 use crate::proxy::stream_info::StreamInfo;
 use crate::util::util::host_and_port;
-use any_base::typ::Share;
+use any_base::typ::{OptionExt, Share};
 use anyhow::anyhow;
 use anyhow::Result;
 use bytes::Bytes;
@@ -11,6 +11,7 @@ use hyper::http::Request;
 use hyper::{AnyProxyHyperBuf, AnyProxyRawHeaders, Body};
 use log::debug;
 use log::error;
+use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -401,6 +402,23 @@ pub fn last_modified(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<(H
     return Ok((last_modified, last_modified_time));
 }
 
+pub fn if_range(headers: &hyper::HeaderMap<http::HeaderValue>) -> Result<(HeaderValue, u64)> {
+    use http::header::IF_RANGE;
+    use std::str::FromStr;
+    let last_modified = headers.get(IF_RANGE).cloned();
+    if last_modified.is_none() {
+        return Ok((HeaderValue::from_static(""), 0));
+    }
+    let last_modified = last_modified.unwrap();
+    let last_modified_time = httpdate::HttpDate::from_str(last_modified.to_str()?)?;
+    let last_modified_time = std::time::SystemTime::from(last_modified_time);
+    let last_modified_time = last_modified_time
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    return Ok((last_modified, last_modified_time));
+}
+
 pub fn cache_control_time(
     headers: &hyper::HeaderMap<http::HeaderValue>,
 ) -> Result<(i64, u64, Option<SystemTime>)> {
@@ -434,6 +452,128 @@ pub fn cache_control_time(
     let expires_n = expires.duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     return Ok((cache_control_time as i64, expires_n, Some(expires)));
+}
+
+pub fn get_http_multipart_range(
+    headers: &hyper::HeaderMap<http::HeaderValue>,
+    raw_content_length: u64,
+) -> Result<(HttpRange, OptionExt<VecDeque<HttpRange>>)> {
+    let mut data = HttpRange {
+        is_range: false,
+        raw_content_length,
+        content_length: raw_content_length,
+        range_start: 0,
+        range_end: 0,
+    };
+
+    use http::header::RANGE;
+    let range = headers.get(RANGE);
+    if range.is_none() {
+        return Ok((data, None.into()));
+    }
+
+    if raw_content_length <= 0 {
+        return Ok((data, None.into()));
+    }
+
+    let range = range.unwrap().to_str();
+    if range.is_err() {
+        return Ok((data, None.into()));
+    }
+    let range = range.unwrap();
+
+    if range.len() < 6 || &range[0..6] != "bytes=" {
+        return Ok((data, None.into()));
+    }
+
+    let range = &range[6..];
+    if range.len() <= 0 {
+        return Ok((data, None.into()));
+    }
+    let ranges = range.split(",").collect::<Vec<_>>();
+    if ranges.len() <= 0 {
+        return Ok((data, None.into()));
+    }
+
+    if ranges.len() == 1 {
+        parse_http_range(&ranges[0], &mut data, raw_content_length)?;
+        return Ok((data, None.into()));
+    }
+    let mut datas = VecDeque::with_capacity(ranges.len());
+    for range in ranges.iter() {
+        let mut data = HttpRange {
+            is_range: false,
+            raw_content_length,
+            content_length: raw_content_length,
+            range_start: 0,
+            range_end: 0,
+        };
+        parse_http_range(range, &mut data, raw_content_length)?;
+        datas.push_back(data);
+    }
+
+    Ok((data, Some(datas).into()))
+}
+
+pub fn parse_http_range(range: &str, data: &mut HttpRange, raw_content_length: u64) -> Result<()> {
+    data.is_range = true;
+    let v = range.split_once("-");
+    if v.is_none() {
+        // HTTP/1.1 416 Requested Range Not Satisfiable
+        return Err(anyhow!(""));
+    }
+    let (v1, v2) = v.unwrap();
+    let v1 = v1.trim();
+    let v2 = v2.trim();
+
+    let vv1 = v1.trim().parse::<u64>();
+    let vv2 = v2.trim().parse::<u64>();
+    if vv1.is_err() && vv2.is_err() {
+        // HTTP/1.1 416 Requested Range Not Satisfiable
+        return Err(anyhow!(""));
+    }
+
+    if vv1.is_ok() {
+        let vv1 = vv1?;
+        if vv1 >= raw_content_length {
+            // HTTP/1.1 416 Requested Range Not Satisfiable
+            return Err(anyhow!(""));
+        }
+        data.range_start = vv1;
+    } else {
+        let vv2 = vv2?;
+        if vv2 > raw_content_length {
+            // HTTP/1.1 416 Requested Range Not Satisfiable
+            return Err(anyhow!(""));
+        }
+        data.range_start = raw_content_length - vv2;
+        data.range_end = raw_content_length - 1;
+        data.content_length = vv2;
+        return Ok(());
+    }
+
+    if vv2.is_ok() {
+        let vv2 = vv2?;
+        if vv2 >= raw_content_length {
+            data.range_end = raw_content_length - 1;
+        } else {
+            data.range_end = vv2;
+        }
+    } else {
+        if v2.len() > 0 {
+            // HTTP/1.1 416 Requested Range Not Satisfiable
+            return Err(anyhow!(""));
+        }
+        data.range_end = raw_content_length - 1;
+    }
+
+    if data.range_start > data.range_end {
+        // HTTP/1.1 416 Requested Range Not Satisfiable
+        return Err(anyhow!(""));
+    }
+    data.content_length = data.range_end - data.range_start + 1;
+
+    return Ok(());
 }
 
 pub fn get_http_range(
@@ -599,6 +739,37 @@ pub fn get_http_range_ext(in_headers: &hyper::HeaderMap<http::HeaderValue>) -> R
         return Err(anyhow!(""));
     }
     return Ok((range_start, range_end));
+}
+
+pub fn is_http_multipart_range(
+    in_headers: &hyper::HeaderMap<http::HeaderValue>,
+) -> Result<(bool, bool)> {
+    use http::header::RANGE;
+    let range = in_headers.get(RANGE);
+    if range.is_none() {
+        return Ok((false, false));
+    }
+
+    let range = range.unwrap().to_str();
+    if range.is_err() {
+        return Ok((false, false));
+    }
+    let range = range.unwrap();
+
+    if range.len() < 6 || &range[0..6] != "bytes=" {
+        return Ok((false, false));
+    }
+
+    let range = &range[6..];
+    if range.len() <= 0 {
+        return Ok((false, false));
+    }
+
+    let v = range.split_once(",");
+    if v.is_none() {
+        return Ok((true, false));
+    }
+    return Ok((true, true));
 }
 
 pub fn http_headers_size(

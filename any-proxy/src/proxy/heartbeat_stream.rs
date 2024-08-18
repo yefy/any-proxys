@@ -57,7 +57,7 @@ impl HeartbeatStream {
         stream_info: &Share<StreamInfo>,
         mut heartbeat: Option<AnyproxyHeartbeat>,
     ) -> Result<()> {
-        stream_info.get_mut().err_status = ErrStatus::Ok;
+        stream_info.get_mut().err_status = ErrStatus::OK;
         stream_info.get_mut().is_discard_flow = true;
         stream_info.get_mut().is_discard_timeout = true;
 

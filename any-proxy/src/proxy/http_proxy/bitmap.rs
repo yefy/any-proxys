@@ -63,7 +63,7 @@ impl BitMap {
 
     // 设置指定索引位置的比特位值
     pub fn set_bit(&mut self, index: usize, value: bool) {
-        if self.get_bit(index) {
+        if self.get_bit(index) == value {
             return;
         }
         self.curr_slice_size += 1;
@@ -127,6 +127,88 @@ pub fn align_bitset_index(range_start: u64, range_end: u64, slice: u64) -> Resul
         bitset.push(index + v);
     }
     return Ok(bitset);
+}
+
+pub fn is_first_n_bits_set(byte: u8, n: u8) -> bool {
+    if n > 8 {
+        panic!("n > 8")
+    }
+
+    // 创建一个掩码，其前 n 位为 1，其他位为 0
+    let mask: u16 = 1 << n;
+    let mask = (mask - 1) as u8;
+
+    // 将 byte 与掩码进行与运算，并判断是否等于掩码
+    (byte & mask) == mask
+}
+
+pub fn is_first_n_bits_set_skip(byte: u8, skip: u8, n: u8) -> bool {
+    if skip + n > 8 {
+        panic!("skip + n != 8")
+    }
+    let byte = byte >> skip;
+    is_first_n_bits_set(byte, n)
+}
+
+pub fn align_bitset_end_index(
+    bitmap: &BitMap,
+    range_start: u64,
+    range_end: u64,
+    slice_end: u64,
+    slice: u64,
+) -> Result<u64> {
+    if range_start >= range_end {
+        return Err(anyhow!("range_start >= range_end"));
+    }
+    if range_start % slice != 0 || (range_end + 1) % slice != 0 || (slice_end + 1) % slice != 0 {
+        return Err(anyhow!("not align"));
+    }
+    //0   99,
+    //100,  199,      index = 1  size = 1
+    let mut index = (range_start / slice) as usize;
+    let mut size = ((slice_end - range_start + 1) / slice) as usize;
+    let mut len = 0;
+    loop {
+        if size <= 0 {
+            break;
+        }
+        let byte_index = index / 8;
+        if byte_index >= bitmap.bitset.len() {
+            break;
+        }
+        let bit_index = (index % 8) as u8;
+        let skip = bit_index;
+        let num = 8 - skip;
+        let num = std::cmp::min(size, num as usize) as u8;
+        let b = bitmap.bitset[byte_index];
+        if is_first_n_bits_set_skip(b, skip, num) {
+            size -= num as usize;
+            len += num as usize;
+            index += num as usize;
+        } else {
+            let mut num = num;
+            loop {
+                num = num - 1;
+                if num <= 0 {
+                    break;
+                }
+                if is_first_n_bits_set_skip(b, skip, num) {
+                    len += num as usize;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    let size = ((range_end - range_start + 1) / slice) as usize;
+    let len = len / size * size;
+    if len <= 0 {
+        return Ok(0);
+    }
+    let range_end = range_start + len as u64 * slice - 1;
+
+    return Ok(range_end);
 }
 
 pub fn align_bitset_ok(

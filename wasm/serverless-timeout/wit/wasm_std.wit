@@ -29,6 +29,8 @@ interface wasm-std {
     //生成唯一session_id
     new-session-id: func() -> u64;
     //用于插件之间通讯， 根据session_id发送到哪个插件
+    session-send-quit: func(session-id: u64) -> result<_, string>;
+    session-request-quit: func(session-id: u64) -> result<option<list<u8>>, string>;
     session-send: func(session-id: u64, cmd: s64, value: list<u8>) -> result<_, string>;
     session-request: func(session-id: u64, cmd: s64, value: list<u8>) -> result<option<list<u8>>, string>;
     //插件接收信息
@@ -62,4 +64,6 @@ interface wasm-std {
     out-response: func(res: response) -> result<_, string>;
 
     spawn: func(typ: option<s64>, config: option<string>) -> result<u64, string>;
+    uniq-session-send: func(name:string, typ: option<s64>, cmd: s64, value: list<u8>, is-update: bool) -> result<_, string>;
+    uniq-session-request: func(name:string, typ: option<s64>, cmd: s64, value: list<u8>, is-update: bool) -> result<option<list<u8>>, string>;
 }

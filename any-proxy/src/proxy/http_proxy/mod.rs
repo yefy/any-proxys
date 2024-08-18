@@ -270,12 +270,6 @@ pub async fn http_handle(
         );
     }
 
-    let wasm_stream_info_map = {
-        use crate::config::net_core_wasm;
-        let net_core_wasm_conf = net_core_wasm::main_conf_mut(&arg.ms).await;
-        net_core_wasm_conf.wasm_stream_info_map.clone()
-    };
-
     let mut stream_info = StreamInfo::new(
         arg.server_stream_info.clone(),
         net_core_conf.debug_is_open_stream_work_times,
@@ -285,7 +279,6 @@ pub async fn http_handle(
         net_core_conf.stream_so_singer_time,
         net_core_conf.debug_is_open_print,
         session_id,
-        wasm_stream_info_map,
     );
 
     let domain_config_context = arg
@@ -457,12 +450,12 @@ impl HttpStream {
         )
         .await?;
 
-        stream_info.get_mut().err_status = ErrStatus::AccessLimit;
+        stream_info.get_mut().err_status = ErrStatus::ACCESS_LIMIT;
         if run_plugin_handle_access(&scc, &stream_info).await? {
             return Err(anyhow!("access"));
         }
 
-        stream_info.get_mut().err_status = ErrStatus::ServerErr;
+        stream_info.get_mut().err_status = ErrStatus::SERVER_ERR;
         if rewrite(&r, &scc, &stream_info, &self.header_response).await? {
             return Ok(());
         }
@@ -492,7 +485,7 @@ impl HttpStream {
 #[async_trait]
 impl proxy::Stream for HttpStream {
     async fn do_start(&mut self, stream_info: Share<StreamInfo>) -> Result<()> {
-        stream_info.get_mut().err_status = ErrStatus::ClientProtoErr;
+        stream_info.get_mut().err_status = ErrStatus::CLIENT_PROTO_ERR;
         stream_info
             .get_mut()
             .add_work_time1("net_server_http_proxy");
@@ -525,14 +518,7 @@ impl proxy::Stream for HttpStream {
         self.request_parse(&r, &stream_info, version)?;
 
         let ret = self.run(&r, &stream_info, version).await;
-        if let Err(e) = ret {
-            log::debug!(target: "ext3",
-                        "r.session_id:{}-{}, err:run => e:{}",
-                        r.session_id,
-                        r.local_cache_req_count,
-                        e
-            );
-
+        let err = if let Err(e) = ret {
             if !self.header_response.is_send() {
                 let response = Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -544,20 +530,35 @@ impl proxy::Stream for HttpStream {
                             response
                 );
                 use super::http_proxy::http_server_proxy;
-                http_server_proxy::HttpStream::stream_response(
+                let ret = http_server_proxy::HttpStream::stream_response(
                     &r,
                     HttpResponse {
                         response,
                         body: HttpResponseBody::Body(Body::empty()),
                     },
                 )
-                .await?;
+                .await;
+                if let Err(ee) = ret {
+                    Err(anyhow!("err:e:{}, ee:{}", e, ee))
+                } else {
+                    Err(e)
+                }
+            } else {
+                Err(e)
             }
-        }
+        } else {
+            Ok(())
+        };
 
-        http_server_proxy::HttpStream::stream_end_err(&r).await?;
-        http_server_proxy::HttpStream::stream_end_free(&r).await?;
-        http_server_proxy::HttpStream::cache_file_node_to_pool(&r).await?;
-        Ok(())
+        if let Err(e) = http_server_proxy::HttpStream::stream_end_err(&r).await {
+            log::error!("err:stream_end_err => e:{}", e);
+        }
+        if let Err(e) = http_server_proxy::HttpStream::stream_end_free(&r).await {
+            log::error!("err:stream_end_free => e:{}", e);
+        }
+        if let Err(e) = http_server_proxy::HttpStream::cache_file_node_to_pool(&r).await {
+            log::error!("err:cache_file_node_to_pool => e:{}", e);
+        }
+        err
     }
 }

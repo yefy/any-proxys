@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 //use hyper::body::HttpBody;
-use crate::proxy::http_proxy::bitmap::align_bitset_ok;
+use crate::proxy::http_proxy::bitmap::align_bitset_end_index;
 use crate::proxy::http_proxy::http_stream_request::{
     CacheFileStatus, HttpCacheFileRequest, HttpStreamRequest,
 };
@@ -21,6 +21,7 @@ use crate::proxy::StreamConfigContext;
 use any_base::file_ext::{unlink, FileExt};
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::module::module::Modules;
+use chrono::Local;
 use http::HeaderValue;
 use hyper::{Body, Response};
 use std::fs;
@@ -118,6 +119,7 @@ pub struct ProxyCacheFileNodeHead {
     //文件实际过期时间，会被更新
     pub expires_time: AtomicU64,
     pub cache_control_time: AtomicI64,
+    pub is_delay_del: AtomicBool,
 }
 
 impl ProxyCacheFileNodeHead {
@@ -148,10 +150,14 @@ impl ProxyCacheFileNodeHead {
             directio,
             cache_file_slice,
             cache_control_time: AtomicI64::new(cache_control_time),
+            is_delay_del: AtomicBool::new(false),
         }
     }
 
     pub fn is_expires(&self) -> bool {
+        if self.is_delay_del.load(Ordering::Relaxed) {
+            return true;
+        }
         let curr_time = std::time::SystemTime::now();
         let curr_time = curr_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
         if self.expires_time.load(Ordering::Relaxed) <= curr_time {
@@ -199,22 +205,17 @@ pub struct ProxyCacheFileNodeHot {
 }
 
 pub struct ProxyCacheFileNodeData {
-    pub count: AtomicU64,
+    pub is_run: AtomicBool,
+    pub time: AtomicI64,
     pub node: ArcMutex<Arc<ProxyCacheFileNode>>,
 }
 
 impl ProxyCacheFileNodeData {
-    pub fn new(node: Option<Arc<ProxyCacheFileNode>>) -> Self {
-        if node.is_some() {
-            ProxyCacheFileNodeData {
-                count: AtomicU64::new(0),
-                node: ArcMutex::new(node.unwrap()),
-            }
-        } else {
-            ProxyCacheFileNodeData {
-                count: AtomicU64::new(0),
-                node: ArcMutex::default(),
-            }
+    pub fn new(node: Arc<ProxyCacheFileNode>) -> Self {
+        ProxyCacheFileNodeData {
+            is_run: AtomicBool::new(false),
+            time: AtomicI64::new(Local::now().timestamp()),
+            node: ArcMutex::new(node),
         }
     }
 }
@@ -240,6 +241,7 @@ pub struct ProxyCacheFileNodeManage {
 
 impl Drop for ProxyCacheFileNodeManage {
     fn drop(&mut self) {
+        self.cache_file_node_queue_clear();
         let mut upstream_waits = VecDeque::with_capacity(10);
         swap(&mut upstream_waits, &mut self.upstream_waits);
         for tx in upstream_waits {
@@ -278,11 +280,11 @@ impl ProxyCacheFileNodeManage {
         }
     }
 
-    pub fn update_version_expires(&mut self) {
-        self.version_expires += 1;
-    }
-
     pub fn cache_file_node_queue_clear(&mut self) {
+        for cache_file_node_queue in &self.cache_file_node_queue {
+            cache_file_node_queue.is_run.store(false, Ordering::Relaxed);
+            unsafe { cache_file_node_queue.node.take() };
+        }
         self.cache_file_node_queue.clear();
     }
 }
@@ -381,7 +383,7 @@ impl ProxyCache {
     }
 
     pub async fn load(&self, net_core_proxy: &crate::config::net_core_proxy::Conf) -> Result<()> {
-        let cache_file_node_queue = net_core_proxy.cache_file_node_queue.clone();
+        let cache_file_node_queue = net_core_proxy.main.cache_file_node_queue.clone();
         let mut file_full_names = Vec::with_capacity(1000);
         let file_full_name = if &self.cache_conf.path[self.cache_conf.path.len() - 1..] == "/" {
             &self.cache_conf.path[0..self.cache_conf.path.len() - 1]
@@ -411,19 +413,12 @@ impl ProxyCache {
                 &md5,
                 cache_file_node_queue.clone(),
             );
-            let version_expires = cache_file_node_manage
-                .get(file!(), line!())
-                .await
-                .version_expires;
-            let cache_file_node_version = cache_file_node_manage
-                .get(file!(), line!())
-                .await
-                .cache_file_node_version;
+            let cache_file_node_manage =
+                &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+            let version_expires = cache_file_node_manage.version_expires;
+            let cache_file_node_version = cache_file_node_manage.cache_file_node_version;
 
-            cache_file_node_manage
-                .get_mut(file!(), line!())
-                .await
-                .cache_file_node_head = Some(cache_file_node_head.clone()).into();
+            cache_file_node_manage.cache_file_node_head = Some(cache_file_node_head.clone()).into();
 
             let proxy_cache_ctx = &mut *self.ctx.get_mut();
             proxy_cache_ctx.curr_size += raw_content_length as i64;
@@ -439,8 +434,12 @@ impl ProxyCache {
             log::trace!(target: "ext",
                         "trie_url:{}, md5:{}",
                         trie_url, String::from_utf8_lossy(md5.as_ref()));
-            net_core_proxy.trie_insert(trie_url, md5.clone())?;
-            net_core_proxy.index_insert(md5, self.cache_conf.name.clone());
+            net_core_proxy.main.proxy_cache_index.get_mut().insert(
+                trie_url,
+                md5,
+                self.cache_conf.name.clone(),
+                cache_file_node_version,
+            );
         }
 
         Ok(())
@@ -670,7 +669,7 @@ impl ProxyCache {
                     }
                 }
                 if is_continue {
-                    let _ = unlink(name, None);
+                    let _ = unlink(name);
                     continue;
                 }
 
@@ -735,13 +734,11 @@ impl HttpCacheFile {
             http::header::CONTENT_LENGTH,
             HeaderValue::from(response_info.range.raw_content_length),
         );
-        let is_body = false;
-        let buf_file = if is_body {
-            Some(cache_file_node.buf_file.clone())
-        } else {
-            None
-        };
-        Ok(HttpCacheFileRequest { response, buf_file })
+
+        Ok(HttpCacheFileRequest {
+            response,
+            buf_file: None,
+        })
     }
 
     pub fn cache_file_request_get(
@@ -749,21 +746,36 @@ impl HttpCacheFile {
         range_start: u64,
         range_end: u64,
         slice_end: u64,
+        cache_file_node: &Arc<ProxyCacheFileNode>,
     ) -> Option<HttpCacheFileRequest> {
-        let cache_file_node = self.ctx_thread.get().cache_file_node().unwrap();
         let response_info = &cache_file_node.response_info;
         let range_end = {
             let bitmap = cache_file_node.ctx_thread.get().bitmap.clone();
             let bitmap = &*bitmap.get();
             if !bitmap.is_full() {
-                let ret = align_bitset_ok(
+                // let ret = align_bitset_ok(
+                //     bitmap,
+                //     range_start,
+                //     range_end,
+                //     cache_file_node.cache_file_info.cache_file_slice,
+                // );
+                //
+                // if ret.is_err() || !ret.unwrap() {
+                //     return None;
+                // }
+                // range_end
+                let range_end = align_bitset_end_index(
                     bitmap,
                     range_start,
                     range_end,
+                    slice_end,
                     cache_file_node.cache_file_info.cache_file_slice,
                 );
-
-                if ret.is_err() || !ret.unwrap() {
+                if range_end.is_err() {
+                    return None;
+                }
+                let range_end = range_end.unwrap();
+                if range_end <= 0 {
                     return None;
                 }
                 range_end
@@ -776,32 +788,40 @@ impl HttpCacheFile {
         *response.status_mut() = cache_file_node.fix.response.status().clone();
         *response.version_mut() = cache_file_node.fix.response.version().clone();
         *response.headers_mut() = cache_file_node.fix.response.headers().clone();
-        response.headers_mut().insert(
-            http::header::CONTENT_RANGE,
-            HeaderValue::from_bytes(
-                format!(
-                    "bytes {}-{}/{}",
-                    range_start, range_end, response_info.range.raw_content_length
+        let buf_file = if response_info.range.raw_content_length > 0 {
+            let mut range_end = range_end;
+            if range_end >= response_info.range.raw_content_length {
+                range_end = response_info.range.raw_content_length - 1;
+            }
+            response.headers_mut().insert(
+                http::header::CONTENT_RANGE,
+                HeaderValue::from_bytes(
+                    format!(
+                        "bytes {}-{}/{}",
+                        range_start, range_end, response_info.range.raw_content_length
+                    )
+                    .as_bytes(),
                 )
-                .as_bytes(),
-            )
-            .ok()?,
-        );
+                .ok()?,
+            );
 
-        response.headers_mut().insert(
-            http::header::CONTENT_LENGTH,
-            http::header::HeaderValue::from(range_end - range_start + 1),
-        );
-        let is_body = true;
-        let buf_file = if is_body {
+            response.headers_mut().insert(
+                http::header::CONTENT_LENGTH,
+                http::header::HeaderValue::from(range_end - range_start + 1),
+            );
             Some(cache_file_node.buf_file.clone())
         } else {
+            response.headers_mut().insert(
+                http::header::CONTENT_LENGTH,
+                http::header::HeaderValue::from(0),
+            );
             None
         };
+
         Some(HttpCacheFileRequest { response, buf_file })
     }
 
-    pub fn cache_file_request_not_get(&self) -> Option<HttpCacheFileRequest> {
+    pub fn cache_file_request_not_range(&self) -> Option<HttpCacheFileRequest> {
         let cache_file_node = self.ctx_thread.get().cache_file_node().unwrap();
         let response_info = &cache_file_node.response_info;
         {
@@ -844,7 +864,7 @@ impl HttpCacheFile {
         let (_, cache_file_node_manage) = Self::read_cache_file_node_manage(
             proxy_cache,
             &cache_file_info.md5,
-            net_core_proxy.cache_file_node_queue.clone(),
+            net_core_proxy.main.cache_file_node_queue.clone(),
         );
         let is_new = {
             let cache_file_node_manage =
@@ -878,7 +898,7 @@ impl HttpCacheFile {
                 .hot_count
                 .fetch_add(1, Ordering::Relaxed);
 
-            cache_file_node_manage.update_version_expires();
+            cache_file_node_manage.version_expires += 1;
             cache_file_node_manage.cache_file_node_head.is_none()
         };
 
@@ -903,8 +923,12 @@ impl HttpCacheFile {
                     cache_file_node_version,
                     cache_file_node_head.clone(),
                 ));
-            net_core_proxy.trie_insert(trie_url, md5.clone())?;
-            net_core_proxy.index_insert(md5, proxy_cache.cache_conf.name.clone());
+            net_core_proxy.main.proxy_cache_index.get_mut().insert(
+                trie_url,
+                md5,
+                proxy_cache.cache_conf.name.clone(),
+                cache_file_node_manage.cache_file_node_version,
+            );
         }
         Ok(())
     }
@@ -1027,27 +1051,41 @@ impl HttpCacheFile {
         let scc = r.http_arg.stream_info.get().scc.clone();
         use crate::config::common_core;
         let common_core_conf = common_core::main_conf(&scc.ms).await;
-        let tmpfile_id = common_core_conf.tmpfile_id.fetch_add(1, Ordering::Relaxed);
+        let tmp_file_id = common_core_conf.tmp_file_id.fetch_add(1, Ordering::Relaxed);
         let session_id = r.session_id;
+        let log_cache_file_node = cache_file_node.clone();
         let ret: Result<()> = tokio::task::spawn_blocking(move || {
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
 
             if Path::new(proxy_cache_path.as_str()).exists() {
                 let mut tmp = proxy_cache_path_tmp.to_string();
-                tmp.push_str(&format!("_{}_tmp", tmpfile_id));
-
+                tmp.push_str(&format!("_{}_tmp", tmp_file_id));
                 log::info!(target: "ext", "r.session_id:{}, exists rename {},{}",
                            session_id, proxy_cache_path.as_str(), tmp.as_str());
                 std::fs::rename(proxy_cache_path.as_str(), tmp.as_str())?;
-                let _ = unlink(tmp.as_str(), None);
-                if cache_file_node_old.is_some() {
-                    let cache_file_node_old = cache_file_node_old.unwrap();
-                    cache_file_node_old.file_ext.file_path.set(tmp.into());
-                    cache_file_node_old.file_ext.unlink(None);
-                }
+
+                tokio::task::spawn_blocking(move || {
+                    if cache_file_node_old.is_some() {
+                        let cache_file_node_old = cache_file_node_old.unwrap();
+                        cache_file_node_old.file_ext.file_path.set(tmp.into());
+                        cache_file_node_old.file_ext.unlink();
+                    } else {
+                        if let Err(e) = unlink(tmp.as_str()) {
+                            log::error!("err:unlink => e:{}, tmp:{}", e, tmp)
+                        }
+                    }
+                });
             }
-            std::fs::rename(proxy_cache_path_tmp.as_str(), proxy_cache_path.as_str())?;
+
+            log::debug!(target: "purge", "rename create file proxy_cache_name:{}, trie_url:{}, proxy_cache_path:{}",
+                        log_cache_file_node.proxy_cache_name,log_cache_file_node.cache_file_node_head.trie_url,proxy_cache_path_tmp.as_str());
+            let ret = std::fs::rename(proxy_cache_path_tmp.as_str(), proxy_cache_path.as_str());
+            if let Err(e) = ret {
+                log::error!("err:create file rename proxy_cache_name:{}, trie_url:{}, proxy_cache_path:{}, e:{}",
+                            log_cache_file_node.proxy_cache_name,log_cache_file_node.cache_file_node_head.trie_url,proxy_cache_path_tmp.as_str(), e);
+                return Err(e)?;
+            }
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -1068,42 +1106,48 @@ impl HttpCacheFile {
 
     pub async fn cache_file_node_to_pool(
         &self,
-        r: &Arc<HttpStreamRequest>,
-        cache_file_node: Arc<ProxyCacheFileNode>,
+        _r: &Arc<HttpStreamRequest>,
+        _cache_file_node: Arc<ProxyCacheFileNode>,
         cache_file_node_data: Arc<ProxyCacheFileNodeData>,
+        cache_file_node_manage: typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     ) -> Result<()> {
-        let scc = r.http_arg.stream_info.get().scc.clone();
-        use crate::config::net_core_proxy;
-        let net_core_proxy_main_conf = net_core_proxy::main_conf(scc.ms()).await;
+        // let scc = r.http_arg.stream_info.get().scc.clone();
+        // use crate::config::net_core_proxy;
+        // let net_core_proxy_main_conf = net_core_proxy::main_conf(scc.ms()).await;
 
-        let (_, cache_file_node_manage) = Self::read_cache_file_node_manage(
-            self.proxy_cache.as_ref().unwrap(),
-            &self.cache_file_info.md5,
-            net_core_proxy_main_conf.cache_file_node_queue.clone(),
-        );
+        // let (_, cache_file_node_manage) = Self::read_cache_file_node_manage(
+        //     self.proxy_cache.as_ref().unwrap(),
+        //     &self.cache_file_info.md5,
+        //     net_core_proxy_main_conf.main.cache_file_node_queue.clone(),
+        // );
+        cache_file_node_data.is_run.store(false, Ordering::Relaxed);
         let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
         if cache_file_node_manage.cache_file_node.is_none() {
+            cache_file_node_data.node.set_nil();
             return Ok(());
         }
 
         if self.ctx_thread.get().cache_file_node_version
             != cache_file_node_manage.cache_file_node_version
         {
+            cache_file_node_data.node.set_nil();
             return Ok(());
         }
 
-        cache_file_node_data.count.fetch_add(1, Ordering::Relaxed);
-        if cache_file_node_data.node.get().is_none() {
-            cache_file_node_data.node.set(cache_file_node);
-            cache_file_node_manage
-                .cache_file_node_queue_lru
-                .get_mut()
-                .push_back(cache_file_node_data.clone());
-        }
+        cache_file_node_data
+            .time
+            .store(Local::now().timestamp(), Ordering::Relaxed);
         cache_file_node_manage
             .cache_file_node_queue
-            .push_back(cache_file_node_data.clone());
+            .push_front(cache_file_node_data);
 
+        let cache_file_node_data = cache_file_node_manage.cache_file_node_queue.back();
+        if cache_file_node_data.is_some() {
+            let cache_file_node_data = cache_file_node_data.unwrap();
+            if cache_file_node_data.node.is_none() {
+                cache_file_node_manage.cache_file_node_queue.pop_back();
+            }
+        }
         return Ok(());
     }
 
@@ -1132,12 +1176,20 @@ impl HttpCacheFile {
         let mut cache_file_err_num = 0;
         let cache_file_err_num_max = 10;
         let upstream_count_warn_max = 10;
+        let (is_range, is_head) = {
+            let rctx = &*r.ctx.get();
+            (rctx.r_in.is_range, rctx.r_in.is_head)
+        };
         loop {
             let (_, cache_file_node_manage) = Self::read_cache_file_node_manage(
                 self.proxy_cache.as_ref().unwrap(),
                 &self.cache_file_info.md5,
-                net_core_proxy_main_conf.cache_file_node_queue.clone(),
+                net_core_proxy_main_conf.main.cache_file_node_queue.clone(),
             );
+            let cache_file_node_version = {
+                let cache_file_node_manage = &*cache_file_node_manage.get(file!(), line!()).await;
+                cache_file_node_manage.cache_file_node_version
+            };
 
             let (_, cache_file_node) = Self::do_get_cache_file_node(
                 r,
@@ -1155,8 +1207,7 @@ impl HttpCacheFile {
                 let cache_file_status = cache_file_node.ctx_thread.get().cache_file_status.clone();
                 let _is_ok = match &cache_file_status {
                     &CacheFileStatus::Exist => {
-                        let rctx = &*r.ctx.get();
-                        if rctx.r_in.is_range {
+                        if is_range || is_head {
                             true
                         } else {
                             if is_full {
@@ -1167,7 +1218,7 @@ impl HttpCacheFile {
                         }
                     }
                     &CacheFileStatus::Expire => {
-                        if is_full {
+                        if is_full || is_head {
                             true
                         } else {
                             is_ok
@@ -1178,6 +1229,10 @@ impl HttpCacheFile {
                     let pool_cache_file_node_data = {
                         let cache_file_node_manage =
                             &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                        if cache_file_node_manage.cache_file_node_version != cache_file_node_version
+                        {
+                            continue;
+                        }
                         cache_file_node_manage.cache_file_node_queue.pop_front()
                     };
                     let (pool_cache_file_node, pool_cache_file_node_data) = {
@@ -1185,11 +1240,12 @@ impl HttpCacheFile {
                             (None, None)
                         } else {
                             let pool_cache_file_node_data = pool_cache_file_node_data.unwrap();
-                            let node = pool_cache_file_node_data.node.get();
+                            let node = pool_cache_file_node_data.node.clone();
+                            let node = node.get();
                             if node.is_none() {
                                 (None, None)
                             } else {
-                                (Some(node.clone()), Some(pool_cache_file_node_data.clone()))
+                                (Some(node.clone()), Some(pool_cache_file_node_data))
                             }
                         }
                     };
@@ -1204,6 +1260,17 @@ impl HttpCacheFile {
                             .await;
                             //如果文件不存在清空， 文件存在断开链接，  文件变化清空
                             if let Err(e) = ret {
+                                {
+                                    let cache_file_node_manage = &mut *cache_file_node_manage
+                                        .get_mut(file!(), line!())
+                                        .await;
+                                    if cache_file_node_manage.cache_file_node_version
+                                        != cache_file_node_version
+                                    {
+                                        continue;
+                                    }
+                                }
+
                                 if Path::new(self.cache_file_info.proxy_cache_path.as_str())
                                     .exists()
                                 {
@@ -1252,6 +1319,15 @@ impl HttpCacheFile {
 
                         //可能外部改变了， 需要替换
                         if !file_ext_.is_uniq_eq(&file_ext.fix) {
+                            {
+                                let cache_file_node_manage =
+                                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                                if cache_file_node_manage.cache_file_node_version
+                                    != cache_file_node_version
+                                {
+                                    continue;
+                                }
+                            }
                             let (_, cache_file_node) = Self::do_get_cache_file_node(
                                 r,
                                 &self.cache_file_info,
@@ -1265,6 +1341,17 @@ impl HttpCacheFile {
                             let cache_file_node = cache_file_node.unwrap();
                             let file_ext_ = cache_file_node.get_file_ext();
                             if !file_ext_.is_uniq_eq(&file_ext.fix) {
+                                {
+                                    let cache_file_node_manage = &mut *cache_file_node_manage
+                                        .get_mut(file!(), line!())
+                                        .await;
+                                    if cache_file_node_manage.cache_file_node_version
+                                        != cache_file_node_version
+                                    {
+                                        continue;
+                                    }
+                                }
+
                                 cache_file_err_num += 1;
                                 if cache_file_err_num >= 2 {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(500))
@@ -1303,8 +1390,16 @@ impl HttpCacheFile {
                             self.cache_file_info.clone(),
                         )?;
                         let cache_file_node = Arc::new(cache_file_node);
-
-                        let cache_file_node_data = Arc::new(ProxyCacheFileNodeData::new(None));
+                        let cache_file_node_data =
+                            Arc::new(ProxyCacheFileNodeData::new(cache_file_node.clone()));
+                        {
+                            let cache_file_node_manage =
+                                &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                            cache_file_node_manage
+                                .cache_file_node_queue_lru
+                                .get_mut()
+                                .push_back(cache_file_node_data.clone());
+                        }
                         (cache_file_node, cache_file_node_data)
                     } else {
                         (
@@ -1315,23 +1410,23 @@ impl HttpCacheFile {
 
                     let cache_file_status =
                         cache_file_node.ctx_thread.get().cache_file_status.clone();
-                    let (is_upstream, upstream_count, upstream_count_drop) =
+                    let ret:Option<(bool, i64, Option<Arc<AtomicI64>>)> = async {
                         match &cache_file_status {
                             &CacheFileStatus::Exist => {
                                 let bitmap = cache_file_node.ctx_thread.get().bitmap.clone();
                                 let is_full = bitmap.get().is_full();
-                                if r.ctx.get().r_in.is_range {
-                                    (false, 0, None)
-                                } else {
+                                if is_range || is_head {
+                                    return Some((false, 0, None));
+                                }
                                     if is_full {
-                                        (false, 0, None)
-                                    } else {
+                                        return  Some((false, 0, None));
+                                    }
                                         let cache_file_node_manage = &mut *cache_file_node_manage
                                             .get_mut(file!(), line!())
                                             .await;
                                         if cache_file_node_manage.is_upstream {
                                             is_ok = false;
-                                            continue;
+                                            return None;
                                         }
                                         cache_file_node_manage.is_upstream = true;
                                         cache_file_node_manage.upstream_version += 1;
@@ -1341,13 +1436,11 @@ impl HttpCacheFile {
                                             + 1;
                                         cache_file_node_manage.upstream_time = Instant::now();
                                         log::trace!(target: "is_ups", "session_id:{}, upstream cache_file_node Exist", r.session_id);
-                                        (
+                                        Some((
                                             true,
                                             upstream_count,
                                             Some(cache_file_node_manage.upstream_count.clone()),
-                                        )
-                                    }
-                                }
+                                        ))
                             }
                             &CacheFileStatus::Expire => {
                                 let cache_file_node_manage =
@@ -1358,15 +1451,15 @@ impl HttpCacheFile {
 
                                 if cache_file_node_manage.is_upstream == true
                                     && cache_file_node_manage.upstream_time.elapsed().as_secs()
-                                        < once_time
+                                    < once_time
                                     && is_full
                                 {
                                     log::trace!(target: "is_ups", "session_id:{}, local cache_file_node Expire", r.session_id);
-                                    (false, 0, None)
-                                } else {
+                                    return Some((false, 0, None));
+                                }
                                     if cache_file_node_manage.is_upstream {
                                         is_ok = false;
-                                        continue;
+                                        return None;
                                     }
                                     cache_file_node_manage.is_upstream = true;
                                     cache_file_node_manage.upstream_version += 1;
@@ -1376,15 +1469,24 @@ impl HttpCacheFile {
                                         + 1;
                                     cache_file_node_manage.upstream_time = Instant::now();
                                     log::trace!(target: "is_ups", "session_id:{}, upstream cache_file_node Expire", r.session_id);
-                                    (
+                                    Some((
                                         true,
                                         upstream_count,
                                         Some(cache_file_node_manage.upstream_count.clone()),
-                                    )
-                                }
+                                    ))
                             }
-                        };
+                        }
+                    }.await;
 
+                    if ret.is_none() {
+                        let cache_file_node_manage =
+                            &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                        cache_file_node_manage
+                            .cache_file_node_queue
+                            .push_front(cache_file_node_data);
+                        continue;
+                    }
+                    let (is_upstream, upstream_count, upstream_count_drop) = ret.unwrap();
                     if upstream_count >= upstream_count_warn_max {
                         log::warn!(
                             "err:upstream_count => upstream_count:{}, path:{}",
@@ -1550,7 +1652,7 @@ impl HttpCacheFile {
         });
         cache_file_node_manage.cache_file_node = Some(node.clone());
 
-        let data = Arc::new(ProxyCacheFileNodeData::new(Some(cache_file_node)));
+        let data = Arc::new(ProxyCacheFileNodeData::new(cache_file_node));
 
         cache_file_node_manage
             .cache_file_node_queue_lru

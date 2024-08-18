@@ -75,11 +75,11 @@ pub async fn do_start(
                 return Some(_ret);
             }
             _ = shutdown_thread_rx.recv() => {
-                stream_info.get_mut().err_status = ErrStatus::ServerErr;
+                stream_info.get_mut().err_status = ErrStatus::SERVER_ERR;
                 return None;
             }
             else => {
-                stream_info.get_mut().err_status = ErrStatus::ServerErr;
+                stream_info.get_mut().err_status = ErrStatus::SERVER_ERR;
                 return None;
             }
         }
@@ -107,7 +107,7 @@ pub async fn do_start(
         );
     }
 
-    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, &stream_info)
+    let (is_close, is_ups_close) = stream_info_parse(stream_timeout, &stream_info, ret.is_some())
         .await
         .map_err(|e| anyhow!("err:stream_connect_parse => e:{}", e))?;
     if scc.is_some() {
@@ -165,6 +165,7 @@ pub async fn do_start(
 pub async fn stream_info_parse(
     stream_timeout: StreamTimeout,
     stream_info: &Share<StreamInfo>,
+    is_ret_err: bool,
 ) -> Result<(bool, bool)> {
     let stream_info = &mut stream_info.get_mut();
     let mut is_error = false;
@@ -174,6 +175,7 @@ pub async fn stream_info_parse(
     let upstream_stream_flow_info = stream_info.upstream_stream_flow_info.clone();
     let mut client_stream_flow_info = client_stream_flow_info.get_mut();
     let mut upstream_stream_flow_info = upstream_stream_flow_info.get_mut();
+    log::debug!(target: "ext3", "err_status:{}, client_stream_flow_info.err:{:?}, upstream_stream_flow_info.err:{:?}", stream_info.err_status, client_stream_flow_info.err, upstream_stream_flow_info.err);
     if stream_info.ssc_upload.is_some() {
         if stream_info.ssc_download.is_some() {
             let ssc = &stream_info.ssc_download;
@@ -215,21 +217,14 @@ pub async fn stream_info_parse(
         )
     }
 
-    if stream_info.err_status != ErrStatus::Ok {
-        is_error = true;
-    }
-
     if client_stream_flow_info.err == StreamFlowErr::Init
         && upstream_stream_flow_info.err == StreamFlowErr::Init
     {
         is_error = true;
     }
 
-    if stream_info.err_status == ErrStatus::Ok
-        || stream_info.err_status == ErrStatus::ClientProtoErr
-    {
+    if stream_info.err_status < 500 || stream_info.err_status > 599 {
         if stream_timeout.timeout_num.load(Ordering::Relaxed) >= 4 {
-            is_error = true;
             stream_info.is_timeout_exit = true;
             let client_read_timeout_millis = stream_timeout
                 .client_read_timeout_millis
@@ -288,43 +283,34 @@ pub async fn stream_info_parse(
             }
         }
 
+        let client_err = ErrStatusInfo::new(
+            client_stream_flow_info.err.clone(),
+            Box::new(stream_info::ErrStatusClient {}),
+        );
+        let upstream_err = ErrStatusInfo::new(
+            upstream_stream_flow_info.err.clone(),
+            Box::new(stream_info::ErrStatusUpstream {}),
+        );
+
+        if client_err.is_close || (client_err.err == StreamFlowErr::Init && upstream_err.is_close) {
+            is_error = false;
+            is_close = true;
+            if upstream_err.is_ups_close {
+                is_ups_close = true;
+            }
+        } else {
+            is_error = true;
+            is_close = false;
+            is_ups_close = false;
+        }
+
         let errs = if client_stream_flow_info.err_time_millis
             <= upstream_stream_flow_info.err_time_millis
         {
-            vec![
-                ErrStatusInfo::new(
-                    client_stream_flow_info.err.clone(),
-                    Box::new(stream_info::ErrStatusClient {}),
-                ),
-                ErrStatusInfo::new(
-                    upstream_stream_flow_info.err.clone(),
-                    Box::new(stream_info::ErrStatusUpstream {}),
-                ),
-            ]
+            vec![client_err, upstream_err]
         } else {
-            vec![
-                ErrStatusInfo::new(
-                    upstream_stream_flow_info.err.clone(),
-                    Box::new(stream_info::ErrStatusUpstream {}),
-                ),
-                ErrStatusInfo::new(
-                    client_stream_flow_info.err.clone(),
-                    Box::new(stream_info::ErrStatusClient {}),
-                ),
-            ]
+            vec![upstream_err, client_err]
         };
-
-        if errs[0].is_close && errs[1].is_close {
-            is_close = true;
-        }
-
-        if !errs[0].is_close || !errs[1].is_close {
-            is_error = true;
-        }
-
-        if errs[0].is_ups_close || errs[1].is_ups_close {
-            is_ups_close = true;
-        }
 
         if errs[0].err_str.is_some() && errs[1].err_str.is_some() {
             stream_info.err_status_str = Some(ArcString::new(format!(
@@ -342,13 +328,15 @@ pub async fn stream_info_parse(
                 "(nil)({})",
                 errs[1].err_str.as_ref().unwrap().as_str()
             )));
+        } else {
+            stream_info.err_status_str = Some(ArcString::new(format!("(nil)(nil)")));
         }
-    } else if stream_info.err_status == ErrStatus::ServiceUnavailable {
+    } else if stream_info.err_status == ErrStatus::SERVICE_UNAVAILABLE {
         is_error = true;
         let upstream_connect_flow_info = stream_info.upstream_connect_flow_info.clone();
         let upstream_connect_flow_info = upstream_connect_flow_info.get();
         if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteTimeout {
-            stream_info.err_status = ErrStatus::GatewayTimeout;
+            stream_info.err_status = ErrStatus::GATEWAY_TIMEOUT;
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteReset {
             stream_info.err_status_str = Some(stream_info::UPS_CONN_RESET.clone());
         } else if upstream_connect_flow_info.err == stream_flow::StreamFlowErr::WriteErr {
@@ -356,10 +344,14 @@ pub async fn stream_info_parse(
         }
     }
 
+    if !is_close && is_ret_err {
+        is_error = true;
+    }
+
     if stream_info.is_discard_flow {
         is_error = false;
     }
-
+    log::debug!(target: "ext3", "is_error:{}, is_close:{}, is_ups_close:{}", is_error, is_close, is_ups_close);
     stream_info.is_err = is_error;
     Ok((is_close, is_ups_close))
 }

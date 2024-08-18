@@ -124,7 +124,7 @@ impl WebsocketServer {
                 .await
                 .map_err(|e| anyhow!("err:client_async_with_config => e:{}", e))?;
 
-        self.arg.stream_info.get_mut().err_status = ErrStatus::Ok;
+        self.arg.stream_info.get_mut().err_status = ErrStatus::OK;
         self.steam_to_stream(client_stream, upstream_stream)
             .await
             .map_err(|e| anyhow!("err:steam_to_stream => e:{}", e))
