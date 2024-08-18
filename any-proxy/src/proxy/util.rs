@@ -1,5 +1,6 @@
 use crate::config::net_core::DomainFromHttpV1;
 use crate::protopack::anyproxy::{AnyproxyHello, ANYPROXY_VERSION};
+use crate::proxy::domain_config::DomainConfigContext;
 use crate::proxy::http_proxy::http_stream_request::{
     HttpResponse, HttpResponseBody, HttpStreamRequest, HttpUpstreamConnectInfo,
 };
@@ -87,25 +88,35 @@ where
         }
     };
 
-    let domain_index = {
-        let mut stream_info = arg.stream_info.get_mut();
-        stream_info.request_id = hello.request_id.clone();
-        stream_info.protocol_hello.set(Arc::new(hello));
+    let domain_config_context: Result<Arc<DomainConfigContext>> = async {
+        let domain_index = {
+            let mut stream_info = arg.stream_info.get_mut();
+            stream_info.request_id = hello.request_id.clone();
+            stream_info.protocol_hello.set(Arc::new(hello));
 
+            arg.domain_config_listen
+                .domain_index
+                .index(&stream_info.protocol_hello.domain)
+                .map_err(|e| anyhow!("err:domain_index.index => e:{}", e))?
+        };
         arg.domain_config_listen
-            .domain_index
-            .index(&stream_info.protocol_hello.domain)
-            .map_err(|e| anyhow!("err:domain_index.index => e:{}", e))?
-    };
-    let domain_config_context = arg
-        .domain_config_listen
-        .domain_config_context_map
-        .get(&domain_index)
-        .cloned()
-        .ok_or(anyhow!(
-            "err:domain_index nil => domain_index:{}",
-            domain_index
-        ))?;
+            .domain_config_context_map
+            .get(&domain_index)
+            .cloned()
+            .ok_or(anyhow!(
+                "err:domain_index nil => domain_index:{}",
+                domain_index
+            ))
+    }
+    .await;
+    if let Err(e) = domain_config_context {
+        let http_r = arg.stream_info.get().http_r.clone();
+        if http_r.is_some() {
+            http_r.ctx.get_mut().server_err = Some(http::StatusCode::NOT_FOUND);
+        }
+        return Err(e);
+    }
+    let domain_config_context = domain_config_context.unwrap();
 
     let scc = &domain_config_context.scc;
     let scc = {
@@ -295,6 +306,38 @@ pub async fn run_plugin_handle_access(
             }
             crate::Error::Error => {
                 return Err(anyhow::anyhow!("err:plugin_handle_access"));
+            }
+            crate::Error::Return => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+pub async fn run_plugin_handle_http_access(
+    scc: &Arc<StreamConfigContext>,
+    stream_info: &Share<StreamInfo>,
+) -> Result<bool> {
+    let plugin_handle_http_access = {
+        use crate::config::net_core_plugin;
+        //___wait___
+        //let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_core_conf());
+        let net_core_plugin_conf = net_core_plugin::currs_conf(scc.net_main_confs());
+        net_core_plugin_conf.plugin_handle_http_access.clone()
+    };
+
+    for plugin_handle_http_access in &*plugin_handle_http_access.get().await {
+        let err = (plugin_handle_http_access)(stream_info.clone()).await?;
+        match err {
+            crate::Error::Ok => {}
+            crate::Error::Break => {}
+            crate::Error::Finish => {
+                break;
+            }
+            crate::Error::Error => {
+                return Err(anyhow::anyhow!("err:plugin_handle_http_access"));
             }
             crate::Error::Return => {
                 return Ok(true);

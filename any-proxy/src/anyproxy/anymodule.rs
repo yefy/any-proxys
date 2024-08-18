@@ -120,6 +120,8 @@ pub fn add_modules() -> Result<()> {
 
     use crate::config::net_access;
     module::add_module(net_access::module())?;
+    use crate::config::net_access_ip;
+    module::add_module(net_access_ip::module())?;
 
     use crate::config::net_serverless;
     module::add_module(net_serverless::module())?;

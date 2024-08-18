@@ -11,6 +11,7 @@ pub mod http_filter;
 pub mod http_in;
 pub mod net;
 pub mod net_access;
+pub mod net_access_ip;
 pub mod net_access_log;
 pub mod net_core;
 pub mod net_core_plugin;

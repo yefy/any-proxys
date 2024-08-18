@@ -39,6 +39,7 @@ linux reuseport环境支持程序热升级
 支持配置webassembly阶段     
 支持优雅的配置文件reload热加载，并能长连接复用  
 支持access_log
+支持客户端ip限制访问ip_allow ip_deny
 ```
 ## 七层反向代理服务
 ```
@@ -50,6 +51,7 @@ linux reuseport环境支持程序热升级
 支持配置webassembly阶段  
 支持优雅的配置文件reload热加载，并能长连接复用  
 支持access_log
+支持客户端ip限制访问ip_allow ip_deny
 ```
 ## http文件存储（还在完善）
 ```
@@ -72,9 +74,11 @@ linux reuseport环境支持程序热升级
 支持if-unmodified-since if-match 412状态码
 支持if-modified-since if-none-match 304状态码
 支持if-range
-支持method类型缓存
+支持method类型缓存（GET POST等）
 支持错误码缓存
-支持purge删除缓存：包括文件删除、目录删除，还可以设置延迟删除和马上删除 
+支持purge马上强制删除缓存：包括文件删除、目录删除
+支持purge延迟删除缓存：包括文件删除、目录删除，文件正在使用回源校验文件是否变化在删除，可以大大减少回源带宽
+支持已经存储的文件记忆功能，即使删除存储磁盘，已经存储文件不会在回源，可以大大减少回源带宽
 支持过期文件304校验，可以大大减少回源带宽
 支持并发请求合并回源，可以大大减少回源带宽
 支持get请求强制使用get range回源，可以大大减少回源带宽
@@ -82,12 +86,13 @@ get请求和get range请求是共享存储，大大降低文件磁盘存储
 支持配置webassembly阶段  
 支持优雅的配置文件reload热加载，并能长连接复用  
 支持access_log
+支持客户端ip限制访问ip_allow ip_deny
 ```
 ## 无锁异步webassembly热更新脚本框架
 ```
 支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
 支持优雅的配置文件reload热加载，并能长连接复用  
-支持wasm_http异步http over （tcp quic ssl）网络库
+支持wasm_http异步http over（tcp quic ssl）网络库
 支持wasm_log打印日志
 支持wasm_store进程内全局共享存储
 支持wasm_socket异步tcp，quic，ssl网络库
@@ -102,21 +107,24 @@ get请求和get range请求是共享存储，大大降低文件磁盘存储
         wasm_access
         wasm_serverless
         wasm_access_log
-    http协议有六个阶段：
+    http协议有七个阶段：
         wasm_access
+        wasm_http_access
         wasm_serverless
         wasm_http_in_headers
         wasm_http_filter_headers_pre
         wasm_http_filter_headers
         wasm_access_log
-    websocket协议有四个阶段：
+    websocket协议有五个阶段：
         wasm_access
+        wasm_http_access
         wasm_serverless
         wasm_http_in_headers
         wasm_access_log
         
-wasm_access阶段可以开发防盗链校验、ip限制、防攻击开发，WAF
-wasm_serverless阶段可以解析协议做复杂业务开发
+wasm_access阶段可以开发ip限制
+wasm_http_access阶段可以开发防盗链校验、ip限制、防攻击开发，WAF
+wasm_serverless阶段可以做为独立后端，解析协议做复杂业务开发
 wasm_http_in_headers阶段可以修改请求的原始http数据
 wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
 wasm_http_filter_headers阶段可以修改响应给客户端http数据
@@ -136,6 +144,7 @@ wasm_access_log阶段可以获取全部预备变量，可以做任何数据统�
 支持配置webassembly阶段  
 支持优雅的配置文件reload热加载
 支持access_log
+支持客户端ip限制访问ip_allow ip_deny
 ```
 ## 负载均衡算法
 ```
@@ -152,6 +161,7 @@ wasm_access_log阶段可以获取全部预备变量，可以做任何数据统�
 [文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
 # 详细技术实现
 ```
+支持ipv4和ipv6
 支持socket 高性能writev函数
 domain代理支持http_v1协议解析获取域名  
 http文件存储  

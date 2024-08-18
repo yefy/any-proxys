@@ -14,12 +14,13 @@ pub fn str_to_str_addrs(addr: &str) -> Result<Vec<String>> {
         if addr.len() <= 0 {
             continue;
         }
-        let values = addr.split(":").collect::<Vec<_>>();
-        if values.len() != 2 {
+        let values = addr.rsplit_once(":");
+        if values.is_none() {
             return Err(anyhow!("err:addr => addr:{}", addr));
         }
-        let ip = values[0].trim();
-        let port = values[1].trim();
+        let (ip, port) = values.unwrap();
+        let ip = ip.trim();
+        let port = port.trim();
         if port.find("~").is_some() {
             let find = port.find("[");
             if find.is_none() || (find.is_some() && find.unwrap() != 0) {
@@ -252,13 +253,25 @@ pub fn extract(file_name: &str, target: &str) -> anyhow::Result<()> {
 }
 
 pub fn tcp_key_from_addr(addr: &SocketAddr) -> Result<String> {
-    Ok("tcp".to_string() + &addr.port().to_string())
+    if addr.is_ipv4() {
+        Ok("tcp".to_string() + &addr.port().to_string())
+    } else {
+        Ok("tcp6".to_string() + &addr.port().to_string())
+    }
 }
 pub fn udp_key_from_addr(addr: &SocketAddr) -> Result<String> {
-    Ok("udp".to_string() + &addr.port().to_string())
+    if addr.is_ipv4() {
+        Ok("udp".to_string() + &addr.port().to_string())
+    } else {
+        Ok("udp6".to_string() + &addr.port().to_string())
+    }
 }
 pub fn quic_key_from_addr(addr: &SocketAddr) -> Result<String> {
-    Ok("quic".to_string() + &addr.port().to_string())
+    if addr.is_ipv4() {
+        Ok("quic".to_string() + &addr.port().to_string())
+    } else {
+        Ok("quic6".to_string() + &addr.port().to_string())
+    }
 }
 
 pub fn host_and_port(http_host: &str) -> (&str, &str) {

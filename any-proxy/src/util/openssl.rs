@@ -129,14 +129,17 @@ impl OpensslSni {
                 let domain = ssl
                     .servername(openssl::ssl::NameType::HOST_NAME)
                     .ok_or_else(|| {
-                        log::error!("{}", "err:openssl servername nil");
+                        log::warn!("err:set_servername_callback servername nil");
                         *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
                         openssl::ssl::SniError::ALERT_FATAL
                     })?;
 
                 log::debug!(target: "main", "domain:{}", domain);
                 let domain_index = domain_index.get().index(domain).map_err(|_| {
-                    log::error!("{}", "err:openssl cert nil");
+                    log::warn!(
+                        "err:set_servername_callback servername not find => domain:{}",
+                        domain
+                    );
                     *alert = openssl::ssl::SslAlert::UNRECOGNIZED_NAME.clone();
                     openssl::ssl::SniError::ALERT_FATAL
                 })?;

@@ -149,6 +149,7 @@ pub fn endpoint(
     config: &Config,
     mut reuseport: bool,
     addr: Option<SocketAddr>,
+    is_ipv4: bool,
 ) -> Result<quinn::Endpoint> {
     //ipv6
     //let addr = &"[::]:0".parse()
@@ -159,9 +160,15 @@ pub fn endpoint(
     let addr = if addr.is_some() {
         addr.unwrap()
     } else {
-        "0.0.0.0:0"
-            .parse()
-            .map_err(|e| anyhow!("err:bind 0.0.0.0:0 => e:{}", e))?
+        if is_ipv4 {
+            "0.0.0.0:0"
+                .parse()
+                .map_err(|e| anyhow!("err:bind 0.0.0.0:0 => e:{}", e))?
+        } else {
+            "[::]:0"
+                .parse()
+                .map_err(|e| anyhow!("err:bind 0.0.0.0:0 => e:{}", e))?
+        }
     };
     let client_config =
         client_config(config).map_err(|e| anyhow!("err:client_config => e:{}", e))?;

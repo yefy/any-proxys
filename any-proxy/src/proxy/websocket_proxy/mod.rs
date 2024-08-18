@@ -18,8 +18,8 @@ use crate::proxy::http_proxy::http_header_parse::{parse_request_parts, HttpParts
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::stream_info::ErrStatus;
 use crate::proxy::util::{
-    find_local, run_plugin_handle_access, run_plugin_handle_websocket,
-    run_plugin_handle_websocket_serverless,
+    find_local, run_plugin_handle_access, run_plugin_handle_http_access,
+    run_plugin_handle_websocket, run_plugin_handle_websocket_serverless,
 };
 use any_base::io::buf_reader::BufReader;
 use futures_core::Stream;
@@ -162,12 +162,17 @@ pub async fn stream_parse(
 
     arg.stream_info.get_mut().err_status = ErrStatus::ACCESS_LIMIT;
     if run_plugin_handle_access(&scc, &stream_info).await? {
+        r.ctx.get_mut().server_err = Some(http::StatusCode::FORBIDDEN);
         return Err(anyhow::anyhow!("run_plugin_handle_access"));
     }
     arg.stream_info.get_mut().err_status = ErrStatus::SERVER_ERR;
 
     find_local(&stream_info)?;
     let scc = stream_info.get().scc.clone();
+    if run_plugin_handle_http_access(&scc, &stream_info).await? {
+        r.ctx.get_mut().server_err = Some(http::StatusCode::FORBIDDEN);
+        return Err(anyhow!("access"));
+    }
 
     let client_stream =
         run_plugin_handle_websocket_serverless(&scc, &stream_info, client_stream).await?;

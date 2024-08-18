@@ -128,13 +128,20 @@ impl ResolvesServerCert for ResolvesServerCertUsingSNI {
         if let Some(domain) = client_hello.server_name() {
             log::trace!(target: "main", "domain:{}", domain);
             let domain_index = match self.domain_index.get().index(domain) {
-                Err(_) => return None,
+                Err(_) => {
+                    log::warn!(
+                        "err:ResolvesServerCert server_name not find => domain:{}",
+                        domain
+                    );
+                    return None;
+                }
                 Ok(domain_index) => domain_index,
             };
             log::trace!(target: "main", "domain_index:{}", domain_index);
             self.by_name.get().get(&domain_index).cloned()
         } else {
             // This kind of resolver requires SNI
+            log::warn!("err:ResolvesServerCert server_name nil");
             None
         }
     }

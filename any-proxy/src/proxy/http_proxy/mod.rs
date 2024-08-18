@@ -30,7 +30,7 @@ use crate::proxy::stream_start;
 use crate::proxy::util as proxy_util;
 use crate::proxy::util::{
     find_local, http_serverless, rewrite, run_plugin_handle_access, run_plugin_handle_http,
-    run_plugin_handle_http_serverless,
+    run_plugin_handle_http_access, run_plugin_handle_http_serverless,
 };
 use crate::proxy::ServerArg;
 use crate::Protocol77;
@@ -452,6 +452,7 @@ impl HttpStream {
 
         stream_info.get_mut().err_status = ErrStatus::ACCESS_LIMIT;
         if run_plugin_handle_access(&scc, &stream_info).await? {
+            r.ctx.get_mut().server_err = Some(http::StatusCode::FORBIDDEN);
             return Err(anyhow!("access"));
         }
 
@@ -462,6 +463,11 @@ impl HttpStream {
 
         find_local(&stream_info)?;
         let scc = stream_info.get().scc.clone();
+
+        if run_plugin_handle_http_access(&scc, &stream_info).await? {
+            r.ctx.get_mut().server_err = Some(http::StatusCode::FORBIDDEN);
+            return Err(anyhow!("access"));
+        }
 
         if rewrite(&r, &scc, &stream_info, &self.header_response).await? {
             return Ok(());
@@ -520,8 +526,12 @@ impl proxy::Stream for HttpStream {
         let ret = self.run(&r, &stream_info, version).await;
         let err = if let Err(e) = ret {
             if !self.header_response.is_send() {
+                let mut server_err = r.ctx.get().server_err.clone();
+                if server_err.is_none() {
+                    server_err = Some(StatusCode::INTERNAL_SERVER_ERROR);
+                }
                 let response = Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .status(server_err.unwrap())
                     .body(Body::default())?;
                 log::debug!(target: "ext3",
                             "r.session_id:{}-{}, err:run response:{:#?}",

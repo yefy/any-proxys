@@ -62,7 +62,7 @@ impl connect::Connect for Connect {
         let start_time = Instant::now();
 
         let addr = self.context.address.clone();
-        let endpoint = self.context.endpoints.endpoint()?;
+        let endpoint = self.context.endpoints.endpoint(addr.is_ipv4())?;
 
         let client = quic_client::Client::new(
             addr,

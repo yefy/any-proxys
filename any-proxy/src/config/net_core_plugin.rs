@@ -51,6 +51,7 @@ pub type PluginHandleWebsocket = fn(
 
 pub struct Conf {
     pub plugin_handle_access: ArcRwLockTokio<Vec<PluginHandleAccess>>,
+    pub plugin_handle_http_access: ArcRwLockTokio<Vec<PluginHandleAccess>>,
     pub is_plugin_handle_serverless: ArcRwLockTokio<Vec<IsPluginHandleAccess>>,
     pub plugin_handle_serverless: ArcRwLockTokio<Vec<PluginHandleAccess>>,
     pub plugin_handle_logs: ArcRwLockTokio<Vec<PluginHandleLog>>,
@@ -74,6 +75,7 @@ impl Conf {
     pub fn new() -> Self {
         Conf {
             plugin_handle_access: ArcRwLockTokio::new(Vec::new()),
+            plugin_handle_http_access: ArcRwLockTokio::new(Vec::new()),
             is_plugin_handle_serverless: ArcRwLockTokio::new(Vec::new()),
             plugin_handle_serverless: ArcRwLockTokio::new(Vec::new()),
             plugin_handle_logs: ArcRwLockTokio::new(Vec::new()),

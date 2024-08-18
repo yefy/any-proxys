@@ -353,6 +353,7 @@ pub struct HttpStreamRequestContext {
     pub upstream_err: Option<StreamFlowErr>,
     pub client_err: Option<StreamFlowErr>,
     pub is_no_cache: bool,
+    pub server_err: Option<http::StatusCode>,
 }
 
 impl HttpStreamRequestContext {
@@ -575,6 +576,7 @@ impl HttpStreamRequest {
                 upstream_err: None,
                 client_err: None,
                 is_no_cache: false,
+                server_err: None,
             }),
             cache_file_slice,
             arg,
