@@ -7,7 +7,7 @@ use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::io::buf_reader::BufReader;
 use any_base::stream_flow::StreamFlow;
-use any_base::typ::ArcMutexTokio;
+use any_base::typ::{ArcMutexTokio, OptionArcx};
 use any_base::typ::{ArcMutex, ArcRwLock};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -15,6 +15,7 @@ use std::io::Read;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use system_interface::fs::FileIoExt;
 
 pub async fn http_server_handle(
     arg: ServerArg,
@@ -97,9 +98,8 @@ pub async fn http_server_handle(
             .map_err(|e| anyhow!("err:file.metadata => file_name:{}, e:{}", file_name, e))?
             .len();
         let file_uniq = FileUniq::new(&file)?;
-        let file = ArcMutex::new(file);
+        let file = OptionArcx::new(file);
         let file_ext = FileExt {
-            async_lock: ArcMutexTokio::new(()),
             file,
             fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
             file_path: ArcRwLock::new(file_name.clone().into()),
@@ -161,18 +161,23 @@ pub async fn http_server_handle(
             file_ext.directio_on()?;
         }
 
+        let mut read_size: u64 = 0;
         loop {
             let file = file_ext.file.clone();
             let data: Result<(usize, Vec<u8>)> = tokio::task::spawn_blocking(move || {
                 let mut buffer = vec![0u8; buffer_len];
+                // let size = file
+                //     .get_mut()
+                //     .read(&mut buffer.as_mut_slice()[..])
+                //     .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
                 let size = file
-                    .get_mut()
-                    .read(&mut buffer.as_mut_slice()[..])
+                    .read_at(&mut buffer.as_mut_slice()[..], read_size)
                     .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
                 Ok((size, buffer))
             })
             .await?;
             let (size, mut buffer) = data?;
+            read_size += size as u64;
 
             if size > 0 {
                 if size != buffer_len {

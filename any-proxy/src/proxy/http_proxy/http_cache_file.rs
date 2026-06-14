@@ -1,8 +1,8 @@
 use crate::config::net_core_proxy::{ProxyCacheConf, ProxyHotFile, CACHE_FILE_SLISE};
 use crate::proxy::http_proxy::http_cache_file_node::{ProxyCacheFileNode, CACHE_FILE_KEY};
-use any_base::typ::ArcMutex;
+use any_base::typ;
+use any_base::typ::{ArcMutex, OptionArcx};
 use any_base::typ::{ArcRwLock, OptionExt};
-use any_base::typ2;
 use any_base::util::{bytes_index, bytes_split, bytes_split_once, ArcString};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -29,6 +29,8 @@ use std::io::Seek;
 use std::mem::swap;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
+use system_interface::fs::FileIoExt;
+use anyhow::Context;
 
 pub const LOCAL_CACHE_REQ_KEY: &'static str = "local_cache_req_key";
 
@@ -299,7 +301,7 @@ pub struct ProxyCacheContext {
 pub struct ProxyCache {
     pub ctx: ArcRwLock<ProxyCacheContext>,
     pub cache_file_node_map:
-        ArcRwLock<HashMap<Bytes, typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>>>,
+        ArcRwLock<HashMap<Bytes, typ::ArcRwLockTokio<ProxyCacheFileNodeManage>>>,
     pub cache_conf: ProxyCacheConf,
     pub levels: Vec<usize>,
     pub name: ArcString,
@@ -413,8 +415,7 @@ impl ProxyCache {
                 &md5,
                 cache_file_node_queue.clone(),
             );
-            let cache_file_node_manage =
-                &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+            let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
             let version_expires = cache_file_node_manage.version_expires;
             let cache_file_node_version = cache_file_node_manage.cache_file_node_version;
 
@@ -464,11 +465,16 @@ impl ProxyCache {
                 read_len
             };
             let mut buf = BytesMut::zeroed(read_len as usize);
-            let file_r = &mut *file_r.get_mut();
-            file_r.seek(std::io::SeekFrom::Start(0))?;
+
+            // let file_r = &mut *file_r.get_mut();
+            // file_r.seek(std::io::SeekFrom::Start(0))?;
+            // file_r
+            //     .read_exact(buf.as_mut())
+            //     .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
+
             file_r
-                .read_exact(buf.as_mut())
-                .map_err(|e| anyhow!("err:file.read => e:{}", e))?;
+                .read_exact_at(buf.as_mut(), 0)
+                .context("err:file.read")?;
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -683,7 +689,7 @@ impl ProxyCache {
 }
 
 pub struct HttpCacheFileContext {
-    pub cache_file_node_manage: typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    pub cache_file_node_manage: typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     pub cache_file_node: Option<Arc<ProxyCacheFileNode>>,
     pub cache_file_node_data: Option<Arc<ProxyCacheFileNodeData>>,
     pub cache_file_node_version: u64,
@@ -867,8 +873,7 @@ impl HttpCacheFile {
             net_core_proxy.main.cache_file_node_queue.clone(),
         );
         let is_new = {
-            let cache_file_node_manage =
-                &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+            let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
 
             let net_curr_conf = scc.net_curr_conf();
             let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
@@ -904,7 +909,7 @@ impl HttpCacheFile {
 
         Self::do_get_cache_file_node(r, cache_file_info, &cache_file_node_manage, true).await?;
 
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         if is_new && cache_file_node_manage.cache_file_node_head.is_some() {
             let cache_file_node_head = cache_file_node_manage.cache_file_node_head.as_ref();
             let version_expires = cache_file_node_manage.version_expires;
@@ -937,7 +942,7 @@ impl HttpCacheFile {
         proxy_cache: &ProxyCache,
         md5: &Bytes,
         cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
-    ) -> (bool, typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>) {
+    ) -> (bool, typ::ArcRwLockTokio<ProxyCacheFileNodeManage>) {
         let cache_file_node_manage = proxy_cache.cache_file_node_map.get().get(md5).cloned();
         if cache_file_node_manage.is_some() {
             return (false, cache_file_node_manage.unwrap());
@@ -946,7 +951,7 @@ impl HttpCacheFile {
         let cache_file_node_map = &mut *proxy_cache.cache_file_node_map.get_mut();
         let cache_file_node_manage = cache_file_node_map.get_mut(md5).cloned();
         if cache_file_node_manage.is_none() {
-            let cache_file_node_manage = typ2::ArcRwLockTokio::new(ProxyCacheFileNodeManage::new(
+            let cache_file_node_manage = typ::ArcRwLockTokio::new(ProxyCacheFileNodeManage::new(
                 cache_file_node_queue,
                 proxy_cache.name.clone(),
             ));
@@ -968,7 +973,7 @@ impl HttpCacheFile {
         }
 
         let cache_file_node_manage = cache_file_node_manage.unwrap();
-        let cache_file_node_manage = &*cache_file_node_manage.get(file!(), line!()).await;
+        let cache_file_node_manage = &*cache_file_node_manage.get().await;
         cache_file_node_manage.hot_is_hot.load(Ordering::Relaxed)
     }
 
@@ -993,8 +998,7 @@ impl HttpCacheFile {
             Some(cache_file_node.cache_file_node_head.clone()).into();
 
         let file_ext = Arc::new(FileExt {
-            async_lock: cache_file_node.file_ext.async_lock.clone(),
-            file: ArcMutex::default(),
+            file: OptionArcx::default(),
             fix: cache_file_node.file_ext.fix.clone(),
             file_path: cache_file_node.file_ext.file_path.clone(),
             file_len: cache_file_node.file_ext.file_len,
@@ -1109,7 +1113,7 @@ impl HttpCacheFile {
         _r: &Arc<HttpStreamRequest>,
         _cache_file_node: Arc<ProxyCacheFileNode>,
         cache_file_node_data: Arc<ProxyCacheFileNodeData>,
-        cache_file_node_manage: typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+        cache_file_node_manage: typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     ) -> Result<()> {
         // let scc = r.http_arg.stream_info.get().scc.clone();
         // use crate::config::net_core_proxy;
@@ -1121,7 +1125,7 @@ impl HttpCacheFile {
         //     net_core_proxy_main_conf.main.cache_file_node_queue.clone(),
         // );
         cache_file_node_data.is_run.store(false, Ordering::Relaxed);
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         if cache_file_node_manage.cache_file_node.is_none() {
             cache_file_node_data.node.set_nil();
             return Ok(());
@@ -1157,7 +1161,7 @@ impl HttpCacheFile {
     ) -> Result<(
         bool,
         Option<CacheFileStatus>,
-        typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+        typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
         Option<Arc<ProxyCacheFileNodeData>>,
         Option<Arc<ProxyCacheFileNode>>,
         i64,
@@ -1187,7 +1191,7 @@ impl HttpCacheFile {
                 net_core_proxy_main_conf.main.cache_file_node_queue.clone(),
             );
             let cache_file_node_version = {
-                let cache_file_node_manage = &*cache_file_node_manage.get(file!(), line!()).await;
+                let cache_file_node_manage = &*cache_file_node_manage.get().await;
                 cache_file_node_manage.cache_file_node_version
             };
 
@@ -1227,8 +1231,7 @@ impl HttpCacheFile {
                 };
                 if _is_ok {
                     let pool_cache_file_node_data = {
-                        let cache_file_node_manage =
-                            &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
                         if cache_file_node_manage.cache_file_node_version != cache_file_node_version
                         {
                             continue;
@@ -1261,9 +1264,8 @@ impl HttpCacheFile {
                             //如果文件不存在清空， 文件存在断开链接，  文件变化清空
                             if let Err(e) = ret {
                                 {
-                                    let cache_file_node_manage = &mut *cache_file_node_manage
-                                        .get_mut(file!(), line!())
-                                        .await;
+                                    let cache_file_node_manage =
+                                        &mut *cache_file_node_manage.get_mut().await;
                                     if cache_file_node_manage.cache_file_node_version
                                         != cache_file_node_version
                                     {
@@ -1303,9 +1305,8 @@ impl HttpCacheFile {
                                 )
                                 .await?;
                                 if cache_file_node.is_some() {
-                                    let cache_file_node_manage = &mut *cache_file_node_manage
-                                        .get_mut(file!(), line!())
-                                        .await;
+                                    let cache_file_node_manage =
+                                        &mut *cache_file_node_manage.get_mut().await;
                                     cache_file_node_manage.cache_file_node_queue_clear();
                                     cache_file_node_manage.cache_file_node = None;
                                 }
@@ -1321,7 +1322,7 @@ impl HttpCacheFile {
                         if !file_ext_.is_uniq_eq(&file_ext.fix) {
                             {
                                 let cache_file_node_manage =
-                                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                                    &mut *cache_file_node_manage.get_mut().await;
                                 if cache_file_node_manage.cache_file_node_version
                                     != cache_file_node_version
                                 {
@@ -1342,9 +1343,8 @@ impl HttpCacheFile {
                             let file_ext_ = cache_file_node.get_file_ext();
                             if !file_ext_.is_uniq_eq(&file_ext.fix) {
                                 {
-                                    let cache_file_node_manage = &mut *cache_file_node_manage
-                                        .get_mut(file!(), line!())
-                                        .await;
+                                    let cache_file_node_manage =
+                                        &mut *cache_file_node_manage.get_mut().await;
                                     if cache_file_node_manage.cache_file_node_version
                                         != cache_file_node_version
                                     {
@@ -1374,9 +1374,8 @@ impl HttpCacheFile {
                                         file_ext.fix.file_uniq.uniq,
                                     );
 
-                                    let cache_file_node_manage = &mut *cache_file_node_manage
-                                        .get_mut(file!(), line!())
-                                        .await;
+                                    let cache_file_node_manage =
+                                        &mut *cache_file_node_manage.get_mut().await;
                                     cache_file_node_manage.cache_file_node_queue_clear();
                                     cache_file_node_manage.cache_file_node = None;
                                 }
@@ -1394,7 +1393,7 @@ impl HttpCacheFile {
                             Arc::new(ProxyCacheFileNodeData::new(cache_file_node.clone()));
                         {
                             let cache_file_node_manage =
-                                &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                                &mut *cache_file_node_manage.get_mut().await;
                             cache_file_node_manage
                                 .cache_file_node_queue_lru
                                 .get_mut()
@@ -1422,7 +1421,7 @@ impl HttpCacheFile {
                                         return  Some((false, 0, None));
                                     }
                                         let cache_file_node_manage = &mut *cache_file_node_manage
-                                            .get_mut(file!(), line!())
+                                            .get_mut()
                                             .await;
                                         if cache_file_node_manage.is_upstream {
                                             is_ok = false;
@@ -1444,7 +1443,7 @@ impl HttpCacheFile {
                             }
                             &CacheFileStatus::Expire => {
                                 let cache_file_node_manage =
-                                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                                    &mut *cache_file_node_manage.get_mut().await;
                                 //如何让外部指定要回源
                                 let bitmap = cache_file_node.ctx_thread.get().bitmap.clone();
                                 let is_full = bitmap.get().is_full();
@@ -1479,8 +1478,7 @@ impl HttpCacheFile {
                     }.await;
 
                     if ret.is_none() {
-                        let cache_file_node_manage =
-                            &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
                         cache_file_node_manage
                             .cache_file_node_queue
                             .push_front(cache_file_node_data);
@@ -1507,8 +1505,7 @@ impl HttpCacheFile {
                 }
             } else {
                 if is_ok {
-                    let cache_file_node_manage_ =
-                        &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                    let cache_file_node_manage_ = &mut *cache_file_node_manage.get_mut().await;
                     if cache_file_node_manage_.is_upstream {
                         is_ok = false;
                         continue;
@@ -1541,8 +1538,7 @@ impl HttpCacheFile {
             }
 
             let rx = {
-                let cache_file_node_manage =
-                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
                 if !cache_file_node_manage.is_upstream
                     || (upstream_version >= 0
                         && upstream_version == cache_file_node_manage.upstream_version)
@@ -1573,23 +1569,17 @@ impl HttpCacheFile {
     pub async fn do_get_cache_file_node(
         _r: &Arc<HttpStreamRequest>,
         cache_file_info: &Arc<ProxyCacheFileInfo>,
-        cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+        cache_file_node_manage: &typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
         is_open_file: bool,
     ) -> Result<(bool, Option<Arc<ProxyCacheFileNode>>)> {
-        let cache_file_node = {
-            cache_file_node_manage
-                .get(file!(), line!())
-                .await
-                .cache_file_node
-                .clone()
-        };
+        let cache_file_node = { cache_file_node_manage.get().await.cache_file_node.clone() };
         if cache_file_node.is_some() {
             let cache_file_node = cache_file_node.unwrap();
             cache_file_node.update_file_node_status();
             return Ok((false, Some(cache_file_node)));
         }
 
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         let cache_file_node = cache_file_node_manage.cache_file_node.clone();
         if cache_file_node.is_some() {
             let cache_file_node = cache_file_node.unwrap();
@@ -1627,8 +1617,7 @@ impl HttpCacheFile {
         let cache_file_node = Arc::new(cache_file_node);
 
         let file_ext = Arc::new(FileExt {
-            async_lock: cache_file_node.file_ext.async_lock.clone(),
-            file: ArcMutex::default(),
+            file: OptionArcx::default(),
             fix: cache_file_node.file_ext.fix.clone(),
             file_path: cache_file_node.file_ext.file_path.clone(),
             file_len: cache_file_node.file_ext.file_len,

@@ -11,7 +11,8 @@ use crate::peer_client::PeerStreamToPeerClientTx;
 use crate::protopack::{TunnelClose, TunnelHello, TunnelHelloAck};
 use crate::round_async_channel::RoundAsyncChannel;
 use crate::server::{AcceptSenderType, ServerRecvHello};
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
+use any_base::spawn;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -147,7 +148,7 @@ impl PeerStream {
     pub async fn start(
         mut peer_stream: PeerStream,
         stream: StreamFlow,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<()> {
         if peer_stream.context.is_client {
             let async_ = Box::pin(async move {
@@ -163,9 +164,9 @@ impl PeerStream {
             } else if cfg!(feature = "anyruntime-tokio-spawn") {
                 any_base::executor_spawn::_start_and_free(move || async move { async_.await });
             } else {
-                run_time.spawn(Box::pin(async move {
+                spawn!(run_time, async move {
                     let _ = async_.await;
-                }));
+                });
             }
         } else {
             let ret: Result<()> = async {
@@ -282,6 +283,10 @@ impl PeerStream {
                     e
                 )
             })?;
+
+            if self.accept_tx.is_none() {
+                return Err(anyhow!("err:read_tunnel_hello => accept_tx is none"));
+            }
 
             self.accept_tx
                 .as_ref()

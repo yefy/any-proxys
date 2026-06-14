@@ -3,74 +3,102 @@ use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_proxy::anyproxy::anyproxy::Anyproxy;
 use any_proxy::anyproxy::anyproxy::ArgsConfig;
 use any_proxy::util::default_config;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 extern crate page_size;
 use any_proxy::anyproxy::anymodule;
+use any_proxy::logx::logx;
+use any_proxy::util::default_config::ANYPROXY_LOG_PORT;
+use std::sync::atomic::Ordering;
+
+// /// unix内存管理器
+// #[cfg(unix)]
+// #[global_allocator]
+
+// #[cfg(unix)]
+// static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// unix内存管理器
 #[cfg(unix)]
-extern crate jemallocator;
-#[cfg(unix)]
 #[global_allocator]
 #[cfg(unix)]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// window内存管理器
 #[cfg(windows)]
-#[cfg(all(
-    target_arch = "x86_64",
-    target_os = "windows",
-    target_env = "msvc",
-    target_vendor = "pc"
-))]
-use mimalloc::MiMalloc;
-use std::sync::atomic::Ordering;
-
-#[cfg(windows)]
-#[cfg(all(
-    target_arch = "x86_64",
-    target_os = "windows",
-    target_env = "msvc",
-    target_vendor = "pc"
-))]
+#[cfg(all(target_arch = "x86_64", target_os = "windows", target_env = "msvc"))]
 #[global_allocator]
 #[cfg(windows)]
-#[cfg(all(
-    target_arch = "x86_64",
-    target_os = "windows",
-    target_env = "msvc",
-    target_vendor = "pc"
-))]
-static GLOBAL: MiMalloc = MiMalloc;
+#[cfg(all(target_arch = "x86_64", target_os = "windows", target_env = "msvc"))]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 lazy_static! {
     static ref THREAD_PANIC_MUTEX: Mutex<()> = Mutex::new(());
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    scopeguard::defer! {
+        log::logger().flush();
+    };
+    if let Err(e) = do_main() {
+        eprintln!("err:main => err:{}", e);
+        log::error!("err:main => err:{}", e);
+    }
+    Ok(())
+}
+
+fn do_main() -> Result<()> {
     #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
     std::panic::set_hook(Box::new(thread_panic));
-    if let Err(e) = log4rs::init_file(
-        default_config::ANYPROXY_LOG_FULL_PATH.get().as_str(),
-        Default::default(),
-    ) {
-        eprintln!("err:log4rs::init_file => e:{}", e);
-        return Err(anyhow!("err:log4rs::init_file"))?;
-    }
-    if let Err(e) = do_main() {
-        log::error!("err:main => err:{}", e);
-    }
+
+    executor_local_spawn::_block_on(
+        1,
+        512,
+        move |executor| async move { async_main(executor).await },
+    )
+    .map_err(|e| anyhow!("err:anyproxy block_on => e:{}", e))?;
     Ok(())
 }
 
-fn do_main() -> Result<(), Box<dyn std::error::Error>> {
+async fn async_main(executor: ExecutorLocalSpawn) -> Result<()> {
+    let arg_config = ArgsConfig::load_from_args();
+    let log_port = match arg_config.log_port.clone() {
+        Some(port) => port,
+        None => ANYPROXY_LOG_PORT,
+    };
+    let log4_handle =
+        logx::init_file(default_config::ANYPROXY_LOG_FULL_PATH.get().as_str()).here()?;
+    let log_task_group = logx::http_server(log_port, log4_handle, executor.clone()).here()?;
+
+    // Only compile this deadlock detection when release optimization is disabled (development/testing)
+    #[cfg(feature = "parking_lot_features")]
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            // As long as the feature is enabled in Cargo.toml, this call will work perfectly
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if !deadlocks.is_empty() {
+                log::info!("[WARNING] Detected {} deadlock(s)!", deadlocks.len());
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    log::info!("Deadlock #{}:", i);
+                    for t in threads {
+                        log::info!(
+                            "Thread ID: {:?}, Backtrace:\n{:#?}",
+                            t.thread_id(),
+                            t.backtrace()
+                        );
+                    }
+                }
+            }
+        }
+    });
+
     #[cfg(debug_assertions)]
     log::info!("DEBUG");
     #[cfg(not(debug_assertions))]
@@ -89,7 +117,6 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "anyproxy-openssl")]
     log::info!("anyproxy-openssl");
 
-    let arg_config = ArgsConfig::load_from_args();
     log::info!("arg_config:{:?}", arg_config);
     if Anyproxy::parse_args(&arg_config)? {
         return Ok(());
@@ -113,24 +140,14 @@ fn do_main() -> Result<(), Box<dyn std::error::Error>> {
     use any_base::module::module;
     module::parse_modules()?;
 
-    executor_local_spawn::_block_on(
-        1,
-        512,
-        move |executor| async move { async_main(executor).await },
-    )
-    .map_err(|e| anyhow!("err:anyproxy block_on => e:{}", e))?;
-    Ok(())
-}
-
-async fn async_main(executor: ExecutorLocalSpawn) -> Result<()> {
     //console_subscriber::init();
     let mut anyproxy = Anyproxy::new(executor)?;
-    anyproxy.start().await
+    anyproxy.start(log_task_group).await
 }
 
 /// 捕获异常信号
 fn thread_panic(panic_info: &std::panic::PanicInfo) {
-    let _ = THREAD_PANIC_MUTEX.lock();
+    let _panic_mutex = THREAD_PANIC_MUTEX.lock();
 
     let curr_thread = std::thread::current();
     let curr_thread_name = curr_thread.name().unwrap_or("thread_panic");

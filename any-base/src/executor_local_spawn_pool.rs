@@ -1,10 +1,9 @@
 use super::executor_local_spawn::ExecutorLocalSpawn;
 use super::executor_local_spawn::ExecutorsLocal;
-use super::executor_local_spawn::Runtime;
 use super::executor_local_spawn_pool_wait_run::ExecutorLocalSpawnPoolWaitRun;
+use crate::macros::Runtime;
 use anyhow::Result;
 use std::future::Future;
-use std::sync::Arc;
 
 pub struct ExecutorLocalSpawnPool {
     worker_threads: usize,
@@ -17,7 +16,7 @@ impl ExecutorLocalSpawnPool {
     }
 
     pub fn default(
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
         worker_threads: usize,
         cpu_affinity: bool,
         version: i32,

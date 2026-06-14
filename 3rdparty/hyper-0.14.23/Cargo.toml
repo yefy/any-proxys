@@ -181,7 +181,7 @@ required-features = ["full"]
 
 [dependencies]
 any-base = {path = "../../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-log = "0.4.17"
+log = "0.4"
 
 [dependencies.bytes]
 version = "1"

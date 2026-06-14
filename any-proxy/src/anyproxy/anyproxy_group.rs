@@ -239,16 +239,20 @@ impl AnyproxyGroup {
             }
         }
         let wait_group = WaitGroup::new();
+        for _ in 0..self.worker_threads {
+            wait_group.add();
+        }
         let _ = self
             .config_tx
             .as_ref()
             .unwrap()
             .send((ms, wait_group.clone()));
-        let _ = wait_group.wait_complete(self.worker_threads).await;
+        let _ = wait_group.wait().await;
         log::info!(
-            "reload ok group_version:{}, reload_count:{}",
+            "reload ok group_version:{}, reload_count:{}, worker_threads:{}",
             self.group_version,
-            self.reload_count
+            self.reload_count,
+            self.worker_threads
         );
     }
 

@@ -9,10 +9,11 @@ use std::fmt::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-pub enum VarAnyData {
+pub enum VarAnyData<'a> {
     ArcStr(Arc<String>),
     ArcString(ArcString),
-    Str(String),
+    String(String),
+    Str(&'a str),
     Bool(bool),
     I8(i8),
     I16(i16),
@@ -31,11 +32,12 @@ pub enum VarAnyData {
     HeaderValue(HeaderValue),
 }
 
-impl VarAnyData {
+impl VarAnyData<'_> {
     pub fn len(&self) -> usize {
         match self {
             Self::ArcStr(data) => return data.len(),
             Self::ArcString(data) => return data.len(),
+            Self::String(data) => return data.len(),
             Self::Str(data) => return data.len(),
             Self::Bool(data) => {
                 if *data {
@@ -211,8 +213,12 @@ impl VarAnyData {
                 write!(buf, "{}", &data)?;
                 Ok(())
             }
-            Self::Str(data) => {
+            Self::String(data) => {
                 write!(buf, "{}", &data)?;
+                Ok(())
+            }
+            Self::Str(data) => {
+                write!(buf, "{}", data)?;
                 Ok(())
             }
             Self::Bool(data) => {
@@ -303,7 +309,8 @@ impl VarAnyData {
         match &self {
             Self::ArcStr(data) => Ok(data.as_ref()),
             Self::ArcString(data) => Ok(data.as_str()),
-            Self::Str(data) => Ok(&data),
+            Self::String(data) => Ok(&data),
+            Self::Str(data) => Ok(data),
             Self::Bool(_data) => Ok(""),
             Self::I8(_data) => Ok(""),
             Self::I16(_data) => Ok(""),
@@ -330,6 +337,7 @@ impl VarAnyData {
         match &self {
             Self::ArcStr(_data) => Ok(0),
             Self::ArcString(_data) => Ok(0),
+            Self::String(_data) => Ok(0),
             Self::Str(_data) => Ok(0),
             Self::Bool(data) => {
                 if *data {
@@ -360,6 +368,7 @@ impl VarAnyData {
         match &self {
             Self::ArcStr(_data) => Ok(0.0),
             Self::ArcString(_data) => Ok(0.0),
+            Self::String(_data) => Ok(0.0),
             Self::Str(_data) => Ok(0.0),
             Self::Bool(data) => {
                 if *data {
@@ -401,22 +410,36 @@ impl VarItem {
 
 pub struct VarData {
     item: Arc<VarItem>,
-    var_data: Option<VarAnyData>,
 }
 
 impl Clone for VarData {
     fn clone(&self) -> Self {
         Self {
             item: self.item.clone(),
-            var_data: None,
         }
     }
 }
 
+pub struct VarDataAny<'a> {
+    var_data: Option<VarAnyData<'a>>,
+}
+
+impl Default for VarDataAny<'_> {
+    fn default() -> Self {
+        Self { var_data: None }
+    }
+}
+
+impl Clone for VarDataAny<'_> {
+    fn clone(&self) -> Self {
+        Self { var_data: None }
+    }
+}
+
 pub struct VarContext {
-    //vars: String,
-    //items: Vec<Arc<VarItem>>,
     pub default_str: String,
+    pub datas: Vec<VarData>,
+    pub is_var: bool,
 }
 
 impl VarContext {
@@ -426,15 +449,13 @@ impl VarContext {
     }
 }
 
-pub struct Var {
+#[derive(Clone)]
+pub struct VarParse {
     pub context: Arc<VarContext>,
-    pub datas: Vec<VarData>,
-    pub max_len: usize,
-    pub is_var: bool,
 }
 
-impl Var {
-    pub fn new(vars_str: &str, default_str: &str) -> Result<Var> {
+impl VarParse {
+    pub fn new(vars_str: &str, default_str: &str) -> Result<VarParse> {
         //let mut items = Vec::with_capacity(50);
         let mut datas = Vec::with_capacity(50);
         let mut vars = vars_str;
@@ -450,10 +471,7 @@ impl Var {
                     data: vars.to_string(),
                 });
                 //items.push(item.clone());
-                let data = VarData {
-                    item: item,
-                    var_data: None,
-                };
+                let data = VarData { item: item };
                 datas.push(data);
                 break;
             }
@@ -466,10 +484,7 @@ impl Var {
                     data: data.to_string(),
                 });
                 //items.push(item.clone());
-                let data = VarData {
-                    item: item,
-                    var_data: None,
-                };
+                let data = VarData { item: item };
                 datas.push(data);
                 vars = &vars[var_start_index..];
             }
@@ -483,10 +498,7 @@ impl Var {
                 data: data.to_string(),
             });
             //items.push(item.clone());
-            let data = VarData {
-                item: item,
-                var_data: None,
-            };
+            let data = VarData { item: item };
             datas.push(data);
 
             if var_end_index == vars.len() - 1 {
@@ -496,50 +508,54 @@ impl Var {
             vars = &vars[var_end_index + 1..];
         }
 
-        Ok(Var {
+        Ok(VarParse {
             context: Arc::new(VarContext {
-                //vars: vars_str.to_string(),
-                //items,
                 default_str: default_str.to_string(),
+                datas,
+                is_var,
             }),
-            datas,
-            max_len: 128,
-            is_var,
         })
     }
+}
 
-    pub fn copy(var_parse: &Var) -> Result<Var> {
+pub struct Var<'a> {
+    pub var_parse: VarParse,
+    pub data_anys: Vec<VarDataAny<'a>>,
+    pub max_len: usize,
+}
+
+impl<'a> Var<'a> {
+    pub fn copy(var_parse: &VarParse) -> Result<Var> {
         Ok(Var {
-            context: var_parse.context.clone(),
-            datas: var_parse.datas.to_vec(),
-            max_len: var_parse.max_len,
-            is_var: var_parse.is_var,
+            var_parse: var_parse.clone(),
+            data_anys: vec![VarDataAny::default(); var_parse.context.datas.len()],
+            max_len: 128,
         })
     }
 
     pub fn for_each<'b, S>(&mut self, mut service: S) -> Result<()>
     where
-        S: FnMut(&str) -> Result<Option<VarAnyData>>,
+        S: FnMut(&str) -> Result<Option<VarAnyData<'a>>>,
     {
         let mut max_len = 0;
-        for v in self.datas.iter_mut() {
+        for (i, v) in self.var_parse.context.datas.iter().enumerate() {
             if v.item.is_var {
-                if v.var_data.is_none() {
+                if self.data_anys[i].var_data.is_none() {
                     let var_data = service(v.item.data.as_str());
                     match var_data {
                         Err(e) => return Err(e)?,
                         Ok(var_data) => {
                             if var_data.is_some() {
-                                v.var_data = Some(var_data.unwrap());
+                                self.data_anys[i].var_data = Some(var_data.unwrap());
                             }
                         }
                     }
                 }
 
-                if v.var_data.is_none() {
-                    max_len += self.context.default_str.len();
+                if self.data_anys[i].var_data.is_none() {
+                    max_len += self.var_parse.context.default_str.len();
                 } else {
-                    max_len += v.var_data.as_ref().unwrap().len();
+                    max_len += self.data_anys[i].var_data.as_ref().unwrap().len();
                 }
             } else {
                 max_len += v.item.data.len();
@@ -552,12 +568,12 @@ impl Var {
 
     pub fn join(&self) -> Result<String> {
         let mut var_datas = String::with_capacity(self.max_len);
-        for v in self.datas.iter() {
+        for (i, v) in self.var_parse.context.datas.iter().enumerate() {
             if v.item.is_var {
-                if let Some(data) = v.var_data.as_ref() {
+                if let Some(data) = self.data_anys[i].var_data.as_ref() {
                     data.write(&mut var_datas)?;
                 } else {
-                    self.context.write_default_str(&mut var_datas)?;
+                    self.var_parse.context.write_default_str(&mut var_datas)?;
                 }
             } else {
                 v.item.write_data(&mut var_datas)?;
@@ -574,17 +590,6 @@ impl Var {
         } else {
             true
         }
-    }
-
-    pub fn host_and_port(http_host: &str) -> (&str, &str) {
-        let http_hosts = http_host.trim().split(":").collect::<Vec<_>>();
-        let domain = http_hosts[0].trim();
-        let port = if http_hosts.len() > 1 {
-            http_hosts[1].trim()
-        } else {
-            ""
-        };
-        (domain, port)
     }
 
     pub fn var_name(var: &str) -> &str {

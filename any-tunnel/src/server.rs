@@ -3,7 +3,7 @@ use super::stream::Stream;
 use super::stream_flow::StreamFlow;
 use crate::peer_stream::PeerStreamKey;
 use crate::protopack::TunnelHello;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::stream_flow::StreamReadWriteFlow;
 use any_base::stream_flow::StreamReadWriteTokio;
 use any_base::typ::ArcMutex;
@@ -13,6 +13,9 @@ use anyhow::Result;
 use hashbrown::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use rivetx_core::linked_hash_mapx::LinkedHashMapx;
+
+const PEER_CLIENT_SESSION_MAX_SIZE: usize = 1000000;
 
 pub type AcceptSenderType = async_channel::Sender<ServerRecv>;
 pub type AcceptReceiverType = async_channel::Receiver<ServerRecv>;
@@ -29,15 +32,11 @@ pub enum ServerRecv {
 pub struct Listener {
     accept_rx: AcceptReceiverType,
     server: Server,
-    run_time: Arc<Box<dyn Runtime>>,
+    run_time: Runtime,
 }
 
 impl Listener {
-    pub fn new(
-        accept_rx: AcceptReceiverType,
-        server: Server,
-        run_time: Arc<Box<dyn Runtime>>,
-    ) -> Listener {
+    pub fn new(accept_rx: AcceptReceiverType, server: Server, run_time: Runtime) -> Listener {
         Listener {
             accept_rx,
             server,
@@ -61,15 +60,11 @@ impl Listener {
 pub struct Publish {
     accept_tx: AcceptSenderType,
     server: Server,
-    run_time: Arc<Box<dyn Runtime>>,
+    run_time: Runtime,
 }
 
 impl Publish {
-    pub fn new(
-        accept_tx: AcceptSenderType,
-        server: Server,
-        run_time: Arc<Box<dyn Runtime>>,
-    ) -> Publish {
+    pub fn new(accept_tx: AcceptSenderType, server: Server, run_time: Runtime) -> Publish {
         Publish {
             accept_tx,
             server,
@@ -112,18 +107,18 @@ impl Publish {
 }
 
 pub struct ServerContext {
-    peer_client_map: HashMap<String, Option<Arc<PeerClient>>>,
+    peer_client_map: LinkedHashMapx<String, Option<Arc<PeerClient>>>,
 }
 
 impl ServerContext {
     pub fn new() -> ServerContext {
         ServerContext {
-            peer_client_map: HashMap::new(),
+            peer_client_map: LinkedHashMapx::new(PEER_CLIENT_SESSION_MAX_SIZE),
         }
     }
 
     pub fn get(&mut self, session_id: &str) -> Option<Option<Arc<PeerClient>>> {
-        self.peer_client_map.get(session_id).cloned()
+        self.peer_client_map.hash_map.get(session_id).cloned()
     }
 
     pub fn insert(&mut self, session_id: String, peer_client: Option<Arc<PeerClient>>) {
@@ -154,7 +149,7 @@ impl Server {
         remote_addr: SocketAddr,
         domain: Option<ArcString>,
         accept_tx: AcceptSenderType,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<()> {
         PeerClient::do_create_peer_stream(
             false,
@@ -175,7 +170,7 @@ impl Server {
     pub async fn accept(
         &self,
         accept_rx: &mut AcceptReceiverType,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<(Stream, SocketAddr, SocketAddr, Option<ArcString>)> {
         loop {
             let recv_msg = accept_rx
@@ -287,7 +282,7 @@ impl Server {
                 {
                     self.context
                         .get_mut()
-                        .insert(session_id.string(), Some(peer_client.clone()));
+                        .insert(session_id.to_string(), Some(peer_client.clone()));
                 }
 
                 Ok(Some((stream, local_addr, remote_addr, domain)))
@@ -306,7 +301,7 @@ impl Server {
         }
     }
 
-    pub async fn listen(&self, run_time: Arc<Box<dyn Runtime>>) -> (Listener, Publish) {
+    pub async fn listen(&self, run_time: Runtime) -> (Listener, Publish) {
         let (accept_tx, accept_rx) = async_channel::unbounded::<ServerRecv>();
         (
             Listener::new(accept_rx, self.clone(), run_time.clone()),

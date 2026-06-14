@@ -30,7 +30,7 @@ impl ThreadSpawnWaitRun {
 
     pub async fn wait_run(&mut self) -> Result<()> {
         self.run_wait_group
-            .wait_complete(self.worker_threads)
+            .wait()
             .await
             .map_err(|e| anyhow!("err:wait_start => e:{}", e))?;
         Ok(())

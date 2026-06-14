@@ -23,24 +23,40 @@ path = "../any-tunnel/examples/server.rs"
 name = "any_tunnel_client"
 path = "../any-tunnel/examples/client.rs"
 
+[[example]]
+name = "any_tunnel_server_single"
+path = "../any-tunnel/examples/server_single.rs"
+
+[[example]]
+name = "any_tunnel_client_single"
+path = "../any-tunnel/examples/client_single.rs"
+
 #run --no-default-features --features "anyproxy-rustls anyproxy-ebpf"
 [features]
 default = ["anyproxy-openssl"]
 #default = ["anyproxy-rustls"]
+
 #使用openssl加密
-anyproxy-openssl = ["openssl-sys", "openssl", "tokio-openssl", "hyper-openssl"]
+anyproxy-openssl = ["openssl-sys", "openssl", "tokio-openssl", "hyper-openssl", "any-base/anyspawn-parking-lot"]
 #使用rustls加密
-anyproxy-rustls = []
+anyproxy-rustls = ["any-base/anyspawn-parking-lot"]
+
+anyproxy-openssl-check = ["anyproxy-openssl", "anyproxy-check"]
+anyproxy-rustls-check = ["anyproxy-rustls", "anyproxy-check"]
+
 anyproxy-ebpf = ["libbpf-rs", "libbpf-cargo"]
 anyproxy-reuseport = []
 anyproxy-msg-verdict = []
 anyproxy-write-block-time-ms = []
-anydebug-error = ["anydebug", "anyerror"]
+
+anyproxy-check = ["anydebug-error", "anyspawn-count", "anylock-time", "anyio-file", "parking_lot_features"]
+anydebug-error = ["anydebug", "anyerror", "any-tunnel/anydebug-error"]
 anydebug = []
 anyerror = []
-anyspawn-count = []
+anyspawn-count = ["any-base/anyspawn-count"]
 anyio-file = []
-anylock-time =[]
+anylock-time =["any-base/anylock-time"]
+parking_lot_features = ["parking_lot/deadlock_detection", "any-base/parking_lot_features"]
 
 
 
@@ -74,18 +90,22 @@ overflow-checks = false
 strip = true
 
 [dependencies]
-any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-anyhow = {path = "../3rdparty/anyhow"}
-awaitgroup = {path = "../3rdparty/awaitgroup"}
-any-tunnel = {path = "../any-tunnel"}
+
+any-base = {path = "../any-base", default-features = false}
+any-tunnel = {path = "../any-tunnel", default-features = false}
+parking_lot = { version = "0.12.1", default-features = false}
+
+anyhow = { git = "https://github.com/yefy/anyhow.git"}
+awaitgroup = { git = "https://github.com/yefy/awaitgroup.git" }
+rivetx-core = { git = "https://github.com/yefy/rivetx-rs.git" }
 any-tunnel2 = {path = "../any-tunnel2", features = ["anyack", "anyruntime-tokio-spawn"], default-features = false}
 hyper = { path = "../3rdparty/hyper-0.14.23", features = ["full"] }
 #hyper = { version = "0.14.23", features = ["full"] }
 #hyper = {git = "https://github.com/hyperium/hyper", features = ["full"]}
 #quinn = {path = "../quinn-0.8.5"}
 quinn = "0.9.3"
-log = "0.4.17"
-log4rs = "1.2.0"
+log = "0.4"
+log4rs = { git = "https://github.com/yefy/log4rs.git" }
 libc = "0.2.153"
 lazy_static = "1.4.0"
 backtrace = "0.3.67"
@@ -94,8 +114,8 @@ scopeguard = "1.1.0"
 toml = "0.5.10"
 serde = "1.0.152"
 #console-subscriber = "0.2.0"
-#tokio = { version = "1.35.1", features = ["full", "tracing"], default-features = false}
-tokio = { version = "1.35.1", features = ["full"], default-features = false}
+#tokio = { version = "1.38.0", features = ["full", "tracing"], default-features = false}
+tokio = { version = "1.38.0", features = ["full"], default-features = false}
 async-trait = "0.1.61"
 regex = "1.10.2"
 futures-util = { version = "0.3.29", default-features = false, features = ["async-await", "sink", "std"] }
@@ -127,13 +147,12 @@ http = "0.2.9"
 hyper-rustls = "0.23.2"
 bytes = "1.5.0"
 base64 = "0.21.0"
-parking_lot = "0.12.1"
 linked_hash_set = "0.1"
 once_cell = "1.0"
 url = "2.3.1"
 futures-core = "0.3.29"
 md5 = "0.7.0"
-time = "0.2"
+time = "0.3"
 httparse = "1.8.0"
 radix_trie = "0.2.1"
 crc32fast = "1.4.0"
@@ -141,6 +160,9 @@ fs_extra = "1.3.0"
 futures-sink = "0.3.30"
 futures = "0.3.30"
 futures-lite = "2.3.0"
+matchit = "0.8"
+system-interface = "0.27.3"
+axum = "0.8.4"
 
 clap = { version = "4.3.19", features = ["derive"] }
 #wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "2ade3ad", features = ["component-model"] }
@@ -149,6 +171,7 @@ clap = { version = "4.3.19", features = ["derive"] }
 wasmtime = { version = "17.0.2" , features = ["component-model"] }
 wasmtime-wasi = { version = "17.0.2" }
 wasi-cap-std-sync = { version = "17.0.2" }
+
 
 [dependencies.httpdate]
 version = "1.0"
@@ -165,7 +188,7 @@ optional = true
 version = "0.6.3"
 
 [build-dependencies.anyhow]
-path = "../3rdparty/anyhow"
+git = "https://github.com/yefy/anyhow.git"
 
 [build-dependencies.vergen]
 version = "7.5.0"
@@ -210,8 +233,12 @@ features = ["all"]
 version = "0.27.1"
 features = ["socket"]
 
-[target."cfg(unix)".dependencies.jemallocator]
-version = "0.5.0"
+#[target."cfg(unix)".dependencies.jemallocator]
+#version = "0.5.0"
+
+[target."cfg(unix)".dependencies.tikv-jemallocator]
+version = "0.7.0"
+features = ["profiling"]
 
 [target."cfg(windows)".dependencies.mimalloc]
 version = "0.1.34"

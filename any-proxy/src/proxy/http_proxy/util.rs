@@ -11,9 +11,9 @@ use crate::proxy::http_proxy::http_stream_request::{
 use any_base::file_ext::{unlink, FileCacheBytes};
 use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::io::async_write_msg::{MsgWriteBuf, MsgWriteBufBytes};
-use any_base::typ::ArcMutex;
-use any_base::typ2;
-use anyhow::anyhow;
+use any_base::typ;
+use any_base::typ::{ArcMutex, OptionArcx};
+use anyhow::{anyhow, Context};
 use anyhow::Result;
 use http::Response;
 use hyper::body::HttpBody;
@@ -27,6 +27,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(feature = "anyio-file")]
 use std::time::Instant;
+use system_interface::fs::FileIoExt;
 
 pub async fn response_body_read(
     r: &Arc<HttpStreamRequest>,
@@ -106,7 +107,7 @@ pub async fn response_body_read(
 
 pub async fn write_cache_file(
     r: &Arc<HttpStreamRequest>,
-    file: ArcMutex<File>,
+    file: OptionArcx<File>,
     file_seek: u64,
     file_cache_bytes: FileCacheBytes,
 ) -> Result<usize> {
@@ -115,23 +116,29 @@ pub async fn write_cache_file(
     let curr_slice_index = r.ctx.get().r_in.curr_slice_index;
     tokio::task::spawn_blocking(move || {
         let size = file_cache_bytes.remaining();
-        let file = &mut *file.get_mut();
-        use std::io::Seek;
         #[cfg(feature = "anyio-file")]
-        let start_time = Instant::now();
-        file.seek(std::io::SeekFrom::Start(file_seek))?;
-        if false {
-            const MAX_WRITEV_BUFS: usize = 64;
-            let mut iovs = [IoSlice::new(&[]); MAX_WRITEV_BUFS];
-            let len = file_cache_bytes.chunks_vectored(&mut iovs);
-            if len <= 0 {
-                log::error!("len <= 0");
-                return Ok(0);
-            }
-            file.write_vectored(&mut iovs[0..len])?;
-        } else {
+            let start_time = Instant::now();
+
+        // let file = &mut *file.get_mut();
+        // use std::io::Seek;
+        // file.seek(std::io::SeekFrom::Start(file_seek))?;
+        // if false {
+        //     const MAX_WRITEV_BUFS: usize = 64;
+        //     let mut iovs = [IoSlice::new(&[]); MAX_WRITEV_BUFS];
+        //     let len = file_cache_bytes.chunks_vectored(&mut iovs);
+        //     if len <= 0 {
+        //         log::error!("len <= 0");
+        //         return Ok(0);
+        //     }
+        //     file.write_vectored(&mut iovs[0..len])?;
+        // } else {
+        //     let data = file_cache_bytes.chunk_all_bytes();
+        //     file.write_all(data.as_ref())?;
+        // }
+
+        {
             let data = file_cache_bytes.chunk_all_bytes();
-            file.write_all(data.as_ref())?;
+            file.write_all_at(data.as_ref(), file_seek).here()?;
         }
 
         #[cfg(feature = "anyio-file")]
@@ -222,12 +229,16 @@ pub async fn bitmap_to_cache_file(
             }
             bitmap.unwrap().get().clone()
         };
-        let file = &mut *file.get_mut();
-        use std::io::Seek;
         #[cfg(feature = "anyio-file")]
         let start_time = Instant::now();
-        file.seek(std::io::SeekFrom::Start(bitmap_start as u64))?;
-        file.write_all(bitmap.as_slice())?;
+
+        // let file = &mut *file.get_mut();
+        // use std::io::Seek;
+        // file.seek(std::io::SeekFrom::Start(bitmap_start as u64))?;
+        // file.write_all(bitmap.as_slice())?;
+
+        file.write_all_at(bitmap.as_slice(), bitmap_start as u64).here()?;
+
         #[cfg(feature = "anyio-file")]
         if start_time.elapsed().as_millis() > 100 {
             log::info!(
@@ -375,7 +386,7 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
         net_core_proxy.main.cache_file_node_queue.clone(),
     );
     let cache_file_node_manage_ = cache_file_node_manage.clone();
-    let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+    let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
 
     let is_ok = http_cache_file
         .set_cache_file_node(&r, cache_file_node.clone(), cache_file_node_manage)
@@ -479,13 +490,13 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
 
 pub async fn update_expired_cache_file(
     r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node_manage: &typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
 ) -> Result<bool> {
     let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
     let upstream_waits = {
         let cache_file_node_response_info = &cache_file_node.response_info;
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         {
             let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
             if cache_file_node_ctx.cache_file_node_version
@@ -589,13 +600,16 @@ pub async fn update_expired_cache_file(
     let session_id = r.session_id;
     tokio::task::spawn_blocking(move || {
         let func = || -> Result<()> {
-            use std::io::Seek;
             //更新文件时间头
-            let file = &mut *file.get_mut();
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
-            file.seek(std::io::SeekFrom::Start(0))?;
-            file.write_all(file_head_time.as_slice())?;
+
+            // use std::io::Seek;
+            // let file = &mut *file.get_mut();
+            // file.seek(std::io::SeekFrom::Start(0))?;
+            // file.write_all(file_head_time.as_slice())?;
+
+            file.write_all_at(file_head_time.as_slice(), 0).here()?;
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -641,13 +655,16 @@ pub async fn update_expired_cache_file_by_not_get(
     let session_id = r.session_id;
     tokio::task::spawn_blocking(move || {
         let func = || -> Result<()> {
-            use std::io::Seek;
             //更新文件时间头
-            let file = &mut *file.get_mut();
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
-            file.seek(std::io::SeekFrom::Start(0))?;
-            file.write_all(file_head_time.as_slice())?;
+
+            // use std::io::Seek;
+            // let file = &mut *file.get_mut();
+            // file.seek(std::io::SeekFrom::Start(0))?;
+            // file.write_all(file_head_time.as_slice())?;
+
+            file.write_all_at(file_head_time.as_slice(), 0).here()?;
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -668,12 +685,12 @@ pub async fn update_expired_cache_file_by_not_get(
 
 pub async fn check_miss(
     r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node_manage: &typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
 ) -> Result<bool> {
     log::trace!(target: "is_ups", "session_id:{}, cache_file_node Miss", r.session_id);
     let out_response_info = r.ctx.get().r_out.response_info.clone().unwrap();
-    let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+    let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
     let is_expire_to_miss = {
         let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
         if cache_file_node_ctx.cache_file_node_version
@@ -728,7 +745,7 @@ pub async fn check_miss(
 
 pub async fn update_expired_cache_file_304(
     r: &Arc<HttpStreamRequest>,
-    cache_file_node_manage: &typ2::ArcRwLockTokio<ProxyCacheFileNodeManage>,
+    cache_file_node_manage: &typ::ArcRwLockTokio<ProxyCacheFileNodeManage>,
     cache_file_node: &Arc<ProxyCacheFileNode>,
     ups_response: &http::Response<Body>,
 ) -> Result<bool> {
@@ -740,7 +757,7 @@ pub async fn update_expired_cache_file_304(
 
     let upstream_waits = {
         let cache_file_node_response_info = &cache_file_node.response_info;
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         {
             let cache_file_node_ctx = &mut *cache_file_node.ctx_thread.get_mut();
             if cache_file_node_ctx.cache_file_node_version
@@ -823,13 +840,16 @@ pub async fn update_expired_cache_file_304(
     let session_id = r.session_id;
     tokio::task::spawn_blocking(move || {
         let func = || -> Result<()> {
-            use std::io::Seek;
             //更新文件时间头
-            let file = &mut *file.get_mut();
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
-            file.seek(std::io::SeekFrom::Start(0))?;
-            file.write_all(file_head_time.as_slice())?;
+
+            //use std::io::Seek;
+            // let file = &mut *file.get_mut();
+            // file.seek(std::io::SeekFrom::Start(0))?;
+            // file.write_all(file_head_time.as_slice())?;
+
+            file.write_all_at(file_head_time.as_slice(), 0).here()?;
 
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
@@ -866,8 +886,7 @@ pub async fn update_or_create_cache_file(r: &Arc<HttpStreamRequest>) -> Result<(
                 return Ok(());
             }
             let upstream_waits = {
-                let cache_file_node_manage =
-                    &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+                let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
                 cache_file_node_manage.is_upstream = false;
                 if r.ctx.get().is_upstream_add {
                     r.ctx.get_mut().is_upstream_add = false;
@@ -964,7 +983,7 @@ pub async fn update_or_create_cache_file_304(
         )
     };
     {
-        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut(file!(), line!()).await;
+        let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
         cache_file_node_manage.is_upstream = false;
         if r.ctx.get().is_upstream_add {
             r.ctx.get_mut().is_upstream_add = false;
@@ -1023,7 +1042,7 @@ pub async fn del_expires_cache_file(proxy_cache: &Arc<ProxyCache>, main: &ConfMa
     }
 
     let manage = manage.unwrap();
-    let manage = &mut *manage.get_mut(file!(), line!()).await;
+    let manage = &mut *manage.get_mut().await;
 
     if cache_file_node_expires.cache_file_node_version != manage.cache_file_node_version {
         return Ok(());
@@ -1086,7 +1105,7 @@ pub async fn set_expires_cache_file(main: &ConfMain, md5: &Bytes) -> Result<()> 
             return Ok(());
         }
         let manage = manage.unwrap();
-        let manage = &mut *manage.get_mut(file!(), line!()).await;
+        let manage = &mut *manage.get_mut().await;
         if manage.cache_file_node_head.is_some() {
             log::trace!(target: "purge", "del_cache_file is_delay_del proxy_cache_name:{}, trie_url:{}, proxy_cache_path:{}",
                         proxy_cache_name, manage.cache_file_node_head.trie_url, manage.cache_file_node_head.proxy_cache_path);
@@ -1123,7 +1142,7 @@ pub async fn del_md5(main: &ConfMain, md5: &Bytes) -> Result<()> {
             return Ok(());
         }
         let manage = manage.unwrap();
-        let manage = &mut *manage.get_mut(file!(), line!()).await;
+        let manage = &mut *manage.get_mut().await;
 
         del_cache_file(manage, &proxy_cache, main, md5).await?;
     }

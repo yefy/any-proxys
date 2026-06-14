@@ -19,6 +19,9 @@ use std::sync::Arc;
 //主模块才有
 create_server
 
+//主配置才有
+create_main_confs
+
 //创建main
 create_main_confs -> create_conf
 
@@ -50,7 +53,7 @@ merge_old_main_confs_map  -> merge_old_conf
 //递归main  server local  进行合并
 merge_confs_map    -> merge_conf
 
-//全局共享数据参考 any-proxy\src\confighttp_core_proxy.rs   proxy_cache  proxy_cache_name的处理
+//全局共享数据参考 any-proxy\src\config\net_core_proxy.rs   proxy_cache  proxy_cache_name的处理
 */
 
 lazy_static! {
@@ -81,6 +84,7 @@ pub fn parse_modules() -> Result<()> {
 pub struct GModules {
     modules: Vec<ArcRwLock<Module>>,
     main_map: HashMap<String, ArcRwLock<Module>>,
+    //配置create_main_confs, 主模块递增, 主模块个数
     main_index_len: i32,
 }
 
@@ -217,12 +221,13 @@ fafa
 */
 
 #[async_trait]
-pub trait Server {
+pub trait Server: Send + Sync {
     async fn start(&mut self, ms: Modules, any: ArcUnsafeAny) -> Result<()>;
     async fn send(&self, any: ArcUnsafeAny) -> Result<()>;
     async fn wait(&self, any: ArcUnsafeAny) -> Result<()>;
     async fn stop(&self, any: ArcUnsafeAny) -> Result<()>;
 }
+
 
 #[derive(Clone)]
 pub struct ConfArg {
@@ -784,9 +789,13 @@ pub struct Func {
 #[derive(Clone)]
 pub struct Module {
     pub name: String,
+    //配置create_main_confs, 主模块递增, 主模块的index唯一标准
     pub main_index: i32,
+    //配置create_main_confs, 当前主模块的子模块全部模块递增
     pub ctx_index: i32,
+    //全部模块递增
     pub index: i32,
+    //配置create_main_confs, 当前主模块的子模块全部模块个数
     pub ctx_index_len: i32,
     pub func: Arc<Func>,
     pub cmds: Arc<Vec<Cmd>>,

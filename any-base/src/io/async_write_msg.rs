@@ -139,13 +139,6 @@ use std::sync::Arc;
 
 impl fmt::Debug for MsgWriteBuf {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[derive(Debug)]
-        struct Streaming;
-        #[derive(Debug)]
-        struct Empty;
-        #[derive(Debug)]
-        struct Full<'a>(&'a Bytes);
-
         let mut builder = f.debug_tuple("MsgWriteBuf");
         builder.finish()
     }

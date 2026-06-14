@@ -8,8 +8,8 @@ use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-type VarFunc = fn(stream_info: &StreamInfo) -> Option<VarAnyData>;
-type VarHttpFunc = fn(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData>;
+type VarFunc = fn(stream_info: &StreamInfo) -> Option<VarAnyData<'_>>;
+type VarHttpFunc = for<'a> fn(str: &str, stream_info: &'a StreamInfo) -> Option<VarAnyData<'a>>;
 
 lazy_static! {
     pub static ref TIMEOUT_EXIT: ArcString = "timeout_exit".into();
@@ -85,6 +85,7 @@ lazy_static! {
         map.insert("is_open_ebpf", is_open_ebpf);
         map.insert("open_sendfile", open_sendfile);
         map.insert("upstream_balancer", upstream_balancer);
+        map.insert("upstream_name", upstream_name);
         map.insert("is_proxy_protocol_hello", is_proxy_protocol_hello);
         map.insert("buffer_cache", buffer_cache);
         map.insert("upstream_curr_stream_size", upstream_curr_stream_size);
@@ -110,6 +111,7 @@ lazy_static! {
         map.insert("http_max_upstream_count", http_max_upstream_count);
         map.insert("http_cache_file_md5", http_cache_file_md5);
         map.insert("http_cache_file_path", http_cache_file_path);
+        map.insert("local_name", local_name);
         map
     };
     pub static ref HTTP_REQUEST_FLAG: &'static str = "http_request_";
@@ -124,7 +126,7 @@ lazy_static! {
     };
 }
 
-pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<VarAnyData>> {
+pub fn find<'a>(var_name: &str, stream_info: &'a StreamInfo) -> Result<Option<VarAnyData<'a>>> {
     let index = var_name.parse::<usize>();
     if index.is_ok() {
         let index = index.unwrap();
@@ -161,7 +163,7 @@ pub fn find(var_name: &str, stream_info: &StreamInfo) -> Result<Option<VarAnyDat
 
 pub fn local_time(_stream_connect: &StreamInfo) -> Option<VarAnyData> {
     let date_str = Local::now().to_string();
-    Some(VarAnyData::Str(date_str[0..26].to_string()))
+    Some(VarAnyData::String(date_str[0..26].to_string()))
 }
 
 pub fn ssl_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -194,26 +196,26 @@ pub fn remote_domain(stream_info: &StreamInfo) -> Option<VarAnyData> {
 pub fn local_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.client_protocol77.is_none() {
         if stream_info.client_protocol7.is_some() {
-            Some(VarAnyData::Str(format!(
+            Some(VarAnyData::String(format!(
                 "{}_{}",
                 stream_info.server_stream_info.protocol7.to_string(),
                 stream_info.client_protocol7.as_ref().unwrap().to_string(),
             )))
         } else {
-            Some(VarAnyData::Str(
+            Some(VarAnyData::String(
                 stream_info.server_stream_info.protocol7.to_string(),
             ))
         }
     } else {
         if stream_info.client_protocol7.is_some() {
-            Some(VarAnyData::Str(format!(
+            Some(VarAnyData::String(format!(
                 "{}_{}_{}",
                 stream_info.client_protocol77.as_ref().unwrap().to_string(),
                 stream_info.client_protocol7.as_ref().unwrap().to_string(),
                 stream_info.server_stream_info.protocol7.to_string()
             )))
         } else {
-            Some(VarAnyData::Str(format!(
+            Some(VarAnyData::String(format!(
                 "{}_{}",
                 stream_info.client_protocol77.as_ref().unwrap().to_string(),
                 stream_info.server_stream_info.protocol7.to_string()
@@ -227,7 +229,7 @@ pub fn upstream_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
         return None;
     }
     if stream_info.upstream_protocol77.is_none() {
-        Some(VarAnyData::Str(
+        Some(VarAnyData::String(
             stream_info
                 .upstream_connect_info
                 .get()
@@ -235,7 +237,7 @@ pub fn upstream_protocol(stream_info: &StreamInfo) -> Option<VarAnyData> {
                 .to_string(),
         ))
     } else {
-        Some(VarAnyData::Str(format!(
+        Some(VarAnyData::String(format!(
             "{}_{}",
             stream_info
                 .upstream_protocol77
@@ -258,7 +260,7 @@ pub fn local_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
 }
 
 pub fn local_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    Some(VarAnyData::Str(
+    Some(VarAnyData::String(
         stream_info
             .server_stream_info
             .local_addr
@@ -281,7 +283,7 @@ pub fn remote_addr(stream_info: &StreamInfo) -> Option<VarAnyData> {
 }
 
 pub fn remote_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
-    Some(VarAnyData::Str(
+    Some(VarAnyData::String(
         stream_info.server_stream_info.remote_addr.ip().to_string(),
     ))
 }
@@ -327,7 +329,7 @@ pub fn client_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.protocol_hello.is_none() {
         return None;
     }
-    Some(VarAnyData::Str(
+    Some(VarAnyData::String(
         stream_info.protocol_hello.client_addr.ip().to_string(),
     ))
 }
@@ -397,7 +399,7 @@ pub fn upstream_ip(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.upstream_connect_info.is_none() {
         return None;
     }
-    Some(VarAnyData::Str(
+    Some(VarAnyData::String(
         stream_info
             .upstream_connect_info
             .get()
@@ -444,7 +446,7 @@ pub fn stream_work_times(stream_info: &StreamInfo) -> Option<VarAnyData> {
     }
     datas.push_str(&c_datas);
     datas.push_str(&s_datas);
-    Some(VarAnyData::Str(datas))
+    Some(VarAnyData::String(datas))
 }
 
 pub fn client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -585,7 +587,7 @@ pub fn is_open_ebpf(stream_info: &StreamInfo) -> Option<VarAnyData> {
 
 pub fn open_sendfile(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.open_sendfile.is_some() {
-        return Some(VarAnyData::Str(stream_info.open_sendfile.clone().unwrap()));
+        return Some(VarAnyData::Str(stream_info.open_sendfile.as_ref().unwrap()));
     }
     return None;
 }
@@ -597,6 +599,21 @@ pub fn upstream_balancer(stream_info: &StreamInfo) -> Option<VarAnyData> {
         ));
     }
     return None;
+}
+
+
+pub fn upstream_name(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.scc.is_none() {
+        return None;
+    }
+
+    use crate::config::net_server_core;
+    let net_server_core_conf = net_server_core::curr_conf(stream_info.scc.net_curr_conf());
+
+    return Some(VarAnyData::ArcString(
+        net_server_core_conf.upstream_name
+            .clone().into(),
+    ));
 }
 
 pub fn is_proxy_protocol_hello(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -727,7 +744,7 @@ pub fn stream_stream_info(stream_info: &StreamInfo) -> Option<VarAnyData> {
     };
 
     let data = format!("{:?}___{:?}", ssc_upload, ssc_download);
-    return Some(VarAnyData::Str(data));
+    return Some(VarAnyData::String(data));
 }
 
 pub fn http_local_cache_req_count(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -744,7 +761,7 @@ pub fn http_cache_status(stream_info: &StreamInfo) -> Option<VarAnyData> {
         return None;
     }
     let http_r_ctx = &*stream_info.http_r.ctx.get();
-    return Some(VarAnyData::Str(format!(
+    return Some(VarAnyData::String(format!(
         "{:?}_{:?}",
         http_r_ctx.r_in.main.http_cache_status, http_r_ctx.r_in.http_cache_status
     )));
@@ -762,7 +779,7 @@ pub fn http_cache_file_status(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if hcf_ctx_thread.cache_file_status.is_none() {
         return None;
     }
-    return Some(VarAnyData::Str(format!(
+    return Some(VarAnyData::String(format!(
         "{:?}",
         hcf_ctx_thread.cache_file_status
     )));
@@ -804,16 +821,16 @@ pub fn http_max_upstream_count(stream_info: &StreamInfo) -> Option<VarAnyData> {
     return Some(VarAnyData::I64(http_r_ctx.max_upstream_count));
 }
 
-pub fn http_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_request<'a>(name: &str, stream_info: &'a StreamInfo) -> Option<VarAnyData<'a>> {
     if stream_info.http_r.is_none() {
         return None;
     }
     let http_r_ctx = &*stream_info.http_r.ctx.get();
 
     if name == "method" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.method.to_string()));
+        return Some(VarAnyData::String(http_r_ctx.r_in.method.to_string()));
     } else if name == "url" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.uri.to_string()));
+        return Some(VarAnyData::String(http_r_ctx.r_in.uri.to_string()));
     } else if name == "uri" {
         let uri = http_r_ctx
             .r_in
@@ -822,19 +839,19 @@ pub fn http_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> 
             .map(|x| x.as_str())
             .unwrap_or("/")
             .to_string();
-        return Some(VarAnyData::Str(uri));
+        return Some(VarAnyData::String(uri));
     } else if name == "version" {
-        return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_in.version)));
+        return Some(VarAnyData::String(format!("{:?}", http_r_ctx.r_in.version)));
     } else if name == "host" {
         let domain = http_r_ctx.r_in.uri.host().unwrap();
         let port_u16 = http_r_ctx.r_in.uri.port_u16().unwrap();
-        return Some(VarAnyData::Str(format!("{}:{}", domain, port_u16)));
+        return Some(VarAnyData::String(format!("{}:{}", domain, port_u16)));
     } else if name == "scheme" {
         let scheme = http_r_ctx.r_in.uri.scheme_str().unwrap().to_string();
-        return Some(VarAnyData::Str(scheme));
+        return Some(VarAnyData::String(scheme));
     } else if name == "domain" {
-        let domain = http_r_ctx.r_in.uri.host().unwrap();
-        return Some(VarAnyData::Str(domain.to_string()));
+        let domain = http_r_ctx.r_in.uri.host().unwrap().to_string();
+        return Some(VarAnyData::String(domain));
     } else if name == "port" {
         let port_u16 = http_r_ctx.r_in.uri.port_u16().unwrap();
         return Some(VarAnyData::U16(port_u16));
@@ -848,16 +865,18 @@ pub fn http_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> 
     return Some(VarAnyData::HeaderValue(value));
 }
 
-pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_ups_request<'a>(name: &str, stream_info: &'a StreamInfo) -> Option<VarAnyData<'a>> {
     if stream_info.http_r.is_none() {
         return None;
     }
     let http_r_ctx = &*stream_info.http_r.ctx.get();
 
     if name == "method" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.upstream_method.to_string()));
+        return Some(VarAnyData::String(
+            http_r_ctx.r_in.upstream_method.to_string(),
+        ));
     } else if name == "url" {
-        return Some(VarAnyData::Str(http_r_ctx.r_in.upstream_uri.to_string()));
+        return Some(VarAnyData::String(http_r_ctx.r_in.upstream_uri.to_string()));
     } else if name == "uri" {
         let uri = http_r_ctx
             .r_in
@@ -866,16 +885,16 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
             .map(|x| x.as_str())
             .unwrap_or("/")
             .to_string();
-        return Some(VarAnyData::Str(uri));
+        return Some(VarAnyData::String(uri));
     } else if name == "version" {
-        return Some(VarAnyData::Str(format!(
+        return Some(VarAnyData::String(format!(
             "{:?}",
             http_r_ctx.r_in.upstream_version
         )));
     } else if name == "host" {
         let domain = http_r_ctx.r_in.upstream_uri.host().unwrap();
         let port_u16 = http_r_ctx.r_in.upstream_uri.port_u16().unwrap();
-        return Some(VarAnyData::Str(format!("{}:{}", domain, port_u16)));
+        return Some(VarAnyData::String(format!("{}:{}", domain, port_u16)));
     } else if name == "scheme" {
         let scheme = http_r_ctx
             .r_in
@@ -883,10 +902,10 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
             .scheme_str()
             .unwrap()
             .to_string();
-        return Some(VarAnyData::Str(scheme));
+        return Some(VarAnyData::String(scheme));
     } else if name == "domain" {
-        let domain = http_r_ctx.r_in.upstream_uri.host().unwrap();
-        return Some(VarAnyData::Str(domain.to_string()));
+        let domain = http_r_ctx.r_in.upstream_uri.host().unwrap().to_string();
+        return Some(VarAnyData::String(domain));
     } else if name == "port" {
         let port_u16 = http_r_ctx.r_in.upstream_uri.port_u16().unwrap();
         return Some(VarAnyData::U16(port_u16));
@@ -900,7 +919,7 @@ pub fn http_ups_request(name: &str, stream_info: &StreamInfo) -> Option<VarAnyDa
     return Some(VarAnyData::HeaderValue(value));
 }
 
-pub fn http_response(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData> {
+pub fn http_response<'a>(name: &str, stream_info: &'a StreamInfo) -> Option<VarAnyData<'a>> {
     if stream_info.http_r.is_none() {
         return None;
     }
@@ -916,13 +935,16 @@ pub fn http_response(name: &str, stream_info: &StreamInfo) -> Option<VarAnyData>
         return Some(VarAnyData::U16(http_r_ctx.r_out.status.as_u16()));
     } else if name == "version" {
         if http_r_ctx.r_out_main.is_some() {
-            return Some(VarAnyData::Str(format!(
+            return Some(VarAnyData::String(format!(
                 "{:?}",
                 http_r_ctx.r_out_main.as_ref().unwrap().version
             )));
         }
 
-        return Some(VarAnyData::Str(format!("{:?}", http_r_ctx.r_out.version)));
+        return Some(VarAnyData::String(format!(
+            "{:?}",
+            http_r_ctx.r_out.version
+        )));
     }
 
     if http_r_ctx.r_out_main.is_some() {
@@ -957,7 +979,7 @@ pub fn http_cache_file_md5(stream_info: &StreamInfo) -> Option<VarAnyData> {
         return None;
     }
 
-    return Some(VarAnyData::Str(md5.unwrap()));
+    return Some(VarAnyData::String(md5.unwrap()));
 }
 
 pub fn http_cache_file_path(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -970,12 +992,28 @@ pub fn http_cache_file_path(stream_info: &StreamInfo) -> Option<VarAnyData> {
         return None;
     }
 
-    return Some(VarAnyData::Str(
+    return Some(VarAnyData::ArcString(
         http_r_ctx
             .http_cache_file
             .cache_file_info
             .proxy_cache_path
-            .to_string(),
+            .clone(),
+    ));
+}
+
+
+pub fn local_name(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    if stream_info.scc.is_none() {
+        return None;
+    }
+
+    use crate::config::net_local_core;
+    let net_local_core_conf =
+        net_local_core::curr_conf_mut(stream_info.scc.net_curr_conf());
+
+    return Some(VarAnyData::ArcString(
+        net_local_core_conf.name
+            .clone(),
     ));
 }
 
@@ -986,5 +1024,5 @@ pub fn caps(stream_info: &StreamInfo, index: usize) -> Option<VarAnyData> {
     if index >= stream_info.caps.len() {
         return None;
     }
-    return Some(VarAnyData::Str(stream_info.caps[index].clone()));
+    return Some(VarAnyData::Str(stream_info.caps[index].as_str()));
 }

@@ -75,7 +75,7 @@ impl<E: Clone> ExecutorSpawnWaitRun<E> {
             self.worker_threads
         );
         self.run_wait_group
-            .wait_complete(self.worker_threads)
+            .wait()
             .await
             .map_err(|e| anyhow!("err:wait_start => e:{}", e))?;
         log::debug!(target: "main",

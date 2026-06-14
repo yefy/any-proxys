@@ -15,26 +15,27 @@ use crate::stream::Stream;
 use crate::PeerClientToStreamSender;
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{WaitGroup, WorkerInner};
+use awaitgroup::{WaitGroup, WaitGroupInner};
 use chrono::Local;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use lazy_static::lazy_static;
 lazy_static! {
     static ref PEER_CLIENT_NUM: AtomicU32 = AtomicU32::new(0);
 }
+use any_base::spawn;
 
 pub struct PeerStreamToPeerClientTx {
     pub ref_count: Arc<AtomicUsize>,
     pub tx: async_channel::Sender<TunnelPack>,
     pub wait_group: WaitGroup,
-    pub worker_inner: Option<WorkerInner>,
+    pub worker_inner: Option<WaitGroupInner>,
     pub is_close: ArcMutex<bool>,
 }
 
@@ -103,7 +104,7 @@ pub struct PeerClientContext {
     peer_stream_tx_pack_id: Arc<AtomicU32>,
     peer_stream_rx_pack_id: Arc<AtomicU32>,
     is_error: Arc<AtomicBool>,
-    run_time: Arc<Box<dyn Runtime>>,
+    run_time: Runtime,
 }
 
 impl PeerClientContext {
@@ -386,7 +387,7 @@ impl PeerClient {
         peer_stream_size: Option<Arc<AtomicUsize>>,
         server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> PeerClient {
         #[cfg(feature = "anydebug")]
         {
@@ -529,7 +530,7 @@ impl PeerClient {
             .as_ref()
             .unwrap()
             .get_mut()
-            .delete(session_id.string());
+            .delete(session_id.to_string());
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -669,9 +670,9 @@ impl PeerClient {
             } else if cfg!(feature = "anyruntime-tokio-spawn") {
                 any_base::executor_spawn::_start_and_free(move || async move { async_.await });
             } else {
-                run_time.spawn(Box::pin(async move {
+                spawn!(run_time, async move {
                     let _ = async_.await;
-                }));
+                });
             }
         }
     }
@@ -689,7 +690,7 @@ impl PeerClient {
         server_context: Option<ArcMutex<ServerContext>>,
         channel_size: usize,
         peer_stream_id: Option<usize>,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
         is_ack: bool,
     ) -> Result<(
         Arc<PeerClient>,
@@ -773,9 +774,9 @@ impl PeerClient {
         } else if cfg!(feature = "anyruntime-tokio-spawn") {
             any_base::executor_spawn::_start_and_free(move || async move { async_.await });
         } else {
-            run_time.spawn(Box::pin(async move {
+            spawn!(run_time, async move {
                 let _ = async_.await;
-            }));
+            });
         }
         let session_id = peer_client.context.session_id.get().clone();
         let stream_tx_pack_id = peer_client.stream_tx_pack_id.clone();
@@ -809,7 +810,7 @@ impl PeerClient {
         client_context: Option<Arc<ClientContext>>,
         stream: StreamFlow,
         accept_tx: Option<AcceptSenderType>,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<Arc<PeerStreamKey>> {
         let peer_stream = PeerStream::new(
             is_client,
@@ -828,7 +829,6 @@ impl PeerClient {
 
 struct PeerClientToStream {
     pack_id: u32,
-    send_pack_id_map: HashMap<u32, ()>,
     recv_pack_cache_map: HashMap<u32, DynamicTunnelData>,
     is_close: bool,
     context: Arc<PeerClientContext>,
@@ -838,7 +838,6 @@ impl PeerClientToStream {
     pub fn new(context: Arc<PeerClientContext>) -> PeerClientToStream {
         PeerClientToStream {
             pack_id: 1u32,
-            send_pack_id_map: HashMap::<u32, ()>::new(),
             recv_pack_cache_map: HashMap::<u32, DynamicTunnelData>::new(),
             is_close: false,
             context,
@@ -880,33 +879,28 @@ impl PeerClientToStream {
                                 ));
                             }
                             TunnelPack::TunnelData(tunnel_data) => {
-                                if self
-                                    .send_pack_id_map
-                                    .get(&tunnel_data.header.pack_id)
-                                    .is_some()
-                                {
-                                    return Err(anyhow!(
-                                        "err:pack_id exist => pack_id:{}",
-                                        tunnel_data.header.pack_id
-                                    ))?;
+                                let pack_id = tunnel_data.header.pack_id;
+                                if pack_id < self.pack_id {
+                                    return Ok(None);
                                 }
-                                if tunnel_data.header.pack_id == self.pack_id {
-                                    if self.recv_pack_cache_map.len() <= 0 {
+                                if pack_id == self.pack_id {
+                                    if self.recv_pack_cache_map.is_empty() {
                                         self.context
                                             .peer_client_max_pack_id
-                                            .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                                            .store(pack_id, Ordering::SeqCst);
                                     }
                                     Ok(Some(tunnel_data))
+                                } else if self.recv_pack_cache_map.contains_key(&pack_id) {
+                                    Ok(None)
                                 } else {
                                     let peer_client_max_pack_id =
                                         self.context.peer_client_max_pack_id.load(Ordering::SeqCst);
-                                    if tunnel_data.header.pack_id > peer_client_max_pack_id {
+                                    if pack_id > peer_client_max_pack_id {
                                         self.context
                                             .peer_client_max_pack_id
-                                            .store(tunnel_data.header.pack_id, Ordering::SeqCst);
+                                            .store(pack_id, Ordering::SeqCst);
                                     }
-                                    self.recv_pack_cache_map
-                                        .insert(tunnel_data.header.pack_id, tunnel_data);
+                                    self.recv_pack_cache_map.insert(pack_id, tunnel_data);
                                     Ok(None)
                                 }
                             }
@@ -1012,7 +1006,6 @@ impl PeerClientToStream {
                 self.context
                     .peer_client_order_pack_id
                     .store(tunnel_data.header.pack_id, Ordering::SeqCst);
-                self.send_pack_id_map.insert(tunnel_data.header.pack_id, ());
                 self.pack_id += 1;
 
                 if let Err(_) = self

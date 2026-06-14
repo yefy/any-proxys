@@ -3,6 +3,7 @@ use crate::config::net_server;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
+use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -221,6 +222,65 @@ async fn local(
     // conf_arg_sub.any = conf_arg.any.clone();
     // conf_arg_sub.is_block = conf_arg.is_block;
 
-    ms.parse_config(&mut conf_arg, local_confs_).await?;
+    ms.parse_config(&mut conf_arg, local_confs_.clone()).await?;
+
+    {
+        use crate::config::net_local;
+        use crate::config::net_local_core;
+        use crate::config::net_local_core::LocalRule;
+        use crate::config::net_local_core::Rule;
+        let is_find_rule = {
+            let net_local_core_conf = net_local_core::curr_conf_mut(&local_confs_);
+            net_local_core_conf.is_find_rule
+        };
+        if !is_find_rule {
+            let net_local_conf = net_local::curr_conf(&local_confs_);
+            let net_local_core_conf = net_local_core::currs_conf_mut(&net_local_conf.server_confs);
+            if net_local_core_conf.full_match_local_rule.is_some() {
+                return Err(anyhow!(
+                    "err:full_match_local_rule exist => full_match_local_rule",
+                ));
+            }
+
+            let local_any = local_confs_.clone();
+            use crate::proxy::stream_var;
+            use crate::util::default_config::VAR_STREAM_INFO;
+            use crate::util::var::{Var, VarParse};
+
+            let rule = Rule {
+                data: "".to_string(),
+                filter: "$$(.*)".to_string(),
+            };
+
+            let ret: Result<VarParse> = async {
+                let data_format_vars =
+                    VarParse::new("", "-").map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
+                let mut data_format_vars_test = Var::copy(&data_format_vars)
+                    .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
+                data_format_vars_test.for_each(|var| {
+                    let var_name = Var::var_name(var);
+                    let value = stream_var::find(var_name, &VAR_STREAM_INFO)
+                        .map_err(|e| anyhow!("err:stream_var.find => e:{}", e))?;
+                    Ok(value)
+                })?;
+                let _ = data_format_vars_test
+                    .join()
+                    .map_err(|e| anyhow!("err:access_format_var.join => e:{}", e))?;
+                Ok(data_format_vars)
+            }
+            .await;
+            let data_format_vars =
+                ret.map_err(|e| anyhow!("err:rule.data => rule.data:{}, e:{}", rule.data, e))?;
+
+            net_local_core_conf.full_match_local_rule = Some(Arc::new(LocalRule {
+                rule: rule.clone(),
+                data_format_vars,
+                regex: None.into(),
+                local: local_any.clone(),
+            }))
+            .into();
+        }
+    }
+
     return Ok(());
 }

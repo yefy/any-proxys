@@ -1,6 +1,6 @@
 use crate::config as conf;
 use crate::proxy::stream_var;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcUnsafeAny, OptionExt};
@@ -10,6 +10,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use any_base::util::ArcString;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,7 +27,7 @@ pub struct Rules {
 
 pub struct LocalRule {
     pub rule: Rule,
-    pub data_format_vars: Var,
+    pub data_format_vars: VarParse,
     pub regex: OptionExt<Regex>,
     pub local: ArcUnsafeAny,
 }
@@ -34,6 +35,8 @@ pub struct LocalRule {
 pub struct Conf {
     pub local_rules: Vec<Arc<LocalRule>>,
     pub full_match_local_rule: OptionExt<Arc<LocalRule>>,
+    pub name: ArcString,
+    pub is_find_rule: bool,
 }
 
 impl Conf {
@@ -41,17 +44,27 @@ impl Conf {
         Conf {
             local_rules: Vec::new(),
             full_match_local_rule: None.into(),
+            name: ArcString::default(),
+            is_find_rule: false,
         }
     }
 }
 
 lazy_static! {
-    pub static ref MODULE_CMDS: Arc<Vec<module::Cmd>> = Arc::new(vec![module::Cmd {
-        name: "rule".to_string(),
-        set: |ms, conf_arg, cmd, conf| Box::pin(rule(ms, conf_arg, cmd, conf)),
-        typ: module::CMD_TYPE_DATA,
-        conf_typ: conf::CMD_CONF_TYPE_LOCAL,
-    }]);
+    pub static ref MODULE_CMDS: Arc<Vec<module::Cmd>> = Arc::new(vec![
+        module::Cmd {
+            name: "rule".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(rule(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
+        },
+        module::Cmd {
+            name: "name".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(name(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_LOCAL,
+        },
+    ]);
 }
 
 lazy_static! {
@@ -204,7 +217,8 @@ async fn rule(
     _cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
-    let _c = conf.get_mut::<Conf>();
+    let c = conf.get_mut::<Conf>();
+    c.is_find_rule = true;
     let str = conf_arg.value.get::<String>();
     let rules: Rules = toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
     log::trace!(target: "main", "c.rules:{:?}", rules);
@@ -216,9 +230,9 @@ async fn rule(
     use crate::util::default_config::VAR_STREAM_INFO;
 
     for rule in rules.rule {
-        let ret: Result<Var> = async {
-            let data_format_vars =
-                Var::new(&rule.data, "-").map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+        let ret: Result<VarParse> = async {
+            let data_format_vars = VarParse::new(&rule.data, "-")
+                .map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
             let mut data_format_vars_test =
                 Var::copy(&data_format_vars).map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
             data_format_vars_test.for_each(|var| {
@@ -279,5 +293,18 @@ async fn rule(
         }
     }
 
+    return Ok(());
+}
+
+
+async fn name(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    let str = conf_arg.value.get::<String>();
+    c.name = str.clone().into();
     return Ok(());
 }

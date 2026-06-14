@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{Worker, WorkerInner};
+use awaitgroup::{WaitGroupWorker, WaitGroupInner};
 use futures_core::future::BoxFuture;
 use std::{future::Future, time::Duration};
 
@@ -10,8 +10,8 @@ pub trait Executor<Fut> {
     fn execute(
         &self,
         version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
+        worker_inner: Option<WaitGroupInner>,
+        err_worker: Option<WaitGroupWorker>,
         fut: Fut,
     );
 }
@@ -24,8 +24,8 @@ pub trait SpawnExec<F>: Clone {
     fn spawn(
         &self,
         version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
+        worker_inner: Option<WaitGroupInner>,
+        err_worker: Option<WaitGroupWorker>,
         fut: F,
     );
 }
@@ -38,8 +38,8 @@ where
     fn spawn(
         &self,
         version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
+        worker_inner: Option<WaitGroupInner>,
+        err_worker: Option<WaitGroupWorker>,
         fut: F,
     ) {
         self.execute(version, worker_inner, err_worker, fut)
@@ -56,8 +56,8 @@ where
     fn execute(
         &self,
         version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
+        worker_inner: Option<WaitGroupInner>,
+        err_worker: Option<WaitGroupWorker>,
         fut: F,
     ) {
         // This will spawn into the currently running `LocalSet`.
@@ -69,12 +69,13 @@ where
                 }
             }
 
-            scopeguard::defer! {
-                if err_worker.is_some(){
-                    log::debug!(target: "main", "stop spawn_local err version:{}", version);
-                    err_worker.unwrap().error(anyhow!("err:spawn_local err_worker"));
-                }
-            }
+            panic!("LocalExec execute");
+            // scopeguard::defer! {
+            //     if err_worker.is_some(){
+            //         log::debug!(target: "main", "stop spawn_local err version:{}", version);
+            //         err_worker.unwrap().error(anyhow!("err:spawn_local err_worker"));
+            //     }
+            // }
 
             log::debug!(target: "main", "start spawn_local version:{}", version);
             let ret: Result<()> = async {
@@ -105,8 +106,8 @@ where
     fn execute(
         &self,
         version: i32,
-        worker_inner: Option<WorkerInner>,
-        err_worker: Option<Worker>,
+        worker_inner: Option<WaitGroupInner>,
+        err_worker: Option<WaitGroupWorker>,
         fut: F,
     ) {
         let _ = tokio::task::spawn(async move {
@@ -117,12 +118,14 @@ where
                 }
             }
 
-            scopeguard::defer! {
-                if err_worker.is_some(){
-                    log::debug!(target: "main", "stop spawn err version:{}", version);
-                    err_worker.unwrap().error(anyhow!("err:spawn err_worker"));
-                }
-            }
+            panic!("ThreadExec execute");
+            // scopeguard::defer! {
+            //     if err_worker.is_some(){
+            //         log::debug!(target: "main", "stop spawn err version:{}", version);
+            //         err_worker.unwrap().error(anyhow!("err:spawn err_worker"));
+            //     }
+            // }
+
             log::debug!(target: "main", "start spawn version:{}", version);
             let ret: Result<()> = async {
                 fut.await.map_err(|e| anyhow!("err:spawn fut => e:{}", e))?;

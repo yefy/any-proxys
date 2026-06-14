@@ -20,7 +20,7 @@ use tokio::sync::broadcast;
 pub struct PortListen {
     pub ms: Arc<Modules>,
     pub port_config_listen: Arc<port_config::PortConfigListen>,
-    pub listen_shutdown_tx: broadcast::Sender<()>,
+    pub listen_shutdown_tx: broadcast::Sender<bool>,
 }
 
 pub struct Port {
@@ -75,7 +75,7 @@ impl module::Server for Port {
                     .get(key)
                     .unwrap()
                     .listen_shutdown_tx
-                    .send(());
+                    .send(false);
                 self.port_config_listen_map.get_mut().remove(key);
             }
         }
@@ -166,6 +166,7 @@ impl module::Server for Port {
         Ok(())
     }
     async fn send(&self, value: ArcUnsafeAny) -> Result<()> {
+        let value = value.get::<AnyproxyWorkDataSend>();
         let keys = self
             .port_config_listen_map
             .get()
@@ -179,10 +180,9 @@ impl module::Server for Port {
                 .get(key)
                 .unwrap()
                 .listen_shutdown_tx
-                .send(());
+                .send(value.is_fast_shutdown);
         }
 
-        let value = value.get::<AnyproxyWorkDataSend>();
         self.executor.send(&value.name, value.is_fast_shutdown);
         Ok(())
     }

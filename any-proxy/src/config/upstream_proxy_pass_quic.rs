@@ -8,7 +8,7 @@ use crate::proxy::stream_info::StreamInfo;
 use crate::quic::connect as quic_connect;
 use crate::stream::connect;
 use crate::upstream::UpstreamHeartbeatData;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::Share;
@@ -21,6 +21,7 @@ use module::Modules;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use crate::util::util::host_and_port;
 
 pub struct Conf {}
 
@@ -214,10 +215,17 @@ impl upstream_core::HeartbeatI for Heartbeat {
             .get(quic_config_name)
             .cloned()
             .unwrap();
+        let ssl_domain = if self.quic.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.quic.address);
+            domain.to_string()
+        } else {
+            self.quic.ssl_domain.clone()
+        };
+
         let connect = Box::new(quic_connect::Connect::new(
             host.clone().into(),
             addr.clone(),
-            self.quic.ssl_domain.clone(),
+            ssl_domain,
             endpoints,
             quic_config.unwrap(),
         ));
@@ -277,12 +285,12 @@ impl upstream_core::HeartbeatI for Heartbeat {
 }
 
 pub struct UpstreamQuic {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     quic: ProxyPassQuic,
 }
 
 impl UpstreamQuic {
-    pub fn new(address_vars: Option<Var>, quic: ProxyPassQuic) -> Self {
+    pub fn new(address_vars: Option<VarParse>, quic: ProxyPassQuic) -> Self {
         UpstreamQuic { address_vars, quic }
     }
 }
@@ -339,10 +347,17 @@ impl upstream_core::GetConnectI for UpstreamQuic {
             .get(quic_config_name)
             .cloned()
             .unwrap();
+        let ssl_domain = if self.quic.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.quic.address);
+            domain.to_string()
+        } else {
+            self.quic.ssl_domain.clone()
+        };
+
         let connect = Box::new(quic_connect::Connect::new(
             address.clone().into(),
             addr.clone(),
-            self.quic.ssl_domain.clone(),
+            ssl_domain,
             endpoints,
             quic_config.unwrap(),
         ));

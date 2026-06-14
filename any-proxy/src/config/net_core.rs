@@ -5,7 +5,7 @@ use crate::proxy::StreamCloseType;
 use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, ArcRwLockTokio, ArcUnsafeAny};
+use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, ArcRwLockTokio, ArcUnsafeAny, OptionArcx};
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -284,7 +284,7 @@ impl Conf {
             stream_nopush: false,
             stream_nodelay_size: STREAM_NODELAY_SIZE_DEFAULT,
             directio: 0,
-            tmp_file_cache_size: 100,
+            tmp_file_cache_size: 10,
             expires: 0,
             domain_from_http_v1: Arc::new(DomainFromHttpV1::new()),
             transfer_encoding_chunked: false,
@@ -1630,10 +1630,17 @@ pub fn do_create_tmp_file_fd(size: usize) -> Result<VecDeque<Arc<FileExt>>> {
 
 pub fn open_tmp_file_fd(file_name: &str) -> Result<FileExt> {
     let _ = std::fs::remove_file(file_name);
+    // let file = std::fs::OpenOptions::new()
+    //     .create(true)
+    //     .write(true)
+    //     .append(true)
+    //     .open(file_name)
+    //     .map_err(|e| anyhow!("err:file.open => file_name:{}, e:{}", file_name, e))?;
+
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .append(true)
+        .read(true)
         .open(file_name)
         .map_err(|e| anyhow!("err:file.open => file_name:{}, e:{}", file_name, e))?;
 
@@ -1646,8 +1653,7 @@ pub fn open_tmp_file_fd(file_name: &str) -> Result<FileExt> {
 
     let file_uniq = FileUniq::new(&file)?;
     let file_ext = FileExt {
-        async_lock: ArcMutexTokio::new(()),
-        file: ArcMutex::new(file),
+        file: OptionArcx::new(file),
         fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
         file_path: ArcRwLock::new(file_name.into()),
         file_len: 0,

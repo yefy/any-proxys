@@ -9,7 +9,7 @@ use crate::proxy::stream_info::StreamInfo;
 use crate::stream::connect;
 use crate::tunnel2::connect as tunnel2_connect;
 use crate::upstream::UpstreamHeartbeatData;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::Share;
@@ -264,6 +264,7 @@ impl HeartbeatTcp {
 
 use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
 use async_trait::async_trait;
+use crate::util::util::host_and_port;
 
 #[async_trait]
 impl upstream_core::HeartbeatI for HeartbeatTcp {
@@ -391,6 +392,13 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
                 tcp_config_name
             ));
         }
+        let ssl_domain = if self.ssl.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.ssl.address);
+            domain.to_string()
+        } else {
+            self.ssl.ssl_domain.clone()
+        };
+
         let client = tunnel2_core_conf.client();
         if client.is_none() {
             return Err(anyhow!("err:client is nil"));
@@ -401,7 +409,7 @@ impl upstream_core::HeartbeatI for HeartbeatSsl {
             Box::new(tunnel2_connect::PeerStreamConnectSsl::new(
                 host.clone(),
                 addr.clone(),
-                self.ssl.ssl_domain.clone(),
+                ssl_domain,
                 tcp_config.unwrap(),
             )),
         ));
@@ -498,6 +506,14 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
             .get(quic_config_name)
             .cloned()
             .unwrap();
+
+        let ssl_domain = if self.quic.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.quic.address);
+            domain.to_string()
+        } else {
+            self.quic.ssl_domain.clone()
+        };
+
         let client = tunnel2_core_conf.client();
         if client.is_none() {
             return Err(anyhow!("err:client is nil"));
@@ -508,7 +524,7 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
             Box::new(tunnel2_connect::PeerStreamConnectQuic::new(
                 host.clone(),
                 addr.clone(),
-                self.quic.ssl_domain.clone(),
+                ssl_domain,
                 endpoints,
                 quic_config.unwrap(),
             )),
@@ -567,12 +583,12 @@ impl upstream_core::HeartbeatI for HeartbeatQuic {
 }
 
 pub struct UpstreamTcp {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     tcp: ProxyPassTcpTunnel2,
 }
 
 impl UpstreamTcp {
-    pub fn new(address_vars: Option<Var>, tcp: ProxyPassTcpTunnel2) -> Self {
+    pub fn new(address_vars: Option<VarParse>, tcp: ProxyPassTcpTunnel2) -> Self {
         UpstreamTcp { address_vars, tcp }
     }
 }
@@ -648,12 +664,12 @@ impl upstream_core::GetConnectI for UpstreamTcp {
 }
 
 pub struct UpstreamSsl {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     ssl: ProxyPassSslTunnel2,
 }
 
 impl UpstreamSsl {
-    pub fn new(address_vars: Option<Var>, ssl: ProxyPassSslTunnel2) -> Self {
+    pub fn new(address_vars: Option<VarParse>, ssl: ProxyPassSslTunnel2) -> Self {
         UpstreamSsl { address_vars, ssl }
     }
 }
@@ -707,6 +723,13 @@ impl upstream_core::GetConnectI for UpstreamSsl {
                 tcp_config_name
             ));
         }
+        let ssl_domain = if self.ssl.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.ssl.address);
+            domain.to_string()
+        } else {
+            self.ssl.ssl_domain.clone()
+        };
+
         let client = tunnel2_core_conf.client();
         if client.is_none() {
             return Err(anyhow!("err:client is nil"));
@@ -717,7 +740,7 @@ impl upstream_core::GetConnectI for UpstreamSsl {
             Box::new(tunnel2_connect::PeerStreamConnectSsl::new(
                 address.clone(),
                 addr.clone(),
-                self.ssl.ssl_domain.clone(),
+                ssl_domain,
                 tcp_config.unwrap(),
             )),
         ));
@@ -729,12 +752,12 @@ impl upstream_core::GetConnectI for UpstreamSsl {
 }
 
 pub struct UpstreamQuic {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     quic: ProxyPassQuicTunnel2,
 }
 
 impl UpstreamQuic {
-    pub fn new(address_vars: Option<Var>, quic: ProxyPassQuicTunnel2) -> Self {
+    pub fn new(address_vars: Option<VarParse>, quic: ProxyPassQuicTunnel2) -> Self {
         UpstreamQuic { address_vars, quic }
     }
 }
@@ -793,6 +816,14 @@ impl upstream_core::GetConnectI for UpstreamQuic {
             .get(quic_config_name)
             .cloned()
             .unwrap();
+
+        let ssl_domain = if self.quic.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.quic.address);
+            domain.to_string()
+        } else {
+            self.quic.ssl_domain.clone()
+        };
+
         let client = tunnel2_core_conf.client();
         if client.is_none() {
             return Err(anyhow!("err:client is nil"));
@@ -803,7 +834,7 @@ impl upstream_core::GetConnectI for UpstreamQuic {
             Box::new(tunnel2_connect::PeerStreamConnectQuic::new(
                 address.clone(),
                 addr.clone(),
-                self.quic.ssl_domain.clone(),
+                ssl_domain,
                 endpoints,
                 quic_config.unwrap(),
             )),

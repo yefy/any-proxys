@@ -460,8 +460,8 @@ fn default_access_log_file() -> String {
 }
 
 fn default_access_format() -> String {
-    "[${local_time}] stream_max_write_time:${write_max_block_time_ms} buffer_cache:${buffer_cache} \
-        upstream_balancer:${upstream_balancer} hello:${is_proxy_protocol_hello} ebpf:${is_open_ebpf} \
+    "[${local_time}] local_name:${local_name} stream_max_write_time:${write_max_block_time_ms} buffer_cache:${buffer_cache} \
+        upstream_balancer:${upstream_balancer} upstream_name:${upstream_name} hello:${is_proxy_protocol_hello} ebpf:${is_open_ebpf} \
         sendfile:${open_sendfile} ${local_protocol} -> ${upstream_protocol} \
         request_id:[${request_id}] client_addr:${client_addr} remote_addr:${remote_addr} local_addr:${local_addr} upstream_addr:${upstream_addr} \
         domain:${domain} upstream_host:${upstream_host} ${status} ${status_str} timeout_exit:${is_timeout_exit} \
@@ -627,10 +627,19 @@ pub enum DomainListenType {
     Ssl = 1,
     Quic = 2,
 }
+fn default_ssl_domain() -> String {
+    "".to_string()
+}
+
+pub fn default_balancer() -> String {
+    "".to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcpTunnel2 {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
     pub tcp_config_name: String,
@@ -640,9 +649,13 @@ pub struct ProxyPassTcpTunnel2 {
     pub weight: Option<i64>,
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassQuicTunnel2 {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_quic_config_name")]
@@ -656,6 +669,9 @@ pub struct ProxyPassQuicTunnel2 {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassSslTunnel2 {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
@@ -698,9 +714,23 @@ pub struct Tunnel {
     pub channel_size: usize,
 }
 
+impl Tunnel {
+    pub fn new() -> Self {
+        Tunnel{
+            max_stream_size: default_max_stream_size(),
+            min_stream_cache_size: default_min_stream_cache_size(),
+            channel_size: default_channel_size(),
+        }
+    }
+}
+
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcp {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
     pub tcp_config_name: String,
@@ -713,6 +743,8 @@ pub struct ProxyPassTcp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassTcpTunnel {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
     pub tunnel: Tunnel,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
@@ -726,6 +758,9 @@ pub struct ProxyPassTcpTunnel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassSsl {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
@@ -739,7 +774,10 @@ pub struct ProxyPassSsl {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassSslTunnel {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
     pub tunnel: Tunnel,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_tcp_config_name")]
@@ -753,6 +791,9 @@ pub struct ProxyPassSslTunnel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassQuic {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_quic_config_name")]
@@ -766,7 +807,10 @@ pub struct ProxyPassQuic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassQuicTunnel {
+    #[serde(default = "default_balancer")]
+    pub balancer: String,
     pub tunnel: Tunnel,
+    #[serde(default = "default_ssl_domain")]
     pub ssl_domain: String,
     pub address: String, //ip:port, domain:port
     #[serde(default = "default_quic_config_name")]
@@ -1054,9 +1098,15 @@ pub struct HttpServerStaticConfig {
     pub path: String,
 }
 
+
+pub fn default_proxy_pass() -> HttpServerProxyPassConfig {
+    HttpServerProxyPassConfig::new()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpServerProxyConfig {
+    #[serde(default = "default_proxy_pass")]
     pub proxy_pass: HttpServerProxyPassConfig,
 }
 

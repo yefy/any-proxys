@@ -42,19 +42,21 @@ anyspawn-count = []
 anyspawn-parking-lot = []
 anyspawn-std-sync = []
 anylock-time = []
+parking_lot_features = ["parking_lot/deadlock_detection"]
 
 [dependencies]
-anyhow = {path = "../3rdparty/anyhow"}
-awaitgroup = {path = "../3rdparty/awaitgroup"}
-tokio = { version = "1.35.1", features = ["full"] }
+parking_lot = { version = "0.12.1", default-features = false }
+anyhow = { git = "https://github.com/yefy/anyhow.git"}
+awaitgroup = { git = "https://github.com/yefy/awaitgroup.git" }
+tokio = { version = "1.38.0", features = ["full"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
 futures-util = { version = "0.3", default-features = false, features = ["async-await", "sink", "std"] }
 lazy_static = "1.4.0"
-log = "0.4.14"
+log = "0.4"
 libc = "0.2.109"
 toml = "0.5.10"
-log4rs = "1.0.0"
+log4rs = { git = "https://github.com/yefy/log4rs.git" }
 bytes = "1.5.0"
 async-trait = "0.1.52"
 hashbrown = "0.11.2"
@@ -68,7 +70,11 @@ pin-project-lite = "0.2.9"
 core_affinity = "0.7.6"
 futures-core = "0.3.26"
 async-recursion = "1.0.5"
-parking_lot = "0.12.1"
+mysql_common = "0.32.4"
+linked-hash-map = "0.5.6"
+
+[dev-dependencies]
+serde_json = "1"
 
 [target."cfg(windows)".dependencies.winapi]
 version = "0.3.9"

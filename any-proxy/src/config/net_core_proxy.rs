@@ -4,7 +4,7 @@ use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeDa
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::http_proxy::util::timer_check_proxy_cache;
 use crate::proxy::stream_info::StreamInfo;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use any_base::parking_lot::typ::ArcMutex;
@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 pub struct ProxyRewrite {
     pub regex: regex::Regex,
-    pub vars: Var,
+    pub vars: VarParse,
     pub status: http::StatusCode,
 }
 
@@ -127,6 +127,9 @@ fn proxy_hot_file_hot_read_min_count() -> u64 {
 fn proxy_hot_file_hot_io_percent() -> u64 {
     80
 }
+fn proxy_hot_file_hot_proxy_cache_name() -> Vec<String> {
+    Vec::new()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -141,6 +144,8 @@ pub struct ProxyHotFile {
     pub hot_read_min_count: u64,
     #[serde(default = "proxy_hot_file_hot_io_percent")]
     pub hot_io_percent: u64,
+    #[serde(default = "proxy_hot_file_hot_proxy_cache_name")]
+    pub hot_proxy_cache_name: Vec<String>,
 }
 
 impl ProxyHotFile {
@@ -151,6 +156,7 @@ impl ProxyHotFile {
             hot_top_count: proxy_hot_file_hot_top_count(),
             hot_read_min_count: proxy_hot_file_hot_read_min_count(),
             hot_io_percent: proxy_hot_file_hot_io_percent(),
+            hot_proxy_cache_name: proxy_hot_file_hot_proxy_cache_name(),
         }
     }
 }
@@ -306,12 +312,13 @@ pub struct ConfMain {
 pub struct Conf {
     pub proxy_cache_names: Option<Vec<String>>,
     pub proxy_cache_key: String,
-    pub proxy_cache_key_vars: Var,
+    pub proxy_cache_key_vars: VarParse,
     pub proxy_cache_purge: bool,
     pub proxy_request_slice: u64,
     pub proxy_cache_methods: HashMap<String, bool>,
     pub proxy_cache_valids: HashMap<u16, u64>,
     pub proxy_caches: Vec<Arc<ProxyCache>>,
+    pub hot_proxy_caches: Vec<Arc<ProxyCache>>,
     pub proxy_hot_file: ProxyHotFile,
     pub proxy_get_to_get_range: bool,
     pub rewrite: Vec<ProxyRewrite>,
@@ -330,10 +337,11 @@ impl Conf {
         let tmp_file_id = get_tmp_file();
         Conf {
             proxy_caches: Vec::with_capacity(10),
+            hot_proxy_caches: Vec::with_capacity(10),
             proxy_cache_names: None,
             proxy_request_slice: 1 * CACHE_FILE_SLISE,
             proxy_cache_key: DEFAULT_PROXY_CACHE_KEY.to_string(),
-            proxy_cache_key_vars: Var::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
+            proxy_cache_key_vars: VarParse::new(DEFAULT_PROXY_CACHE_KEY, "").unwrap(),
             proxy_cache_methods: HashMap::new(),
             proxy_cache_valids: HashMap::new(),
             proxy_cache_purge: false,
@@ -609,13 +617,19 @@ async fn merge_conf(
         if child_conf.proxy_get_to_get_range == false {
             child_conf.proxy_get_to_get_range = parent_conf.proxy_get_to_get_range.clone();
         }
+
+        child_conf.main.proxy_cache_map = parent_conf.main.proxy_cache_map.clone();
+        child_conf.main.proxy_cache_index = parent_conf.main.proxy_cache_index.clone();
+        child_conf.main.hot_io_percent_map = parent_conf.main.hot_io_percent_map.clone();
+        child_conf.main.cache_file_node_queue = parent_conf.main.cache_file_node_queue.clone();
+        child_conf.main.is_init_master_thread = parent_conf.main.is_init_master_thread.clone();
     }
 
     use crate::proxy::stream_var;
     use crate::util::default_config::VAR_STREAM_INFO;
-    let ret: Result<Var> = async {
-        let vars = Var::new(&child_conf.proxy_cache_key, "")
-            .map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+    let ret: Result<VarParse> = async {
+        let vars = VarParse::new(&child_conf.proxy_cache_key, "")
+            .map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
         let mut vars_test = Var::copy(&vars).map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
         vars_test.for_each(|var| {
             let var_name = Var::var_name(var);
@@ -654,6 +668,25 @@ async fn merge_conf(
                 ));
             }
             child_conf.proxy_caches.push(proxy_cache.unwrap());
+        }
+    }
+
+    if child_conf.proxy_hot_file.is_open {
+        let proxy_cache_names = &child_conf.proxy_hot_file.hot_proxy_cache_name;
+        for proxy_cache_name in proxy_cache_names {
+            let proxy_cache = net_core_proxy
+                .main
+                .proxy_cache_map
+                .get()
+                .get(proxy_cache_name)
+                .cloned();
+            if proxy_cache.is_none() {
+                return Err(anyhow::anyhow!(
+                    "err: not find => proxy_cache_name:{}",
+                    proxy_cache_name
+                ));
+            }
+            child_conf.hot_proxy_caches.push(proxy_cache.unwrap());
         }
     }
 
@@ -745,6 +778,11 @@ async fn init_master_thread(
             #[cfg(feature = "anyspawn-count")]
                 Some(format!("{}:{}", file!(), line!())),
             move |executors| async move {
+                log::trace!(
+                    "session_id:{}, init_master_thread net_core_proxy once:{}",
+                    session_id,ms.count()
+                );
+
                 let mut shutdown_thread_rx = executors.context.shutdown_thread_tx.subscribe();
                 tokio::select! {
                     biased;
@@ -898,9 +936,9 @@ async fn proxy_cache_key(
 
     use crate::proxy::stream_var;
     use crate::util::default_config::VAR_STREAM_INFO;
-    let ret: Result<Var> = async {
-        let vars =
-            Var::new(&c.proxy_cache_key, "").map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+    let ret: Result<VarParse> = async {
+        let vars = VarParse::new(&c.proxy_cache_key, "")
+            .map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
         let mut vars_test = Var::copy(&vars).map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
         vars_test.for_each(|var| {
             let var_name = Var::var_name(var);
@@ -1047,6 +1085,9 @@ async fn proxy_hot_file(
     let str = conf_arg.value.get::<String>();
     let proxy_hot_file: ProxyHotFile =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
+    if proxy_hot_file.is_open && proxy_hot_file.hot_proxy_cache_name.is_empty() {
+        return Err(anyhow!("proxy_hot_file.is_open && proxy_hot_file.hot_proxy_cache_names.is_empty()"));
+    }
     c.proxy_hot_file = proxy_hot_file;
     log::trace!(target: "main", "c.proxy_hot_file:{:?}", c.proxy_hot_file);
     return Ok(());
@@ -1089,7 +1130,7 @@ async fn rewrite(
     }
 
     let regex = regex::Regex::new(&strs[0]).map_err(|e| anyhow!("err:Regex::new => e:{}", e))?;
-    let vars = Var::new(&strs[1], "").map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+    let vars = VarParse::new(&strs[1], "").map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
     let status = if strs[2] == "redirect" {
         http::StatusCode::FOUND
     } else if strs[2] == "permanent" {

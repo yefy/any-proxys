@@ -9,7 +9,7 @@ use crate::stream::connect::ConnectInfo;
 use crate::stream::stream_flow;
 use crate::tcp::connect as tcp_connect;
 use crate::Protocol7;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
 use any_base::typ::{ArcMutex, ArcMutexTokio};
 use any_base::util::ArcString;
@@ -488,7 +488,9 @@ impl PeerStreamConnect for PeerStreamConnectQuic {
         self.context.max_stream_size
     }
     async fn min_stream_cache_size(&self) -> usize {
-        self.context.min_stream_cache_size
+        //self.context.min_stream_cache_size
+        //quic不需要缓存链接
+        0
     }
     async fn channel_size(&self) -> usize {
         self.context.channel_size
@@ -533,7 +535,7 @@ impl connect::Connect for Connect {
         &self,
         request_id: Option<ArcString>,
         info: Option<ArcMutex<StreamFlowInfo>>,
-        run_time: Option<Arc<Box<dyn Runtime>>>,
+        run_time: Option<Runtime>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
         let start_time = Instant::now();
         let peer_stream_size = Some(Arc::new(AtomicUsize::new(0)));

@@ -24,12 +24,12 @@ window:需要安装:
 安装rust: 请看rust官方安装教程, 自己下载二进制安装
 rustup install 1.74.1
 rustup toolchain list
-rustup default 1.74.1-x86_64-unknown-linux-gnu
+ rustup default 1.74.1-x86_64-pc-windows-msvc
 
 cargo install cargo-component
 
 如果本地没安装openssl建议使用rustls库(程序内嵌，无需安装): 
-cargo build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
+cargo +1.74.1 build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
 ```
 rust一定要用--release编译， release和debug性能几十倍的差异  
 cargo build --release --bin anyproxy  
@@ -45,7 +45,7 @@ cd ./any-example/anyproxy
 ```
 如果是使用CLion打开项目，  
 Working directory设置 ./any-example/anyproxy  
-Command设置 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
+Command设置 +1.74.1 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
 ```
 
 

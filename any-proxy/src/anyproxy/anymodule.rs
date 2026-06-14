@@ -24,6 +24,7 @@ use crate::config::net_server_http_echo;
 use crate::config::net_server_http_proxy;
 use crate::config::net_server_http_purge;
 use crate::config::net_server_http_static;
+use crate::config::net_server_http_router;
 use crate::config::net_server_http_static_test;
 use crate::config::net_server_websocket_echo;
 use crate::config::net_server_websocket_proxy;
@@ -104,6 +105,7 @@ pub fn add_modules() -> Result<()> {
     module::add_module(net_server_http_echo::module())?;
     module::add_module(net_server_http_purge::module())?;
     module::add_module(net_server_http_proxy::module())?;
+    module::add_module(net_server_http_router::module())?;
     module::add_module(net_server_http_static_test::module())?;
     module::add_module(net_server_http_static::module())?;
 

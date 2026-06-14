@@ -12,6 +12,6 @@ pub trait Stream: Send + Sync {
 }
 
 pub struct AccessContext {
-    pub access_format_vars: var::Var,
+    pub access_format_vars: var::VarParse,
     pub access_log_file: Arc<File>,
 }

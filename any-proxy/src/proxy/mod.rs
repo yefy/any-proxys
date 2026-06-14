@@ -181,7 +181,7 @@ pub struct StreamStreamContext {
     pub is_client: bool,
     pub close_type: StreamCloseType,
     pub wait_group: awaitgroup::WaitGroup,
-    pub worker_inner: awaitgroup::WorkerInner,
+    pub worker_inner: awaitgroup::WaitGroupInner,
 
     pub read_wait: FutureWait,
     pub other_read_wait: FutureWait,

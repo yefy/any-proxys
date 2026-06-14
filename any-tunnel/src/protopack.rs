@@ -11,6 +11,7 @@ pub const MIN_CACHE_BUFFER: usize = 8192 * 2;
 pub const TUNNEL_MAX_HEADER_SIZE: usize = 4096;
 pub const TUNNEL_FLAG: &'static str = "${7tunnel_anyproxy}";
 pub const TUNNEL_VERSION: &'static str = "tunnel.0.1.0";
+pub const MAX_PACK_SIZE: usize = MIN_CACHE_BUFFER * 1024;
 
 //TunnelHeaderSize_u16 TunnelHeader TunnelHello
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -327,6 +328,9 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
             let mut tunnel_data = TunnelDataVec::default();
             tunnel_data.header =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:TunnelData=> e:{}", e))?;
+            if tunnel_data.header.pack_size as usize > MAX_PACK_SIZE {
+                return Err(anyhow!("err:TunnelData pack_size > MAX_PACK_SIZE => pack_size:{}", tunnel_data.header.pack_size ));
+            }
             log::trace!(target: "main", "read_pack body:{:?}", tunnel_data.header);
 
             tunnel_data.resize();

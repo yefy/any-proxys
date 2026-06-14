@@ -9,7 +9,7 @@ use crate::stream::connect::ConnectInfo;
 use crate::stream::stream_flow;
 use crate::tcp::connect as tcp_connect;
 use crate::Protocol7;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
 use any_base::typ::{ArcMutex, ArcMutexTokio};
 use any_base::util::ArcString;
@@ -408,7 +408,7 @@ impl connect::Connect for Connect {
         &self,
         _request_id: Option<ArcString>,
         stream_info: Option<ArcMutex<StreamFlowInfo>>,
-        _run_time: Option<Arc<Box<dyn Runtime>>>,
+        _run_time: Option<Runtime>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
         let start_time = Instant::now();
         let connect = self.client.connect(self.connect.clone()).await;

@@ -1,4 +1,4 @@
-use crate::typ::{ArcMutex, ArcMutexTokio, ArcRwLock};
+use crate::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionExt, OptionArcx};
 use crate::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
@@ -143,8 +143,7 @@ impl FileExtFix {
 }
 
 pub struct FileExt {
-    pub async_lock: ArcMutexTokio<()>,
-    pub file: ArcMutex<File>,
+    pub file: OptionArcx<File>,
     pub fix: Arc<FileExtFix>,
     pub file_path: ArcRwLock<ArcString>,
     pub file_len: u64,
@@ -157,8 +156,7 @@ impl FileExt {
 
     pub fn default() -> Self {
         FileExt {
-            async_lock: ArcMutexTokio::default(),
-            file: ArcMutex::default(),
+            file: OptionArcx::default(),
             fix: Arc::new(FileExtFix::default()),
             file_path: ArcRwLock::default(),
             file_len: 0,
@@ -169,8 +167,7 @@ impl FileExt {
     }
     pub fn new_fd(file_fd: i32) -> Self {
         FileExt {
-            async_lock: ArcMutexTokio::default(),
-            file: ArcMutex::default(),
+            file: OptionArcx::default(),
             fix: Arc::new(FileExtFix::new_fd(file_fd)),
             file_path: ArcRwLock::default(),
             file_len: 0,
@@ -211,7 +208,7 @@ impl FileExt {
         }
     }
     pub fn create_sparse_file(&self, file_size: u64) -> std::io::Result<()> {
-        create_sparse_file(&*self.file.get(), file_size, Some(self.fix.file_fd))
+        create_sparse_file(self.file.get(), file_size, Some(self.fix.file_fd))
     }
 }
 

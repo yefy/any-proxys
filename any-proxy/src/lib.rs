@@ -13,6 +13,7 @@ pub mod tunnel2;
 pub mod upstream;
 pub mod util;
 pub mod wasm;
+pub mod logx;
 
 use any_tunnel2::Protocol4;
 use anyhow::anyhow;

@@ -2,7 +2,7 @@ use super::peer_client::PeerClient;
 use super::peer_stream_connect::PeerStreamConnect;
 use super::stream::Stream;
 use crate::peer_stream::PeerStreamKey;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -136,7 +136,7 @@ impl Client {
         request_id: Option<ArcString>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
         self.do_connect(request_id, peer_stream_connect, peer_stream_size, run_time)
             .await
@@ -148,7 +148,7 @@ impl Client {
         request_id: Option<ArcString>,
         peer_stream_connect: Arc<Box<dyn PeerStreamConnect>>,
         peer_stream_size: Option<Arc<AtomicUsize>>,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> Result<(Stream, SocketAddr, SocketAddr)> {
         let client_id = CLIENT_ID.fetch_add(1, Ordering::Relaxed);
         let max_stream_size = peer_stream_connect.max_stream_size().await;

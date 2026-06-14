@@ -16,6 +16,7 @@ use std::mem::swap;
 use std::sync::Arc;
 #[cfg(feature = "anyproxy-write-block-time-ms")]
 use std::time::Instant;
+use system_interface::fs::FileIoExt;
 
 lazy_static! {
     pub static ref CACHE_HANDLE_NEXT: ArcRwLockTokio<PluginHandleStream> =
@@ -269,16 +270,21 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
             let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
                 let mut write_buffer = write_buffer.get_mut();
                 let mut buf = write_buffer.buffer().unwrap();
-                let mut write_fw = write_fw.get_mut();
-                write_fw.seek(std::io::SeekFrom::Start(fw_seek))?;
-                let ret = write_fw
-                    .write_all(buf.chunk(w_size))
+
+                //let mut write_fw = write_fw.get_mut();
+                // write_fw.seek(std::io::SeekFrom::Start(fw_seek))?;
+                // let ret = write_fw
+                //     .write_all(buf.chunk(w_size))
+                //     .map_err(|e| anyhow!("err:fw.write_all => e:{}, w_size:{}", e, w_size));
+
+                let ret = write_fw.write_all_at(buf.chunk(w_size), fw_seek)
                     .map_err(|e| anyhow!("err:fw.write_all => e:{}, w_size:{}", e, w_size));
+
                 match ret {
                     Ok(_) => {
-                        if let Err(e) = write_fw.flush() {
-                            return Err(anyhow!("{}", e));
-                        }
+                        // if let Err(e) = write_fw.flush() {
+                        //     return Err(anyhow!("{}", e));
+                        // }
                         buf.advance(w_size);
                         Ok(())
                     }
@@ -295,16 +301,20 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
         let ret: std::result::Result<(), Error> = tokio::task::spawn_blocking(move || {
             let mut buf = buffer.buffer().unwrap();
             let fw = file_ext.file.clone();
-            let fw = &mut *fw.get_mut();
-            fw.seek(std::io::SeekFrom::Start(seek))?;
-            let ret = fw
-                .write_all(buf.chunk(size))
+
+            //let fw = &mut *fw.get_mut();
+            // fw.seek(std::io::SeekFrom::Start(seek))?;
+            // let ret = fw
+            //     .write_all(buf.chunk(size))
+            //     .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
+
+            let ret = fw.write_all_at(buf.chunk(size), seek)
                 .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
             match ret {
                 Ok(_) => {
-                    if let Err(e) = fw.flush() {
-                        return Err(anyhow!("{}", e));
-                    }
+                    // if let Err(e) = fw.flush() {
+                    //     return Err(anyhow!("{}", e));
+                    // }
                     Ok(())
                 }
                 Err(e) => Err(anyhow!("{}", e)),
@@ -396,11 +406,17 @@ pub async fn read_buffer(sss: &StreamStreamShare) -> Result<StreamStatus> {
                 let mut buffer = StreamStreamBytes::new();
                 let mut data = vec![0u8; size];
                 let fr = fr.file.clone();
-                let fr = &mut *fr.get_mut();
                 log::trace!(target: "main", "tmpfile seek:{}, size:{}", seek, size);
-                fr.seek(std::io::SeekFrom::Start(seek))?;
+
+                //let fr = &mut *fr.get_mut();
+                // fr.seek(std::io::SeekFrom::Start(seek))?;
+                // let ret = fr
+                //     .read_exact(data.as_mut_slice())
+                //     .map_err(|e| anyhow!("err:fr.read_exact => e:{}, size:{}", e, size));
+
+                //___wait___   &mut 可以去掉
                 let ret = fr
-                    .read_exact(data.as_mut_slice())
+                    .read_exact_at(data.as_mut_slice(), seek)
                     .map_err(|e| anyhow!("err:fr.read_exact => e:{}, size:{}", e, size));
 
                 #[cfg(feature = "anyio-file")]

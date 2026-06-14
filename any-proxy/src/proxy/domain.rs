@@ -21,7 +21,7 @@ use tokio::sync::broadcast;
 pub struct DomainListen {
     pub ms: Arc<Modules>,
     pub domain_config_listen: Arc<domain_config::DomainConfigListen>,
-    pub listen_shutdown_tx: broadcast::Sender<()>,
+    pub listen_shutdown_tx: broadcast::Sender<bool>,
 }
 
 pub struct Domain {
@@ -77,7 +77,7 @@ impl module::Server for Domain {
                     .get(key)
                     .unwrap()
                     .listen_shutdown_tx
-                    .send(());
+                    .send(false);
                 self.domain_config_listen_map.get_mut().remove(key);
             }
         }
@@ -175,6 +175,7 @@ impl module::Server for Domain {
         Ok(())
     }
     async fn send(&self, value: ArcUnsafeAny) -> Result<()> {
+        let value = value.get::<AnyproxyWorkDataSend>();
         let keys = self
             .domain_config_listen_map
             .get()
@@ -188,10 +189,9 @@ impl module::Server for Domain {
                 .get(key)
                 .unwrap()
                 .listen_shutdown_tx
-                .send(());
+                .send(value.is_fast_shutdown);
         }
 
-        let value = value.get::<AnyproxyWorkDataSend>();
         self.executor.send(&value.name, value.is_fast_shutdown);
         Ok(())
     }

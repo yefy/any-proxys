@@ -47,16 +47,16 @@ anyruntime-tokio-spawn =[]
 
 [dependencies]
 any-base = {path = "../any-base", features = ["anyspawn-parking-lot"], default-features = false}
-anyhow = {path = "../3rdparty/anyhow"}
-tokio = { version = "1.35.1", features = ["full"] }
+anyhow = { git = "https://github.com/yefy/anyhow.git"}
+tokio = { version = "1.38.0", features = ["full"], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4.19"
 futures-util = { version = "0.3", default-features = false, features = ["async-await", "sink", "std"] }
 lazy_static = "1.4.0"
-log = "0.4.14"
+log = "0.4"
 libc = "0.2.109"
 toml = "0.5.10"
-log4rs = "1.2.0"
+log4rs = { git = "https://github.com/yefy/log4rs.git" }
 bytes = "1.5.0"
 async-trait = "0.1.52"
 hashbrown = "0.11.2"

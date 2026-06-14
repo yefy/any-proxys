@@ -10,6 +10,7 @@ use crate::config::config_toml::ProxyPassTcp;
 use crate::config::upstream_core::GetConnectI;
 use crate::config::upstream_proxy_pass_tcp::UpstreamTcp;
 use crate::upstream::UpstreamVarAddr;
+use crate::util::var::VarParse;
 use any_base::typ::ArcUnsafeAny;
 
 pub struct Conf {}
@@ -146,22 +147,35 @@ async fn init_conf(
 async fn proxy_pass_tcp(
     ms: module::Modules,
     conf_arg: module::ConfArg,
-    _cmd: module::Cmd,
+    cmd: module::Cmd,
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
+    let proxy_pass_conf: ProxyPassTcp = {
+        let str = conf_arg.value.get::<String>();
+        toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?
+    };
+    do_proxy_pass_tcp(&ms, &conf_arg, &cmd, proxy_pass_conf).await
+}
+
+pub async fn do_proxy_pass_tcp(
+    ms: &module::Modules,
+    conf_arg: &module::ConfArg,
+    _cmd: &module::Cmd,
+    mut proxy_pass_conf: ProxyPassTcp,
+) -> Result<()> {
     let str = conf_arg.value.get::<String>();
-    let proxy_pass_conf: ProxyPassTcp =
-        toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
+    if proxy_pass_conf.balancer.is_empty() {
+        proxy_pass_conf.balancer = upstream_core_plugin::ROUND_ROBIN.to_string();
+    }
     log::trace!(target: "main", "ProxyPassTcp proxy_pass_conf:{:?}", proxy_pass_conf);
 
     use crate::config::upstream_block;
     use crate::config::upstream_core;
     use crate::config::upstream_core_plugin;
-    use crate::util::var::Var;
 
-    let address_vars = Var::new(&proxy_pass_conf.address, "")?;
-    if address_vars.is_var {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+    if address_vars.context.is_var {
         let net_server_core_conf = net_server_core::curr_conf_mut(conf_arg.curr_conf());
         if net_server_core_conf.upstream_name.len() > 0 {
             return Err(anyhow!("err:str:{}", str));
@@ -177,7 +191,7 @@ async fn proxy_pass_tcp(
 
     let mut upstream_block = upstream_block::Conf::new();
     upstream_block.name = format!("tcp_{:?}", proxy_pass_conf);
-    upstream_block.balancer = upstream_core_plugin::ROUND_ROBIN.into();
+    upstream_block.balancer = proxy_pass_conf.balancer.clone().into();
 
     let upstream_core_plugin_conf = upstream_core_plugin::main_conf_mut(&ms).await;
 

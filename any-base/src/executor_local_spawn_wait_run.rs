@@ -1,5 +1,7 @@
 use super::executor_local_spawn::AsyncLocalContext;
 use super::executor_local_spawn::ExecutorsLocal;
+use crate::macros::Runtime;
+use crate::spawn;
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
@@ -54,37 +56,41 @@ impl ExecutorLocalSpawnWaitRun {
         };
 
         let run_wait_group_worker = self.run_wait_group.worker();
-        let err_run_wait_group_worker = self.run_wait_group.worker();
+        let run_wait_group_worker_inner = if is_wait {
+            Some(run_wait_group_worker.add())
+        } else {
+            None
+        };
+
         let executors = self.executors.clone();
-        executors
-            .context
-            .run_time
-            .clone()
-            .spawn(Box::pin(async move {
-                scopeguard::defer! {
-                    log::debug!(target: "main", "stop executor version:{} index:{}", version, index);
-                    if wait_group_worker_inner.is_some() {
-                        wait_group_worker_inner.unwrap().done();
-                    }
+        spawn!(executors.context.run_time, async move {
+            let err_wait_group_worker_inner = wait_group_worker_inner.clone();
+            scopeguard::defer! {
+                log::debug!(target: "main", "stop executor version:{} index:{}", version, index);
+                if wait_group_worker_inner.is_some() {
+                    wait_group_worker_inner.unwrap().done();
                 }
+            }
 
-                scopeguard::defer! {
-                    err_run_wait_group_worker.error(anyhow!("err:executor_local_spawn_wait_run"));
+            let err_run_wait_group_worker_inner = run_wait_group_worker_inner.clone();
+            scopeguard::defer! {
+                if err_run_wait_group_worker_inner.is_some() {
+                    err_run_wait_group_worker_inner.unwrap().try_done_error(anyhow!("err:executor_local_spawn_wait_run"));
                 }
+            }
 
-                log::debug!(target: "main", "start executor version:{} index:{}", version, index,);
+            log::debug!(target: "main", "start executor version:{} index:{}", version, index,);
 
-                let ret: Result<()> = async {
-                    let async_local_context =
-                        AsyncLocalContext::new(executors, run_wait_group_worker);
-                    service(async_local_context)
-                        .await
-                        .map_err(|e| anyhow!("err:service_run => e:{}", e))?;
-                    Ok(())
-                }
-                .await;
-                ret.unwrap_or_else(|e| log::error!("err:executor_local_spawn => e:{}", e));
-            }));
+            let ret: Result<()> = async {
+                let async_local_context = AsyncLocalContext::new(executors, run_wait_group_worker_inner, err_wait_group_worker_inner);
+                service(async_local_context)
+                    .await
+                    .map_err(|e| anyhow!("err:service_run => e:{}", e))?;
+                Ok(())
+            }
+            .await;
+            ret.unwrap_or_else(|e| log::error!("err:executor_local_spawn => e:{}", e));
+        });
     }
 
     pub async fn wait_run(&self) -> Result<()> {
@@ -94,7 +100,7 @@ impl ExecutorLocalSpawnWaitRun {
             self.worker_threads
         );
         self.run_wait_group
-            .wait_complete(self.worker_threads)
+            .wait()
             .await
             .map_err(|e| anyhow!("err:wait_start => e:{}", e))?;
         log::debug!(target: "main",

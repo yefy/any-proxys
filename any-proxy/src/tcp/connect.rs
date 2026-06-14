@@ -5,7 +5,7 @@ use crate::stream::connect;
 use crate::stream::connect::ConnectInfo;
 use crate::stream::stream_flow;
 use crate::Protocol7;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::stream_flow::StreamFlowInfo;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
@@ -48,7 +48,7 @@ impl connect::Connect for Connect {
         &self,
         _request_id: Option<ArcString>,
         stream_info: Option<ArcMutex<StreamFlowInfo>>,
-        _run_time: Option<Arc<Box<dyn Runtime>>>,
+        _run_time: Option<Runtime>,
     ) -> Result<(stream_flow::StreamFlow, ConnectInfo)> {
         let tcp_connect_timeout = self.context.tcp_config.tcp_connect_timeout as u64;
         let timeout = tokio::time::Duration::from_secs(tcp_connect_timeout);

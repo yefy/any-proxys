@@ -1,6 +1,6 @@
 use crate::proxy::http_proxy::http_hyper_stream::HttpHyperStream;
 use crate::stream::connect::Connect;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::util::ArcString;
 use anyhow::anyhow;
 use hyper::client::connect::ReqArg2;
@@ -19,7 +19,7 @@ pub struct HttpHyperConnector {
     request_id: ArcString,
     connect_func: Arc<Box<dyn Connect>>,
     session_id: Arc<AtomicU64>,
-    run_time: Arc<Box<dyn Runtime>>,
+    run_time: Runtime,
 }
 
 impl HttpHyperConnector {
@@ -27,7 +27,7 @@ impl HttpHyperConnector {
         request_id: ArcString,
         connect_func: Arc<Box<dyn Connect>>,
         session_id: Arc<AtomicU64>,
-        run_time: Arc<Box<dyn Runtime>>,
+        run_time: Runtime,
     ) -> HttpHyperConnector {
         HttpHyperConnector {
             request_id,

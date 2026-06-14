@@ -2,7 +2,7 @@ use crate::config::config_toml::AccessConfig;
 use crate::proxy::proxy::AccessContext;
 use crate::proxy::stream_info::StreamInfo;
 use crate::proxy::stream_var;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use crate::wasm::run_wasm_plugin;
 use crate::wasm::WasmHost;
 use any_base::typ::Share;
@@ -26,9 +26,9 @@ impl AccessLog {
                 continue;
             }
 
-            let ret: Result<Var> = async {
-                let access_format_vars = Var::new(&access.access_format, "-")
-                    .map_err(|e| anyhow!("err:Var::new => e:{}", e))?;
+            let ret: Result<VarParse> = async {
+                let access_format_vars = VarParse::new(&access.access_format, "-")
+                    .map_err(|e| anyhow!("err:VarParse::new => e:{}", e))?;
                 let mut access_format_vars_test = Var::copy(&access_format_vars)
                     .map_err(|e| anyhow!("err:Var::copy => e:{}", e))?;
                 access_format_vars_test.for_each(|var| {

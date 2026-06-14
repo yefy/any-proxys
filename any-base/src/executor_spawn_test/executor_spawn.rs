@@ -5,7 +5,7 @@ use crate::rt::{ExecutorTime, SpawnExec};
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
-use awaitgroup::Worker;
+use awaitgroup::WaitGroupWorker;
 use std::future::Future;
 use std::thread;
 use tokio::sync::broadcast;
@@ -16,7 +16,7 @@ pub struct ExecutorsSpawn<E: Clone> {
     pub group_version: i32,
     pub thread_id: std::thread::ThreadId,
     pub cpu_affinity: bool,
-    pub wait_group_worker: Worker,
+    pub wait_group_worker: WaitGroupWorker,
     pub shutdown_thread_tx: broadcast::Sender<bool>,
 }
 
@@ -54,13 +54,13 @@ impl<E: Clone> ExecutorsSpawn<E> {
 #[derive(Clone)]
 pub struct AsyncContextSpawn<E: Clone> {
     executors: ExecutorsSpawn<E>,
-    run_wait_group_worker: Worker,
+    run_wait_group_worker: WaitGroupWorker,
 }
 
 impl<E: Clone> AsyncContextSpawn<E> {
     pub fn new(
         executors: ExecutorsSpawn<E>,
-        run_wait_group_worker: Worker,
+        run_wait_group_worker: WaitGroupWorker,
     ) -> AsyncContextSpawn<E> {
         return AsyncContextSpawn {
             executors,

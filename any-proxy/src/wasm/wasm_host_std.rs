@@ -25,7 +25,8 @@ impl wasm_std::Host for WasmHost {
         name: String,
     ) -> wasmtime::Result<std::result::Result<Option<String>, String>> {
         use crate::proxy::stream_var;
-        let var = stream_var::find(&name, &*self.stream_info.get());
+        let stream_info = &*self.stream_info.get();
+        let var = stream_var::find(&name, stream_info);
         if var.is_err() {
             return Ok(Ok(None));
         }

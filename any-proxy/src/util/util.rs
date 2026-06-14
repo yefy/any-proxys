@@ -275,6 +275,28 @@ pub fn quic_key_from_addr(addr: &SocketAddr) -> Result<String> {
 }
 
 pub fn host_and_port(http_host: &str) -> (&str, &str) {
+    // [ipv6]
+    let s = http_host.trim();
+    if s.starts_with('[') && s.ends_with(']') {
+        return (&s[1..s.len() - 1], "");
+    }
+
+    // [ipv6]:port
+    if let Some(host_part) = s.strip_prefix('[') {
+        if let Some((host, port)) = host_part.split_once("]:") {
+            return (host, port);
+        }
+    }
+
+    // host:port
+    if s.matches(':').count() == 1 {
+        return s.rsplit_once(':').unwrap();
+    }
+
+    // host 或 ipv6
+    (s, "")
+
+    /*
     let http_hosts = http_host.trim().split(":").collect::<Vec<_>>();
     let domain = http_hosts[0].trim();
     let port = if http_hosts.len() > 1 {
@@ -283,4 +305,6 @@ pub fn host_and_port(http_host: &str) -> (&str, &str) {
         ""
     };
     (domain, port)
+
+     */
 }

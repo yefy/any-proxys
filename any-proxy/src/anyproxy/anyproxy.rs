@@ -8,6 +8,7 @@ use any_base::module::module;
 use anyhow::anyhow;
 use anyhow::Result;
 use structopt::StructOpt;
+use rivetx_core::task_group::TaskGroup;
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, StructOpt)]
 pub struct ArgsConfig {
@@ -21,6 +22,8 @@ pub struct ArgsConfig {
     pub config: Option<String>,
     #[structopt(long = "hot")]
     pub hot: Option<String>,
+    #[structopt(long = "log_port")]
+    pub log_port: Option<u16>,
 }
 /*
 命令:anyproxy -s quit 正常关闭，可设置超时时间
@@ -210,7 +213,7 @@ impl Anyproxy {
         self.group_version
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&mut self, log_task_group: TaskGroup) -> Result<()> {
         scopeguard::defer! {
             Anyproxy::remove_signal_file();
             log::info!("anyproxy end");
@@ -222,37 +225,38 @@ impl Anyproxy {
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
 
-        #[cfg(feature = "anylock-time")]
-        self.executor._start_and_free(move |_| async move {
-            use any_base::typ2;
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                let mut datas = {
-                    let map = &mut *typ2::TOKIO_LOCK_INDEX_MAP.lock();
-                    let mut datas = Vec::with_capacity(100);
-                    for (k, v) in map {
-                        datas.push((k.clone(), v.clone()))
-                    }
-                    datas
-                };
-
-                datas.sort_by(|(_, av), (_, bv)| av.partial_cmp(bv).unwrap());
-                if datas.is_empty() {
-                    continue;
-                }
-                let (k, v) = &datas[0];
-                log::info!("min async lock:{}, time:{}", k, v);
-                for (k, v) in datas {
-                    log::info!("all async lock:{}, time:{}", k, v);
-                }
-            }
-        });
+        // #[cfg(feature = "anylock-time")]
+        // self.executor._start_and_free(move |_| async move {
+        //     use any_base::typ2;
+        //     loop {
+        //         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        //         let mut datas = {
+        //             let map = &mut *typ2::TOKIO_LOCK_INDEX_MAP.lock();
+        //             let mut datas = Vec::with_capacity(100);
+        //             for (k, v) in map {
+        //                 datas.push((k.clone(), v.clone()))
+        //             }
+        //             datas
+        //         };
+        //
+        //         datas.sort_by(|(_, av), (_, bv)| av.partial_cmp(bv).unwrap());
+        //         if datas.is_empty() {
+        //             continue;
+        //         }
+        //         let (k, v) = &datas[0];
+        //         log::info!("min async lock:{}, time:{}", k, v);
+        //         for (k, v) in datas {
+        //             log::info!("all async lock:{}, time:{}", k, v);
+        //         }
+        //     }
+        // });
         //test
         // use any_base::typ2;
         // let lock_test = typ2::ArcMutexTokio::new(1);
-        // let _la = lock_test.get_mut(file!(), line!()).await;
+        // let _la = lock_test.get_mut().await;
         // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        // let _la = lock_test.get_mut(file!(), line!()).await;
+        // let _la = lock_test.get_mut().await;
+
         let (ms_tx, ms_rx) = async_channel::unbounded();
         let mut anyproxy_group: Option<anyproxy_group::AnyproxyGroup> =
             Some(anyproxy_group::AnyproxyGroup::new(
@@ -299,7 +303,7 @@ impl Anyproxy {
                 AnyproxyState::Stop => {
                     self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true)
                         .await;
-                    log::info!("signal: quit");
+                    log::info!("signal: stop");
                     break;
                 }
                 AnyproxyState::Reload => {
@@ -358,7 +362,8 @@ impl Anyproxy {
             }
         }
 
-        self.executor.send("anyproxy_group stop", true);
+        log_task_group.quit(true, 1).await;
+        //self.executor.send("anyproxy_group stop", true);
         self.wait_anyproxy_groups().await?;
         let _ = Self::ms_try_recv(&ms_rx).await;
 
@@ -417,7 +422,9 @@ impl Anyproxy {
 
     pub async fn wait_anyproxy_groups(&mut self) -> Result<()> {
         log::info!("anyproxy wait_anyproxy_groups");
+        self.executor.send("anyproxy_group stop", true);
         self.executor.wait("anyproxy wait anyproxy_groups").await?;
+        //self.executor.stop("anyproxy wait anyproxy_groups", true, 1).await;
         Ok(())
     }
 

@@ -5,22 +5,27 @@ pub mod async_wait;
 pub mod executor_local_spawn;
 pub mod executor_local_spawn_pool;
 pub mod executor_local_spawn_pool_wait_run;
-pub mod executor_local_spawn_test;
+//pub mod executor_local_spawn_test;
 pub mod executor_local_spawn_wait_run;
 pub mod executor_spawn;
 pub mod executor_spawn_pool;
 pub mod executor_spawn_pool_wait_run;
-pub mod executor_spawn_test;
+//pub mod executor_spawn_test;
 pub mod executor_spawn_wait_run;
-pub mod executor_test;
+//pub mod executor_test;
 pub mod file_ext;
 pub mod future_wait;
 pub mod io;
 pub mod io_rb;
+pub mod macros;
 pub mod module;
+#[cfg(feature = "anyspawn-parking-lot")]
 pub mod parking_lot;
 pub mod queue;
+#[cfg(test)]
+mod queue_test;
 pub mod rt;
+#[cfg(feature = "anyspawn-std-sync")]
 pub mod std_sync;
 pub mod stream_buf;
 pub mod stream_channel_read;
@@ -34,7 +39,8 @@ pub mod thread_pool_wait_run;
 pub mod thread_spawn;
 pub mod thread_spawn_wait_run;
 pub mod typ;
-pub mod typ2;
+//pub mod typ2;
+pub mod arc_string;
 pub mod util;
 
 pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;

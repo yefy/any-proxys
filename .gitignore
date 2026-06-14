@@ -2,7 +2,7 @@
 .idea/*
 
 # visual studio code files
-.vscode
+#.vscode
 
 # Rust
 target/*
@@ -40,9 +40,8 @@ any-example/anyproxy/anyproxy
 any-example/anyproxy/tokio_proxy.exe
 any-example/anyproxy/tokio_proxy
 
-any-example/anyproxy_o/*
-any-example/anyproxy_p/*
-
 .output
 *.tmp
 *.err
+*.rlib
+*.pdb

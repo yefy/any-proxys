@@ -7,7 +7,7 @@ use crate::config::upstream_core;
 use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
 use crate::proxy::stream_info::StreamInfo;
 use crate::ssl::connect as ssl_connect;
-use crate::util::var::Var;
+use crate::util::var::{Var, VarParse};
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::Share;
@@ -177,6 +177,7 @@ async fn proxy_pass_ssl(
 use crate::stream::connect;
 use crate::upstream::UpstreamHeartbeatData;
 use tokio::sync::broadcast;
+use crate::util::util::host_and_port;
 
 pub struct Heartbeat {
     ssl: ProxyPassSsl,
@@ -209,10 +210,17 @@ impl upstream_core::HeartbeatI for Heartbeat {
                 tcp_config_name
             ));
         }
+        let ssl_domain = if self.ssl.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.ssl.address);
+            domain.to_string()
+        } else {
+            self.ssl.ssl_domain.clone()
+        };
+
         let connect = Box::new(ssl_connect::Connect::new(
             host.clone().into(),
             addr.clone(),
-            self.ssl.ssl_domain.clone(),
+            ssl_domain,
             tcp_config.unwrap(),
         ));
 
@@ -271,12 +279,12 @@ impl upstream_core::HeartbeatI for Heartbeat {
 }
 
 pub struct UpstreamSsl {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     ssl: ProxyPassSsl,
 }
 
 impl UpstreamSsl {
-    pub fn new(address_vars: Option<Var>, ssl: ProxyPassSsl) -> Self {
+    pub fn new(address_vars: Option<VarParse>, ssl: ProxyPassSsl) -> Self {
         UpstreamSsl { address_vars, ssl }
     }
 }
@@ -327,10 +335,17 @@ impl upstream_core::GetConnectI for UpstreamSsl {
                 tcp_config_name
             ));
         }
+        let ssl_domain = if self.ssl.ssl_domain.is_empty() {
+            let (domain, _) = host_and_port(&self.ssl.address);
+            domain.to_string()
+        } else {
+            self.ssl.ssl_domain.clone()
+        };
+
         let connect = Box::new(ssl_connect::Connect::new(
             address.into(),
             addr.clone(),
-            self.ssl.ssl_domain.clone(),
+            ssl_domain,
             tcp_config.unwrap(),
         ));
         let connect: Arc<Box<dyn connect::Connect>> = Arc::new(connect);

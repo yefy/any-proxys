@@ -11,8 +11,8 @@ net {
             #文件路径    default "./logs/access.log"
             access_log_file = "./logs/access.log"
             #支持预制变量
-            access_format = """[${local_time}] stream_max_write_time:${write_max_block_time_ms} buffer_cache:${buffer_cache} \
-                upstream_balancer:${upstream_balancer} hello:${is_proxy_protocol_hello} ebpf:${is_open_ebpf} \
+            access_format = """[${local_time}] local_name:${local_name} stream_max_write_time:${write_max_block_time_ms} buffer_cache:${buffer_cache} \
+                upstream_balancer:${upstream_balancer} upstream_name:${upstream_name} hello:${is_proxy_protocol_hello} ebpf:${is_open_ebpf} \
                 sendfile:${open_sendfile} ${local_protocol} -> ${upstream_protocol} \
                 request_id:[${request_id}] client_addr:${client_addr} remote_addr:${remote_addr} local_addr:${local_addr} upstream_addr:${upstream_addr} \
                 domain:${domain} upstream_host:${upstream_host} ${status} ${status_str} timeout_exit:${is_timeout_exit} \

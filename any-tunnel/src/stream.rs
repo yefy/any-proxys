@@ -10,7 +10,7 @@ use any_base::stream_buf::StreamBuf;
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
 use any_base::util::StreamReadMsg;
-use awaitgroup::WorkerInner;
+use awaitgroup::WaitGroupInner;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -46,7 +46,7 @@ pub struct Stream {
     _session_id: ArcString,
     stream_tx_pack_id: Arc<AtomicU32>,
     stream_rx_pack_id: Arc<AtomicU32>,
-    worker_inner: Option<WorkerInner>,
+    worker_inner: Option<WaitGroupInner>,
 }
 
 impl Stream {
@@ -59,7 +59,7 @@ impl Stream {
         _session_id: ArcString,
         stream_tx_pack_id: Arc<AtomicU32>,
         stream_rx_pack_id: Arc<AtomicU32>,
-        worker_inner: WorkerInner,
+        worker_inner: WaitGroupInner,
     ) -> Stream {
         Stream {
             is_client,

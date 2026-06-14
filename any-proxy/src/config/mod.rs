@@ -32,6 +32,7 @@ pub mod net_server_http;
 pub mod net_server_http_echo;
 pub mod net_server_http_proxy;
 pub mod net_server_http_purge;
+pub mod net_server_http_router;
 pub mod net_server_http_static;
 pub mod net_server_http_static_test;
 pub mod net_server_stream_test;

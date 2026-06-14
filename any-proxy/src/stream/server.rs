@@ -12,7 +12,7 @@ use any_tunnel2::server as any_tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
-use awaitgroup::{Worker, WorkerInner};
+use awaitgroup::{WaitGroupWorker, WaitGroupInner};
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -26,8 +26,8 @@ pub struct ServerStreamInfo {
     pub domain: Option<ArcString>,
     pub is_tls: bool,
     pub raw_fd: i32,
-    pub listen_shutdown_tx: OptionExt<broadcast::Sender<()>>,
-    pub listen_worker: OptionExt<Worker>,
+    pub listen_shutdown_tx: OptionExt<broadcast::Sender<bool>>,
+    pub listen_worker: OptionExt<WaitGroupWorker>,
 }
 
 impl fmt::Debug for ServerStreamInfo {
@@ -75,7 +75,7 @@ pub trait Connection: Send {
 
 pub async fn accept<A: Listener + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
-    shutdown_rx2: &mut broadcast::Receiver<()>,
+    shutdown_rx2: &mut broadcast::Receiver<bool>,
     listen: &mut Box<A>,
 ) -> Result<(Option<(Box<dyn Connection>, bool)>, bool)> {
     tokio::select! {
@@ -91,8 +91,12 @@ pub async fn accept<A: Listener + ?Sized>(
                 return Ok((None, is_fast_shutdown.unwrap()))
             }
         }
-        _ = shutdown_rx2.recv() => {
-            return Ok((None, false));
+        is_fast_shutdown = shutdown_rx2.recv() => {
+            if is_fast_shutdown.is_err() {
+                return Ok((None, true))
+            } else {
+                return Ok((None, is_fast_shutdown.unwrap()))
+            }
         }
         else => {
             return Err(anyhow!("err:accept"));
@@ -102,7 +106,7 @@ pub async fn accept<A: Listener + ?Sized>(
 
 pub async fn stream<C: Connection + ?Sized>(
     shutdown_rx: &mut broadcast::Receiver<bool>,
-    shutdown_rx2: &mut broadcast::Receiver<()>,
+    shutdown_rx2: &mut broadcast::Receiver<bool>,
     connection: &mut Box<C>,
 ) -> Result<Option<(StreamFlow, ServerStreamInfo)>> {
     tokio::select! {
@@ -164,8 +168,8 @@ pub async fn listen<S, F>(
     #[cfg(feature = "anyspawn-count")] name: String,
     executors: ExecutorsLocal,
     shutdown_timeout: u64,
-    listen_shutdown_tx: broadcast::Sender<()>,
-    listen_worker_inner: WorkerInner,
+    listen_shutdown_tx: broadcast::Sender<bool>,
+    listen_worker_inner: WaitGroupInner,
     listen_server: Arc<Box<dyn Server>>,
     mut listen: Box<dyn Listener>,
     service: S,

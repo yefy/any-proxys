@@ -9,14 +9,14 @@ use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{Worker, WorkerInner};
+use awaitgroup::{WaitGroupWorker, WaitGroupInner};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub struct PortServer {
     executors: ExecutorsLocal,
-    listen_shutdown_tx: broadcast::Sender<()>,
+    listen_shutdown_tx: broadcast::Sender<bool>,
     listen_server: Arc<Box<dyn server::Server>>,
     key: String,
     port_config_listen_map: ShareRw<HashMap<String, PortListen>>,
@@ -25,7 +25,7 @@ pub struct PortServer {
 impl PortServer {
     pub fn new(
         executors: ExecutorsLocal,
-        listen_shutdown_tx: broadcast::Sender<()>,
+        listen_shutdown_tx: broadcast::Sender<bool>,
         listen_server: Arc<Box<dyn server::Server>>,
         key: String,
         port_config_listen_map: ShareRw<HashMap<String, PortListen>>,
@@ -39,7 +39,7 @@ impl PortServer {
         })
     }
 
-    pub async fn start(&self, ms: Arc<Modules>, worker_inner: WorkerInner) -> Result<()> {
+    pub async fn start(&self, ms: Arc<Modules>, worker_inner: WaitGroupInner) -> Result<()> {
         log::trace!(target: "main", "port server start");
         use crate::config::tunnel2_core;
         use crate::config::tunnel_core;
@@ -119,7 +119,7 @@ impl PortServer {
         listen: Box<dyn Listener>,
         tunnel_publish: Option<tunnel_server::Publish>,
         tunnel2_publish: Option<tunnel2_server::Publish>,
-        worker: Worker,
+        worker: WaitGroupWorker,
     ) -> Result<()> {
         let listen_server = self.listen_server.clone();
         let key = self.key.clone();

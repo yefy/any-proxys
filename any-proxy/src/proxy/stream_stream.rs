@@ -155,7 +155,7 @@ impl StreamStream {
         r_wait: FutureWait,
         w_wait: FutureWait,
         wait_group: &awaitgroup::WaitGroup,
-        worker_inner: &awaitgroup::WorkerInner,
+        worker_inner: &awaitgroup::WaitGroupInner,
         scc: &Arc<StreamConfigContext>,
     ) -> Result<()> {
         let mut data = vec![0; 8192];

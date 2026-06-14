@@ -8,8 +8,8 @@ use crate::stream::connect;
 use crate::tcp::connect as tcp_connect;
 use crate::upstream::UpstreamHeartbeatData;
 use crate::util::util::host_and_port;
-use crate::util::var::Var;
-use any_base::executor_local_spawn::ThreadRuntime;
+use crate::util::var::{Var, VarParse};
+use any_base::macros::Runtime::ThreadRuntime;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::{ArcUnsafeAny, Share, ShareRw};
@@ -271,12 +271,12 @@ impl upstream_core::HeartbeatI for Heartbeat {
 }
 
 pub struct UpstreamTcp {
-    address_vars: Option<Var>,
+    address_vars: Option<VarParse>,
     tcp: ProxyPassTcp,
 }
 
 impl UpstreamTcp {
-    pub fn new(address_vars: Option<Var>, tcp: ProxyPassTcp) -> Self {
+    pub fn new(address_vars: Option<VarParse>, tcp: ProxyPassTcp) -> Self {
         UpstreamTcp { address_vars, tcp }
     }
 }
@@ -384,7 +384,7 @@ pub async fn get_http_client(
         ArcString::default(),
         connect_func,
         common_core_conf.session_id.clone(),
-        Arc::new(Box::new(ThreadRuntime)),
+        ThreadRuntime,
     );
 
     let client = hyper::Client::builder()

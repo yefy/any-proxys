@@ -84,7 +84,7 @@ impl HttpBodyBufFilter {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum CacheFileStatus {
     Expire,
     Exist,
@@ -377,6 +377,21 @@ pub struct HttpStreamRequest {
     pub header_ext: HttpHeaderExt,
     pub page_size: usize,
     pub local_cache_req_count: usize,
+}
+
+impl std::fmt::Display for HttpStreamRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "http_r")?;
+        Ok(())
+    }
+}
+
+
+impl std::fmt::Debug for HttpStreamRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut builder = f.debug_tuple("http_r");
+        builder.finish()
+    }
 }
 
 impl Drop for HttpStreamRequest {

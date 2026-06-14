@@ -159,16 +159,19 @@ pub async fn upstream_connect_info(
         return Err(anyhow!("err:upstream_data.is_none"));
     }
 
-    let client_ip = stream_var::client_ip(&stream_info.get());
-    let client_ip = if client_ip.is_none() {
-        stream_info.get().server_stream_info.remote_addr.to_string()
-    } else {
-        use crate::util::var::VarAnyData;
-        let client_ip = client_ip.unwrap();
-        if let VarAnyData::Str(client_ip) = client_ip {
-            client_ip
+    let client_ip = {
+        let stream_info = &*stream_info.get();
+        let client_ip = stream_var::client_ip(stream_info);
+        if client_ip.is_none() {
+            stream_info.server_stream_info.remote_addr.to_string()
         } else {
-            return Err(anyhow!("err:client_ip"));
+            use crate::util::var::VarAnyData;
+            let client_ip = client_ip.unwrap();
+            if let VarAnyData::String(client_ip) = client_ip {
+                client_ip.to_string()
+            } else {
+                return Err(anyhow!("err:client_ip"));
+            }
         }
     };
 

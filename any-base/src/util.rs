@@ -1,14 +1,12 @@
+pub use crate::arc_string::ArcString;
 use crate::io::async_write_msg::{MsgWriteBuf, MsgWriteBufFile};
 use bytes::{Buf, Bytes};
 #[cfg(unix)]
 use libc::c_int;
-use serde::de::{Deserialize, Deserializer};
-use serde::ser::Serializer;
-use serde::Serialize;
 use std::collections::VecDeque;
-use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 #[cfg(unix)]
 use tokio::net::TcpStream;
@@ -341,106 +339,6 @@ impl StreamReadMsg {
     }
 }
 
-#[derive(Clone)]
-pub struct ArcString {
-    str: Arc<String>,
-}
-
-impl From<&str> for ArcString {
-    /// Converts a `&str` into a [`String`].
-    ///
-    /// The result is allocated on the heap.
-    #[inline]
-    fn from(s: &str) -> ArcString {
-        ArcString::new(s.to_owned())
-    }
-}
-impl Eq for ArcString {}
-
-impl From<String> for ArcString {
-    /// Converts a `&str` into a [`String`].
-    ///
-    /// The result is allocated on the heap.
-    #[inline]
-    fn from(s: String) -> ArcString {
-        ArcString::new(s)
-    }
-}
-
-impl Default for ArcString {
-    /// Converts a `&str` into a [`String`].
-    ///
-    /// The result is allocated on the heap.
-    #[inline]
-    fn default() -> Self {
-        ArcString::new("".to_string())
-    }
-}
-
-impl ArcString {
-    pub fn new(str: String) -> Self {
-        ArcString { str: Arc::new(str) }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.str
-    }
-
-    pub fn string(&self) -> String {
-        self.str.to_string()
-    }
-}
-
-impl Deref for ArcString {
-    type Target = String;
-
-    fn deref(&self) -> &Self::Target {
-        &self.str
-    }
-}
-use std::fmt;
-use std::sync::atomic::AtomicI64;
-
-impl fmt::Debug for ArcString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Drain").field(&self.as_str()).finish()
-    }
-}
-
-impl fmt::Display for ArcString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.str, f)
-    }
-}
-
-impl PartialEq for ArcString {
-    fn eq(&self, other: &ArcString) -> bool {
-        PartialEq::eq(&self[..], &other[..])
-    }
-    fn ne(&self, other: &ArcString) -> bool {
-        PartialEq::ne(&self[..], &other[..])
-    }
-}
-
-impl Serialize for ArcString {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.str)
-    }
-}
-
-impl<'de> Deserialize<'de> for ArcString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Ok(ArcString::new(s))
-    }
-}
-
 pub fn bytes_index(data: &Bytes, pattern: &[u8]) -> Option<usize> {
     data.windows(pattern.len())
         .position(|window| window == pattern)
@@ -514,5 +412,18 @@ impl HttpHeaderExt {
         HttpHeaderExt {
             hyper_http_sent_bytes,
         }
+    }
+}
+
+pub fn spawn_id() -> Option<tokio::task::Id> {
+    tokio::task::try_id()
+}
+
+pub fn spawn_str_id() -> String {
+    let id = tokio::task::try_id();
+    if id.is_none() {
+        return "0".to_string();
+    } else {
+        id.unwrap().to_string()
     }
 }

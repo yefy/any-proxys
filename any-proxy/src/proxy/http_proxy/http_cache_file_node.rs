@@ -9,9 +9,9 @@ use crate::proxy::http_proxy::http_header_parse::{
 use crate::proxy::http_proxy::http_stream_request::{CacheFileStatus, HttpResponseInfo};
 use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
 use any_base::io::async_write_msg::MsgReadBufFile;
-use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock};
+use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionArcx};
 use any_base::util::ArcString;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use anyhow::Result;
 use http::{Response, Uri};
 use hyper::Body;
@@ -22,6 +22,7 @@ use std::sync::Arc;
 #[cfg(feature = "anyio-file")]
 use std::time::Instant;
 use std::time::UNIX_EPOCH;
+use system_interface::fs::FileIoExt;
 
 pub const CACHE_FILE_KEY: &'static str = "@#anypryx#@:%&#@\r\n";
 
@@ -239,8 +240,7 @@ impl ProxyCacheFileNode {
 
             let file_uniq = FileUniq::new(&file)?;
             let file_ext = FileExt {
-                async_lock: ArcMutexTokio::new(()),
-                file: ArcMutex::new(file),
+                file: OptionArcx::new(file),
                 fix: FileExtFix::new_arc(file_fd, file_uniq),
                 file_path: ArcRwLock::new(path.clone()),
                 file_len,
@@ -265,8 +265,12 @@ impl ProxyCacheFileNode {
 
             #[cfg(feature = "anyio-file")]
             let start_time = Instant::now();
-            file_ext.file.get_mut().seek(std::io::SeekFrom::Start(0))?;
-            file_ext.file.get_mut().write_all(head.as_slice())?;
+
+            // file_ext.file.get_mut().seek(std::io::SeekFrom::Start(0))?;
+            // file_ext.file.get_mut().write_all(head.as_slice())?;
+
+            file_ext.file.write_all_at(head.as_slice(), 0).here()?;
+
             #[cfg(feature = "anyio-file")]
             if start_time.elapsed().as_millis() > 100 {
                 log::info!(
@@ -543,8 +547,7 @@ impl ProxyCacheFileNode {
 
             let file_uniq = FileUniq::new(&file)?;
             let file_ext = FileExt {
-                async_lock: ArcMutexTokio::new(()),
-                file: ArcMutex::new(file),
+                file: OptionArcx::new(file),
                 fix: Arc::new(FileExtFix::new(file_fd, file_uniq)),
                 file_path: ArcRwLock::new(file_name.clone()),
                 file_len,

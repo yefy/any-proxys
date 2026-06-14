@@ -2,7 +2,7 @@ use super::executor_local_spawn_wait_run::ExecutorLocalSpawnWaitRun;
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
-use awaitgroup::Worker;
+use awaitgroup::WaitGroupWorker;
 use std::future::Future;
 use std::thread;
 use tokio::sync::broadcast;
@@ -20,7 +20,7 @@ pub struct ExecutorsLocal {
     pub group_version: i32,
     pub thread_id: std::thread::ThreadId,
     pub cpu_affinity: bool,
-    pub wait_group_worker: Worker,
+    pub wait_group_worker: WaitGroupWorker,
     pub shutdown_thread_tx: broadcast::Sender<bool>,
 }
 
@@ -60,11 +60,11 @@ impl ExecutorsLocal {
 #[derive(Clone)]
 pub struct AsyncLocalContext {
     executors: ExecutorsLocal,
-    run_wait_group_worker: Worker,
+    run_wait_group_worker: WaitGroupWorker,
 }
 
 impl AsyncLocalContext {
-    pub fn new(executors: ExecutorsLocal, run_wait_group_worker: Worker) -> AsyncLocalContext {
+    pub fn new(executors: ExecutorsLocal, run_wait_group_worker: WaitGroupWorker) -> AsyncLocalContext {
         return AsyncLocalContext {
             executors,
             run_wait_group_worker,

@@ -50,20 +50,20 @@ impl ThreadPool {
 async fn thread_pool_test() {
     let ret: Result<()> = async {
         let mut thread_pool = ThreadPool::new(2, true, 3);
-        thread_pool._start(move |async_context| {
+        thread_pool._start(move |_async_context| {
             println!("service run");
             Ok(())
         });
         thread_pool.stop(true, 10).await;
 
-        let mut thread_pool = ThreadPool::new(2, true, 3);
+        let thread_pool = ThreadPool::new(2, true, 3);
         let mut thread_pool_wait_run = thread_pool.thread_pool_wait_run();
         thread_pool_wait_run._start(move |async_context| {
             println!("service wait run");
             async_context.complete();
             Ok(())
         });
-        thread_pool_wait_run.wait_run().await;
+        thread_pool_wait_run.wait_run().await?;
         thread_pool.stop(true, 10).await;
         Ok(())
     }

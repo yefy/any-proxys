@@ -1,7 +1,7 @@
 [workspace]
 resolver = "1"
-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
-default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2","3rdparty/anyhow", "3rdparty/awaitgroup", "3rdparty/hyper-0.14.23"]
+members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2", "3rdparty/hyper-0.14.23"]
+default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2", "3rdparty/hyper-0.14.23"]
 exclude = [
     ".git",
     ".idea",
@@ -13,34 +13,54 @@ exclude = [
     "any-proxy/examples",
     "any-test",
     "any-example",
+    "any-example/example",
     "any-ebpf",
 ]
 
+
+
 [profile.dev]
-debug = true
-panic = "unwind"
+opt-level = 0
+codegen-units = 256
+lto = "off"
 incremental = true
-strip = false
-#opt-level = 0
-#split-debuginfo = '...'  # Platform-specific.
-#debug-assertions = true
-#overflow-checks = true
-#lto = false
-#codegen-units = 256
-#rpath = false
+debug = 1
+split-debuginfo = "packed"
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true
+rpath = false
+strip = "none"
+
 
 [profile.release]
-debug = true
-panic = "abort"
 opt-level = 3
-#这个特性开起来会导致rpm打包失败， deb正常
-lto = false
 codegen-units = 1
+#这个特性开起来会导致rpm打包失败， deb正常
+lto = "fat"
 incremental = false
+debug = 1
+split-debuginfo = "packed"
+panic = "unwind"
+overflow-checks = false
+debug-assertions = false
 rpath = false
-#debug-assertions = false
-#overflow-checks = false
-#性能调试用这个
-#debug = true
-#删除调试信息
-strip = false
+strip = "none"
+
+
+#cargo build --profile bench-dev --no-default-features ...
+[profile.bench-dev]
+inherits = "release"
+opt-level = 1
+codegen-units = 256
+lto = "off"
+incremental = true
+debug = 1
+split-debuginfo = "packed"
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true
+rpath = false
+strip = "none"
+
+

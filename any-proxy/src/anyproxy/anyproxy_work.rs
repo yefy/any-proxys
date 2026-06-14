@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
 use tokio::sync::broadcast;
+use rivetx_core::task_group::TaskGroup;
 
 #[derive(Clone)]
 pub struct AnyproxyWorkDataNew {
@@ -43,6 +44,7 @@ impl AnyproxyWorkDataSend {
     }
 }
 
+#[derive(Clone)]
 pub struct AnyproxyWorkDataStop {
     pub name: String,
     pub is_fast_shutdown: bool,
@@ -149,7 +151,7 @@ impl AnyproxyWork {
 
                     let (ms, wait_group) = ret.unwrap();
                     scopeguard::defer! {
-                        wait_group.worker().add();
+                        wait_group.done();
                     }
 
                     log::info!("reload init_work_ms");
@@ -213,13 +215,25 @@ impl AnyproxyWork {
             is_fast_shutdown,
             shutdown_timeout,
         );
-        let data = ArcUnsafeAny::new(Box::new(data));
-        for server in servers.iter_mut() {
-            if let Err(e) = server.stop(data.clone()).await {
-                log::error!("err:proxy.stop => e:{}", e);
-            }
+        let tg = TaskGroup::new();
+        for mut server in servers {
+            let wgg = tg.guard_add();
+            let data = ArcUnsafeAny::new(Box::new(data.clone()));
+            self.executor.clone()._start(
+                #[cfg(feature = "anyspawn-count")]
+                    Some(format!("{}:{}", file!(), line!())),
+                move |executors| async move {
+                    let _wgg = wgg;
+                    if let Err(e) = server.stop(data).await {
+                        log::error!("err:proxy.stop => e:{}", e);
+                    }
+                    Ok(())
+                },
+            );
         }
-        servers.clear();
+
+        let _ = tg.wait().await;
+
         self.executor
             .stop("anyproxy_work stop", is_fast_shutdown, shutdown_timeout)
             .await;

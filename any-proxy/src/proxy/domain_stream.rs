@@ -215,7 +215,8 @@ impl proxy::Stream for DomainStream {
             },
         )
         .await?;
-        let client_buf_reader = unsafe { client_buf_reader.take().await };
+        let client_buf_reader = unsafe { client_buf_reader.take().await }
+            .ok_or(anyhow::anyhow!("client_buf_reader.is_none()"))?;
 
         log::debug!(target: "ext3", "domain_stream.rs run_plugin_handle_access");
         stream_info

@@ -1,5 +1,5 @@
 use crate::Protocol7;
-use any_base::executor_local_spawn::Runtime;
+use any_base::macros::Runtime;
 use any_base::stream_flow::{StreamFlow, StreamFlowInfo};
 use any_base::typ::ArcMutex;
 use any_base::util::ArcString;
@@ -27,7 +27,7 @@ pub trait Connect: Send + Sync {
         &self,
         request_id: Option<ArcString>,
         stream_info: Option<ArcMutex<StreamFlowInfo>>,
-        run_time: Option<Arc<Box<dyn Runtime>>>,
+        run_time: Option<Runtime>,
     ) -> Result<(StreamFlow, ConnectInfo)>;
     async fn addr(&self) -> Result<SocketAddr>;
     async fn host(&self) -> Result<ArcString>;

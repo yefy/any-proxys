@@ -8,6 +8,9 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
+
+pub const ANYPROXY_LOG_PORT: u16 = 58080;
+
 lazy_static! {
     pub static ref ANYPROXY_PID_FULL_PATH: ArcRwLock<String> =
         ArcRwLock::new("./logs/anyproxy.pid".to_string());
@@ -59,39 +62,17 @@ pub fn build_version() -> String {
         "{}/{} ({} {})",
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
-        get_vergen_git_sha_short(),
-        get_vergen_git_commit_date()
+        option_env!("VERGEN_GIT_SHA_SHORT").unwrap_or("000"),
+        option_env!("VERGEN_GIT_COMMIT_DATE").unwrap_or("000"),
     )
-}
-
-#[allow(dead_code)]
-fn get_vergen_build_semver() -> String {
-    match env::var("VERGEN_BUILD_SEMVER") {
-        Ok(val) => val,
-        Err(_) => "0.0.0".to_string(),
-    }
-}
-
-fn get_vergen_git_sha_short() -> String {
-    match env::var("VERGEN_GIT_SHA_SHORT") {
-        Ok(val) => val,
-        Err(_) => "000".to_string(),
-    }
-}
-
-fn get_vergen_git_commit_date() -> String {
-    match env::var("VERGEN_GIT_COMMIT_DATE") {
-        Ok(val) => val,
-        Err(_) => "000".to_string(),
-    }
-}
-
-lazy_static! {
-    pub static ref BUILD_VERSION: String = build_version();
 }
 
 pub fn http_version() -> String {
     format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"),)
+}
+
+lazy_static! {
+    pub static ref BUILD_VERSION: String = build_version();
 }
 
 lazy_static! {

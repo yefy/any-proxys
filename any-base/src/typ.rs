@@ -13,23 +13,58 @@ pub use parking_lot::Mutex;
 // #[cfg(feature = "anyspawn-std-sync")]
 // pub use std::sync::Mutex;
 
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+use crate::util::spawn_str_id;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::cell::UnsafeCell;
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 pub type Share<T> = ArcMutex<T>;
 pub type ShareRw<T> = ArcRwLock<T>;
 
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+use std::time::Instant;
+
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+#[cfg(debug_assertions)]
+const MAX_ELAPSED_TIME_MIL: u128 = 100;
+
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+#[cfg(not(debug_assertions))]
+const MAX_ELAPSED_TIME_MIL: u128 = 50;
+
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+pub struct MutexInfoTokio {
+    w_thread_id: Option<String>,
+    r_thread_id_map: HashMap<String, usize>,
+    is_check_time: bool,
+}
+
 pub struct ArcMutexReadGuardTokio<'a, T: 'a> {
     d: tokio::sync::MutexGuard<'a, Option<T>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 impl<'a, T: 'a> ArcMutexReadGuardTokio<'a, T> {
-    pub fn new(d: tokio::sync::MutexGuard<'a, Option<T>>) -> Self {
-        ArcMutexReadGuardTokio { d }
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, Option<T>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexReadGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -47,13 +82,42 @@ impl<'a, T: 'a> std::ops::Deref for ArcMutexReadGuardTokio<'a, T> {
     }
 }
 
+impl<'a, T: 'a> Drop for ArcMutexReadGuardTokio<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcMutexWriteGuardTokio<'a, T: 'a> {
     d: tokio::sync::MutexGuard<'a, Option<T>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 impl<'a, T: 'a> ArcMutexWriteGuardTokio<'a, T> {
-    pub fn new(d: tokio::sync::MutexGuard<'a, Option<T>>) -> Self {
-        ArcMutexWriteGuardTokio { d }
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, Option<T>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexWriteGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -77,13 +141,135 @@ impl<'a, T: 'a> std::ops::DerefMut for ArcMutexWriteGuardTokio<'a, T> {
     }
 }
 
+impl<'a, T: 'a> Drop for ArcMutexWriteGuardTokio<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
+pub struct ArcMutexReadOptionGuardTokio<'a, T: 'a> {
+    d: tokio::sync::MutexGuard<'a, T>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
+}
+
+impl<'a, T: 'a> ArcMutexReadOptionGuardTokio<'a, T> {
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, T>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexReadOptionGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
+    }
+}
+
+impl<'a, T: 'a> std::ops::Deref for ArcMutexReadOptionGuardTokio<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.d.deref()
+    }
+}
+
+impl<'a, T: 'a> Drop for ArcMutexReadOptionGuardTokio<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
+pub struct ArcMutexWriteOptionGuardTokio<'a, T: 'a> {
+    d: tokio::sync::MutexGuard<'a, T>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
+}
+
+impl<'a, T: 'a> ArcMutexWriteOptionGuardTokio<'a, T> {
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, T>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexWriteOptionGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
+    }
+}
+
+impl<'a, T: 'a> std::ops::Deref for ArcMutexWriteOptionGuardTokio<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.d.deref()
+    }
+}
+
+impl<'a, T: 'a> std::ops::DerefMut for ArcMutexWriteOptionGuardTokio<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.d.deref_mut()
+    }
+}
+
+impl<'a, T: 'a> Drop for ArcMutexWriteOptionGuardTokio<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcMutexTokio<T> {
     d: Arc<tokio::sync::Mutex<Option<T>>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
 }
 
 impl<T> Clone for ArcMutexTokio<T> {
     fn clone(&self) -> Self {
-        ArcMutexTokio { d: self.d.clone() }
+        ArcMutexTokio {
+            d: self.d.clone(),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: self.info.clone(),
+        }
     }
 }
 
@@ -91,54 +277,165 @@ impl<T> ArcMutexTokio<T> {
     pub fn default() -> Self {
         ArcMutexTokio {
             d: Arc::new(tokio::sync::Mutex::new(None)),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
         }
     }
     pub fn new(d: T) -> Self {
         ArcMutexTokio {
             d: Arc::new(tokio::sync::Mutex::new(Some(d))),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
+        }
+    }
+
+    pub fn new_check(d: T) -> Self {
+        ArcMutexTokio {
+            d: Arc::new(tokio::sync::Mutex::new(Some(d))),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: true,
+            })),
         }
     }
 
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.d)
     }
-    pub async fn set_nil(&self) {
-        *self.d.lock().await = None;
+    pub async fn set_nil(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
     }
 
     pub async fn is_none(&self) -> bool {
-        self.d.lock().await.is_none()
+        let lock = self.get_write_lock().await;
+        let is_none = lock.is_none();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        is_none
     }
     pub async fn is_some(&self) -> bool {
         !self.is_none().await
     }
 
     pub async fn set(&self, d: T) {
-        *self.d.lock().await = Some(d);
+        let mut lock = self.get_write_lock().await;
+        *lock = Some(d);
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
     }
 
     pub async fn get(&self) -> ArcMutexReadGuardTokio<T> {
-        ArcMutexReadGuardTokio::new(self.d.lock().await)
+        let lock = self.get_write_lock().await;
+        ArcMutexReadGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
     pub async fn get_mut(&self) -> ArcMutexWriteGuardTokio<T> {
-        ArcMutexWriteGuardTokio::new(self.d.lock().await)
+        let lock = self.get_write_lock().await;
+        ArcMutexWriteGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
 
-    pub async unsafe fn take(&self) -> T {
-        self.d.lock().await.take().unwrap()
+    pub async fn get_option(&self) -> ArcMutexReadOptionGuardTokio<Option<T>> {
+        let lock = self.get_write_lock().await;
+        ArcMutexReadOptionGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
+    }
+    pub async fn get_option_mut(&self) -> ArcMutexWriteOptionGuardTokio<Option<T>> {
+        let lock = self.get_write_lock().await;
+        ArcMutexWriteOptionGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
+    }
+
+    pub async unsafe fn take(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
+    }
+
+    async fn get_write_lock(&self) -> tokio::sync::MutexGuard<'_, Option<T>> {
+        #[cfg(not(any(debug_assertions, feature = "anylock-time")))]
+        {
+            return self.d.lock().await;
+        }
+
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            let thread_id = spawn_str_id();
+            {
+                let info = &mut *self.info.lock();
+                if info.w_thread_id.is_some() {
+                    if info.w_thread_id == Some(thread_id.clone()) {
+                        log::error!("info.w_thread_id == thread_id");
+                        panic!("info.w_thread_id == thread_id");
+                    }
+                }
+
+                let r_lock_num = info.r_thread_id_map.get(&thread_id);
+                if r_lock_num.is_some() && *r_lock_num.unwrap() != 0 {
+                    log::error!("r_lock_num.is_some()");
+                    panic!("r_lock_num.is_some()");
+                }
+            }
+
+            let lock = self.d.lock().await;
+            let info = &mut *self.info.lock();
+            info.w_thread_id = Some(thread_id);
+            return lock;
+        }
     }
 }
 
 pub struct ArcMutexAnyReadGuardTokio<'a> {
     d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 unsafe impl Send for ArcMutexAnyReadGuardTokio<'_> {}
 unsafe impl Sync for ArcMutexAnyReadGuardTokio<'_> {}
 
 impl<'a> ArcMutexAnyReadGuardTokio<'a> {
-    pub fn new(d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>) -> Self {
-        ArcMutexAnyReadGuardTokio { d }
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexAnyReadGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -159,16 +456,46 @@ impl<'a> std::ops::Deref for ArcMutexAnyReadGuardTokio<'a> {
     }
 }
 
+impl<'a> Drop for ArcMutexAnyReadGuardTokio<'a> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcMutexAnyWriteGuardTokio<'a> {
     d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>,
+
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 unsafe impl Send for ArcMutexAnyWriteGuardTokio<'_> {}
 unsafe impl Sync for ArcMutexAnyWriteGuardTokio<'_> {}
 
 impl<'a> ArcMutexAnyWriteGuardTokio<'a> {
-    pub fn new(d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>) -> Self {
-        ArcMutexAnyWriteGuardTokio { d }
+    pub fn new(
+        d: tokio::sync::MutexGuard<'a, Option<Box<dyn std::any::Any>>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcMutexAnyWriteGuardTokio {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -199,8 +526,26 @@ impl<'a> std::ops::DerefMut for ArcMutexAnyWriteGuardTokio<'a> {
     }
 }
 
+impl<'a> Drop for ArcMutexAnyWriteGuardTokio<'a> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcMutexAnyTokio {
     d: Arc<tokio::sync::Mutex<Option<Box<dyn std::any::Any>>>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
 }
 
 unsafe impl Send for ArcMutexAnyTokio {}
@@ -208,7 +553,11 @@ unsafe impl Sync for ArcMutexAnyTokio {}
 
 impl Clone for ArcMutexAnyTokio {
     fn clone(&self) -> Self {
-        ArcMutexAnyTokio { d: self.d.clone() }
+        ArcMutexAnyTokio {
+            d: self.d.clone(),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: self.info.clone(),
+        }
     }
 }
 
@@ -216,51 +565,271 @@ impl ArcMutexAnyTokio {
     pub fn default() -> Self {
         ArcMutexAnyTokio {
             d: Arc::new(tokio::sync::Mutex::new(None)),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
         }
     }
     pub fn new(d: Box<dyn std::any::Any>) -> Self {
         ArcMutexAnyTokio {
             d: Arc::new(tokio::sync::Mutex::new(Some(d))),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
         }
     }
 
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.d)
     }
-    pub async fn set_nil(&self) {
-        *self.d.lock().await = None;
+    pub async fn set_nil(&self) -> Option<Box<dyn std::any::Any>> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
     }
 
     pub async fn is_none(&self) -> bool {
-        self.d.lock().await.is_none()
+        let lock = self.get_write_lock().await;
+        let is_none = lock.is_none();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        is_none
     }
     pub async fn is_some(&self) -> bool {
         !self.is_none().await
     }
 
     pub async fn set(&self, d: Box<dyn std::any::Any>) {
-        *self.d.lock().await = Some(d);
+        let mut lock = self.get_write_lock().await;
+        *lock = Some(Box::new(d));
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
     }
 
     pub async fn get(&self) -> ArcMutexAnyReadGuardTokio {
-        ArcMutexAnyReadGuardTokio::new(self.d.lock().await)
+        let lock = self.get_write_lock().await;
+        ArcMutexAnyReadGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
     pub async fn get_mut(&self) -> ArcMutexAnyWriteGuardTokio {
-        ArcMutexAnyWriteGuardTokio::new(self.d.lock().await)
+        let lock = self.get_write_lock().await;
+        ArcMutexAnyWriteGuardTokio::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
 
-    pub async unsafe fn take(&self) -> Box<dyn std::any::Any> {
-        self.d.lock().await.take().unwrap()
+    pub async unsafe fn take(&self) -> Option<Box<dyn std::any::Any>> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
+    }
+
+    async fn get_write_lock(&self) -> tokio::sync::MutexGuard<'_, Option<Box<dyn std::any::Any>>> {
+        #[cfg(not(any(debug_assertions, feature = "anylock-time")))]
+        {
+            return self.d.lock().await;
+        }
+
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            let thread_id = spawn_str_id();
+            {
+                let info = &mut *self.info.lock();
+                if info.w_thread_id.is_some() {
+                    if info.w_thread_id == Some(thread_id.clone()) {
+                        log::error!("info.w_thread_id == thread_id");
+                        panic!("info.w_thread_id == thread_id");
+                    }
+                }
+
+                let r_lock_num = info.r_thread_id_map.get(&thread_id);
+                if r_lock_num.is_some() && *r_lock_num.unwrap() != 0 {
+                    log::error!("r_lock_num.is_some()");
+                    panic!("r_lock_num.is_some()");
+                }
+            }
+            let lock = self.d.lock().await;
+            let info = &mut *self.info.lock();
+            info.w_thread_id = Some(thread_id);
+            return lock;
+        }
+    }
+}
+
+pub struct ArcMutexBoxTokio<T> {
+    d: Arc<tokio::sync::Mutex<Option<Box<T>>>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+}
+
+impl<T> Clone for ArcMutexBoxTokio<T> {
+    fn clone(&self) -> Self {
+        ArcMutexBoxTokio {
+            d: self.d.clone(),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: self.info.clone(),
+        }
+    }
+}
+
+impl<T> ArcMutexBoxTokio<T> {
+    pub fn default() -> Self {
+        ArcMutexBoxTokio {
+            d: Arc::new(tokio::sync::Mutex::new(None)),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
+        }
+    }
+    pub fn new(d: T) -> Self {
+        ArcMutexBoxTokio {
+            d: Arc::new(tokio::sync::Mutex::new(Some(Box::new(d)))),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
+        }
+    }
+
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.d)
+    }
+    pub async fn set_nil(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        if data.is_some() {
+            Some(*data.unwrap())
+        } else {
+            None
+        }
+    }
+
+    pub async fn is_none(&self) -> bool {
+        let lock = self.get_write_lock().await;
+        let is_none = lock.is_none();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        is_none
+    }
+    pub async fn is_some(&self) -> bool {
+        !self.is_none().await
+    }
+
+    pub async fn set(&self, d: T) {
+        let mut lock = self.get_write_lock().await;
+        *lock = Some(Box::new(d));
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+
+    pub async fn get(&self) -> ArcMutexReadGuardTokio<Box<T>> {
+        let lock = self.get_write_lock().await;
+        ArcMutexReadGuardTokio::<Box<T>>::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
+    }
+    pub async fn get_mut(&self) -> ArcMutexWriteGuardTokio<Box<T>> {
+        let lock = self.get_write_lock().await;
+        ArcMutexWriteGuardTokio::<Box<T>>::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
+    }
+
+    pub async unsafe fn take(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        if data.is_some() {
+            Some(*data.unwrap())
+        } else {
+            None
+        }
+    }
+
+    async fn get_write_lock(&self) -> tokio::sync::MutexGuard<'_, Option<Box<T>>> {
+        #[cfg(not(any(debug_assertions, feature = "anylock-time")))]
+        {
+            return self.d.lock().await;
+        }
+
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            let thread_id = spawn_str_id();
+            {
+                let info = &mut *self.info.lock();
+                if info.w_thread_id.is_some() {
+                    if info.w_thread_id == Some(thread_id.clone()) {
+                        log::error!("info.w_thread_id == thread_id");
+                        panic!("info.w_thread_id == thread_id");
+                    }
+                }
+
+                let r_lock_num = info.r_thread_id_map.get(&thread_id);
+                if r_lock_num.is_some() && *r_lock_num.unwrap() != 0 {
+                    log::error!("r_lock_num.is_some()");
+                    panic!("r_lock_num.is_some()");
+                }
+            }
+            let lock = self.d.lock().await;
+            let info = &mut *self.info.lock();
+            info.w_thread_id = Some(thread_id);
+            return lock;
+        }
     }
 }
 
 pub struct ArcRwLockReadTokioGuard<'a, T: 'a> {
     d: tokio::sync::RwLockReadGuard<'a, Option<T>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 impl<'a, T: 'a> ArcRwLockReadTokioGuard<'a, T> {
-    pub fn new(d: tokio::sync::RwLockReadGuard<'a, Option<T>>) -> Self {
-        ArcRwLockReadTokioGuard { d }
+    pub fn new(
+        d: tokio::sync::RwLockReadGuard<'a, Option<T>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcRwLockReadTokioGuard {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -278,13 +847,42 @@ impl<'a, T: 'a> std::ops::Deref for ArcRwLockReadTokioGuard<'a, T> {
     }
 }
 
+impl<'a, T: 'a> Drop for ArcRwLockReadTokioGuard<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_read_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcRwLockWriteTokioGuard<'a, T: 'a> {
     d: tokio::sync::RwLockWriteGuard<'a, Option<T>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    start_time: Instant,
 }
 
 impl<'a, T: 'a> ArcRwLockWriteTokioGuard<'a, T> {
-    pub fn new(d: tokio::sync::RwLockWriteGuard<'a, Option<T>>) -> Self {
-        ArcRwLockWriteTokioGuard { d }
+    pub fn new(
+        d: tokio::sync::RwLockWriteGuard<'a, Option<T>>,
+        #[cfg(any(debug_assertions, feature = "anylock-time"))] info: Arc<Mutex<MutexInfoTokio>>,
+    ) -> Self {
+        ArcRwLockWriteTokioGuard {
+            d,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            start_time: Instant::now(),
+        }
     }
     pub fn is_none(&self) -> bool {
         self.d.is_none()
@@ -308,13 +906,36 @@ impl<'a, T: 'a> std::ops::DerefMut for ArcRwLockWriteTokioGuard<'a, T> {
     }
 }
 
+impl<'a, T: 'a> Drop for ArcRwLockWriteTokioGuard<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            if self.start_time.elapsed().as_millis() > MAX_ELAPSED_TIME_MIL {
+                if self.info.lock().is_check_time {
+                    panic!("lock panic");
+                }
+            }
+        }
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+    }
+}
+
 pub struct ArcRwLockTokio<T> {
     d: Arc<tokio::sync::RwLock<Option<T>>>,
+
+    #[cfg(any(debug_assertions, feature = "anylock-time"))]
+    info: Arc<Mutex<MutexInfoTokio>>,
 }
 
 impl<T> Clone for ArcRwLockTokio<T> {
     fn clone(&self) -> Self {
-        ArcRwLockTokio { d: self.d.clone() }
+        ArcRwLockTokio {
+            d: self.d.clone(),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: self.info.clone(),
+        }
     }
 }
 
@@ -322,39 +943,141 @@ impl<T> ArcRwLockTokio<T> {
     pub fn default() -> Self {
         ArcRwLockTokio {
             d: Arc::new(tokio::sync::RwLock::new(None)),
+
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
         }
     }
     pub fn new(d: T) -> Self {
         ArcRwLockTokio {
             d: Arc::new(tokio::sync::RwLock::new(Some(d))),
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            info: Arc::new(Mutex::new(MutexInfoTokio {
+                w_thread_id: None,
+                r_thread_id_map: HashMap::new(),
+                is_check_time: false,
+            })),
         }
     }
     pub fn strong_count(&self) -> usize {
         Arc::strong_count(&self.d)
     }
-    pub async fn set_nil(&self) {
-        *self.d.write().await = None;
+    pub async fn set_nil(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
     }
     pub async fn is_none(&self) -> bool {
-        self.d.read().await.is_none()
+        let lock = self.get_read_lock().await;
+        let is_none = lock.is_none();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_read_lock_tokio(&self.info);
+        is_none
     }
     pub async fn is_some(&self) -> bool {
         !self.is_none().await
     }
 
     pub async fn set(&self, d: T) {
-        *self.d.write().await = Some(d);
+        let mut lock = self.get_write_lock().await;
+        *lock = Some(d);
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
     }
 
     pub async fn get(&self) -> ArcRwLockReadTokioGuard<T> {
-        ArcRwLockReadTokioGuard::new(self.d.read().await)
+        let lock = self.get_read_lock().await;
+        ArcRwLockReadTokioGuard::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
     pub async fn get_mut(&self) -> ArcRwLockWriteTokioGuard<T> {
-        ArcRwLockWriteTokioGuard::new(self.d.write().await)
+        let lock = self.get_write_lock().await;
+        ArcRwLockWriteTokioGuard::new(
+            lock,
+            #[cfg(any(debug_assertions, feature = "anylock-time"))]
+            self.info.clone(),
+        )
     }
 
-    pub async unsafe fn take(&self) -> T {
-        self.d.write().await.take().unwrap()
+    pub async unsafe fn take(&self) -> Option<T> {
+        let mut lock = self.get_write_lock().await;
+        let data = lock.take();
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        del_write_lock_tokio(&self.info);
+        data
+    }
+
+    async fn get_write_lock(&self) -> tokio::sync::RwLockWriteGuard<'_, Option<T>> {
+        #[cfg(not(any(debug_assertions, feature = "anylock-time")))]
+        {
+            return self.d.write().await;
+        }
+
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            let thread_id = spawn_str_id();
+            {
+                let info = &mut *self.info.lock();
+                if info.w_thread_id.is_some() {
+                    if info.w_thread_id == Some(thread_id.clone()) {
+                        log::error!("info.w_thread_id == thread_id");
+                        panic!("info.w_thread_id == thread_id");
+                    }
+                }
+
+                let r_lock_num = info.r_thread_id_map.get(&thread_id);
+                if r_lock_num.is_some() && *r_lock_num.unwrap() != 0 {
+                    log::error!("r_lock_num.is_some()");
+                    panic!("r_lock_num.is_some()");
+                }
+            }
+
+            let lock = self.d.write().await;
+            let info = &mut *self.info.lock();
+            info.w_thread_id = Some(thread_id);
+            return lock;
+        }
+    }
+
+    async fn get_read_lock(&self) -> tokio::sync::RwLockReadGuard<'_, Option<T>> {
+        #[cfg(not(any(debug_assertions, feature = "anylock-time")))]
+        {
+            return self.d.read().await;
+        }
+
+        #[cfg(any(debug_assertions, feature = "anylock-time"))]
+        {
+            let thread_id = spawn_str_id();
+            {
+                let info = &mut *self.info.lock();
+                if info.w_thread_id.is_some() {
+                    if info.w_thread_id == Some(thread_id.clone()) {
+                        log::error!("info.w_thread_id == thread_id");
+                        panic!("info.w_thread_id == thread_id");
+                    }
+                }
+            }
+
+            let lock = self.d.read().await;
+            let info = &mut *self.info.lock();
+            let r_lock_num = info.r_thread_id_map.get_mut(&thread_id);
+            if r_lock_num.is_none() {
+                info.r_thread_id_map.insert(thread_id, 1);
+            } else {
+                let r_lock_num = r_lock_num.unwrap();
+                *r_lock_num += 1;
+            }
+            return lock;
+        }
     }
 }
 
@@ -509,13 +1232,13 @@ impl<T> OptionExt<T> {
         self.d = Some(d);
     }
 
-    // pub fn get(&self) -> &T {
-    //     self.d.as_ref().unwrap()
-    // }
-    //
-    // pub fn get_mut(&mut self) -> &mut T {
-    //     self.d.as_mut().unwrap()
-    // }
+    pub fn get(&self) -> &T {
+        self.d.as_ref().unwrap()
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.d.as_mut().unwrap()
+    }
 
     pub fn unwrap(self) -> T {
         match self.d {
@@ -551,6 +1274,101 @@ impl<T> std::ops::Deref for OptionExt<T> {
 impl<T> std::ops::DerefMut for OptionExt<T> {
     fn deref_mut(&mut self) -> &mut T {
         self.d.as_mut().unwrap()
+    }
+}
+
+pub struct OptionArcx<T> {
+    d: Option<Arc<T>>,
+}
+
+impl<T> Clone for OptionArcx<T> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match &self.d {
+            Some(x) => OptionArcx::new_arc(x.clone()),
+            None => OptionArcx::default(),
+        }
+    }
+}
+
+impl<T> From<Option<T>> for OptionArcx<T> {
+    fn from(data: Option<T>) -> OptionArcx<T> {
+        OptionArcx::new_option(data)
+    }
+}
+
+impl<T> OptionArcx<T> {
+    pub fn default() -> Self {
+        OptionArcx { d: None }
+    }
+    pub fn new(d: T) -> Self {
+        OptionArcx {
+            d: Some(Arc::new(d)),
+        }
+    }
+    pub fn new_arc(d: Arc<T>) -> Self {
+        OptionArcx { d: Some(d) }
+    }
+    pub fn new_option(d: Option<T>) -> Self {
+        match d {
+            Some(data) => OptionArcx::new(data),
+            None => OptionArcx::default(),
+        }
+    }
+    pub fn set_nil(&mut self) {
+        self.d = None;
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.d.is_none()
+    }
+    pub fn is_some(&self) -> bool {
+        !self.is_none()
+    }
+
+    pub fn strong_count(&self) -> usize {
+        match &self.d {
+            Some(x) => Arc::strong_count(x),
+            None => 0,
+        }
+    }
+
+    pub fn set(&mut self, d: T) {
+        self.d = Some(Arc::new(d));
+    }
+
+    pub fn get(&self) -> &T {
+        self.d.as_ref().unwrap()
+    }
+
+    pub fn unwrap(self) -> Arc<T> {
+        match self.d {
+            Some(val) => val,
+            None => panic!("called `Option::unwrap()` on a `None` value"),
+        }
+    }
+
+    pub fn as_ref(&self) -> &T {
+        match &self.d {
+            Some(val) => val,
+            None => panic!("called `Option::unwrap()` on a `None` value"),
+        }
+    }
+
+    pub unsafe fn take(&mut self) -> Arc<T> {
+        self.d.take().unwrap()
+    }
+
+    pub unsafe fn take_op(&mut self) -> Option<Arc<T>> {
+        self.d.take()
+    }
+}
+
+impl<T> std::ops::Deref for OptionArcx<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.d.as_ref().unwrap()
     }
 }
 
@@ -654,4 +1472,26 @@ impl<T> RcCell<T> {
     pub unsafe fn take(&self) -> Option<T> {
         self.d.borrow_mut().take()
     }
+}
+
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+fn del_write_lock_tokio(info: &Arc<Mutex<MutexInfoTokio>>) {
+    let info = &mut *info.lock();
+    info.w_thread_id = None;
+}
+#[cfg(any(debug_assertions, feature = "anylock-time"))]
+fn del_read_lock_tokio(info: &Arc<Mutex<MutexInfoTokio>>) {
+    let info = &mut *info.lock();
+    let thread_id = spawn_str_id();
+    let r_lock_num = info.r_thread_id_map.get_mut(&thread_id);
+    if r_lock_num.is_none() {
+        log::error!("r_lock_num.is_none()");
+        return;
+    }
+    let r_lock_num = r_lock_num.unwrap();
+    if *r_lock_num == 0 {
+        log::error!("r_lock_num == 0");
+        return;
+    }
+    *r_lock_num -= 1;
 }
