@@ -13,23 +13,23 @@ apt install libssl-dev
 安装rust，如果安装失败，请看rust官方安装教程
 安装rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 这里可能需要重启终端
-rustup install 1.74.1
+rustup install 1.96.0
 rustup toolchain list
-rustup default 1.74.1-x86_64-unknown-linux-gnu
+rustup default 1.96.0
 
 cargo install cargo-component
 
 window:需要安装: 
 安装openssl: 下载Win64OpenSSL-1_1_1k.exe安装
 安装rust: 请看rust官方安装教程, 自己下载二进制安装
-rustup install 1.74.1
+rustup install 1.96.0
 rustup toolchain list
- rustup default 1.74.1-x86_64-pc-windows-msvc
+ rustup default 1.96.0
 
 cargo install cargo-component
 
 如果本地没安装openssl建议使用rustls库(程序内嵌，无需安装): 
-cargo +1.74.1 build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
+cargo +1.96.0 build --release --bin anyproxy  --no-default-features --features "anyproxy-rustls"  
 ```
 rust一定要用--release编译， release和debug性能几十倍的差异  
 cargo build --release --bin anyproxy  
@@ -45,15 +45,15 @@ cd ./any-example/anyproxy
 ```
 如果是使用CLion打开项目，  
 Working directory设置 ./any-example/anyproxy  
-Command设置 +1.74.1 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
+Command设置 +1.96.0 run --release --no-default-features --features "anyproxy-rustls" -- -c conf/anyproxy_edge_to_proxy.conf    
 ```
 
 
 # 设置测试域名
 ```
 vim /etc/hosts
-host 127.0.0.1 www.upstream.cn  
-host 127.0.0.1 www.example.cn  
+127.0.0.1 www.upstream.cn  
+127.0.0.1 www.example.cn  
 ```
 
 #开启源站
