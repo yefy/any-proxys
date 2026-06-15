@@ -111,13 +111,13 @@ fn default_sendfile_max_write_size() -> usize {
     1048576
 }
 fn default_sendfile_eagain_sleep_mil_time() -> u64 {
-    15
+    1
 }
 fn default_sendfile_would_block_max_sleep_count() -> usize {
     30
 }
 fn default_sendfile_would_block_sleep_mil() -> u64 {
-    200
+    10
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

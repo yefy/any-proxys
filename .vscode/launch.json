@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug any_tunnel_client_single",
+            "cargo": {
+                "args": [
+                    "+1.96.0",
+                    "build",
+                    "--release",
+                    "--no-default-features",
+                    "--features",
+                    "anyproxy-rustls",
+                    "--example",
+                    "any_tunnel_client_single"
+                ],
+                "filter": {
+                    "name": "any_tunnel_client_single",
+                    "kind": "example"
+                }
+            },
+            "cwd": "${workspaceFolder}/any-example/anyproxy"
+        }
+    ]
+}

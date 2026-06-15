@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug any-proxy (Rustls)",
+            "cargo": {
+                "args": [
+                    "+1.96.0",
+                    "build",
+                    "--release",
+                    "-p",
+                    "any-proxy",
+                    "--no-default-features",
+                    "--features",
+                    "anyproxy-rustls"
+                ],
+                "filter": {
+                    "name": "any-proxy",
+                    "kind": "bin"
+                }
+            },
+            "cwd": "${workspaceFolder}/any-example/anyproxy",
+            "args": [
+                "-c",
+                "conf/anyproxy_edge_to_proxy.conf"
+            ]
+        }
+    ]
+}
