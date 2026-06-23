@@ -97,10 +97,7 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
         rctx.r_out.transfer_encoding = transfer_encoding.into();
         rctx.r_out.is_cache_err = false;
 
-        if !rctx.is_request_cache {
-            rctx.r_out.is_cache = false;
-            return Ok(false);
-        }
+
 
         if rctx.is_out_status_ok() {
             let expires = {
@@ -170,6 +167,19 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             cache_control_time(&rctx.r_out.headers)
                 .map_err(|e| anyhow!("err:cache_control_time =>e:{}", e))?;
 
+        let is_upstream_cache = !(cache_control_time <= 0
+            || e_tag.is_empty()
+            || last_modified.is_empty()
+            || rctx.r_out.transfer_encoding.is_some()
+            || rctx.is_no_cache);
+
+        log::debug!(target: "ext3", "is_cache:{}, is_upstream_cache:{}", rctx.r_out.is_cache, is_upstream_cache);
+
+        if !rctx.is_request_cache {
+            rctx.r_out.is_cache = false;
+            return Ok(is_upstream_cache);
+        }
+
         use http::header::EXPIRES;
         if expires_time_sys.is_some() && rctx.r_out.headers.get(EXPIRES).is_none() {
             let v = httpdate::fmt_http_date(expires_time_sys.unwrap());
@@ -187,13 +197,6 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
             || last_modified.is_empty()
             || rctx.r_out.transfer_encoding.is_some()
             || rctx.is_no_cache);
-
-        let is_upstream_cache = !(cache_control_time <= 0
-            || e_tag.is_empty()
-            || last_modified.is_empty()
-            || rctx.r_out.transfer_encoding.is_some()
-            || rctx.is_no_cache);
-        log::debug!(target: "ext3", "is_cache:{}, is_upstream_cache:{}", rctx.r_out.is_cache, is_upstream_cache);
 
         let response_info = Arc::new(HttpResponseInfo {
             last_modified_time,
