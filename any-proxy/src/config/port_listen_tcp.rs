@@ -207,6 +207,7 @@ async fn port_listen_tcp(
                 addr.clone(),
                 common_core_conf.reuseport,
                 tcp_config.unwrap(),
+                common_core_conf.disable_ipv6_only,
             )?));
         port_core_conf.port_config_listen_map.insert(
             key,

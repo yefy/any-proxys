@@ -42,6 +42,7 @@ pub struct Conf {
     pub memlock_rlimit_max: u64,
     pub session_id: Arc<AtomicU64>,
     pub tmp_file_id: Arc<AtomicU64>,
+    pub disable_ipv6_only: bool,
 }
 
 impl Drop for Conf {
@@ -64,6 +65,7 @@ impl Conf {
             memlock_rlimit_max: 128 << 20,
             session_id: SESSION_ID.clone(),
             tmp_file_id: TMPFILE_ID.clone(),
+            disable_ipv6_only: false,
         };
         let core_ids = core_affinity::get_core_ids().unwrap();
         conf.worker_threads = core_ids.len();
@@ -115,6 +117,14 @@ lazy_static! {
         module::Cmd {
             name: "worker_threads_blocking".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(worker_threads_blocking(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
+        },
+        module::Cmd {
+            name: "disable_ipv6_only".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(disable_ipv6_only(
                 ms, conf_arg, cmd, conf
             )),
             typ: module::CMD_TYPE_DATA,
@@ -349,6 +359,21 @@ async fn worker_threads_blocking(
     );
     return Ok(());
 }
+async fn disable_ipv6_only(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.disable_ipv6_only = *conf_arg.value.get::<bool>();
+    log::trace!(target: "main",
+                "common_core.rs c.disable_ipv6_only:{:?}",
+                c.disable_ipv6_only
+    );
+    return Ok(());
+}
+
 async fn memlock_rlimit_curr(
     _ms: module::Modules,
     conf_arg: module::ConfArg,

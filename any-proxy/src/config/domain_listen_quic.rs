@@ -337,6 +337,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         sni.clone(),
         #[cfg(feature = "anyproxy-ebpf")]
         ebpf_tx,
+        common_core_conf.disable_ipv6_only,
     )?));
 
     domain_core_conf.domain_config_listen_map.insert(

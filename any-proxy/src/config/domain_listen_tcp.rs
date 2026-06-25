@@ -315,6 +315,7 @@ pub async fn parse_domain(value: ArcMutex<DomainConfigListenMerge>) -> Result<()
         value.listen_addr.clone().unwrap(),
         common_core_conf.reuseport,
         tcp_config,
+        common_core_conf.disable_ipv6_only,
     )?));
 
     domain_core_conf.domain_config_listen_map.insert(
