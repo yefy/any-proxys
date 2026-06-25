@@ -21,6 +21,7 @@ pub struct Server {
     reuseport: bool,
     config: Arc<Config>,
     sni: ArcMutex<util::Sni>,
+    disable_ipv6_only: bool,
 }
 
 impl Server {
@@ -29,12 +30,14 @@ impl Server {
         reuseport: bool,
         config: Arc<Config>,
         sni: util::Sni,
+        disable_ipv6_only: bool,
     ) -> Result<Server> {
         Ok(Server {
             addr,
             reuseport,
             config,
             sni: ArcMutex::new(sni),
+            disable_ipv6_only,
         })
     }
 }
@@ -49,7 +52,7 @@ impl server::Server for Server {
     }
 
     async fn listen(&self) -> Result<Box<dyn server::Listener>> {
-        let std_listener = tcp_util::bind(&self.addr, self.reuseport)
+        let std_listener = tcp_util::bind(&self.addr, self.reuseport, self.disable_ipv6_only)
             .map_err(|e| anyhow!("err:tcp_util::bind => e:{}", e))?;
         let listener = TcpListener::from_std(std_listener)
             .map_err(|e| anyhow!("err:TcpListener::from_std => e:{}", e))?;

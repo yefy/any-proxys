@@ -17,6 +17,7 @@ pub fn bind(
     _reuseport: bool,
     recv_buffer_size: usize,
     send_buffer_size: usize,
+    disable_ipv6_only: bool,
 ) -> Result<std::net::UdpSocket> {
     let addr = addr
         .to_socket_addrs()?
@@ -36,6 +37,11 @@ pub fn bind(
     {
         sk.set_reuse_port(_reuseport)?;
     }
+
+    if addr.is_ipv6() {
+        sk.set_only_v6(!disable_ipv6_only)?;
+    }
+
     if recv_buffer_size > 0 {
         if let Err(e) = sk.set_recv_buffer_size(recv_buffer_size) {
             log::error!("err:udp set_recv_buffer_size => e:{}", anyhow!("{}", e));
@@ -157,6 +163,7 @@ pub fn endpoint(
     if reuseport {
         reuseport = false;
     }
+    let disable_ipv6_only = false;
     let addr = if addr.is_some() {
         addr.unwrap()
     } else {
@@ -179,6 +186,7 @@ pub fn endpoint(
             reuseport,
             config.quic_recv_buffer_size,
             config.quic_send_buffer_size,
+            disable_ipv6_only,
         )
         .map_err(|e| anyhow!("err:bind => e:{}", e))?;
         quinn::Endpoint::new(
@@ -194,6 +202,7 @@ pub fn endpoint(
             reuseport,
             config.quic_recv_buffer_size,
             config.quic_send_buffer_size,
+            disable_ipv6_only,
         )
         .map_err(|e| anyhow!("err:bind => e:{}", e))?;
         quinn::Endpoint::new(
@@ -214,12 +223,14 @@ pub async fn listen(
     addr: &SocketAddr,
     sni: util::Sni,
     #[cfg(feature = "anyproxy-ebpf")] ebpf_tx: &Option<any_ebpf::AnyEbpfTx>,
+    disable_ipv6_only: bool,
 ) -> Result<quinn::Endpoint> {
     let udp_socket = bind(
         addr,
         reuseport,
         config.quic_recv_buffer_size,
         config.quic_send_buffer_size,
+        disable_ipv6_only
     )
     .map_err(|e| anyhow!("err:bind => e:{}", e))?;
 

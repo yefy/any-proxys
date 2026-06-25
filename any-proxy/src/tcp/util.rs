@@ -10,7 +10,7 @@ use std::net::TcpListener as StdTcpListener;
 use std::net::ToSocketAddrs;
 use tokio::net::TcpStream;
 
-pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
+pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool, _disable_ipv6_only: bool) -> Result<StdTcpListener> {
     let addr = addr
         .to_socket_addrs()?
         .next()
@@ -26,7 +26,12 @@ pub fn bind(addr: &SocketAddr, _tcp_reuseport: bool) -> Result<StdTcpListener> {
     let sk_addr = socket2::SockAddr::from(addr);
     #[cfg(unix)]
     {
+
         sk.set_reuse_port(_tcp_reuseport)?;
+    }
+
+    if addr.is_ipv6() {
+        sk.set_only_v6(!_disable_ipv6_only)?;
     }
     sk.set_nonblocking(true)
         .map_err(|e| anyhow!("err:sk.set_nonblocking => e:{}", e))?;

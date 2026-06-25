@@ -23,6 +23,7 @@ pub struct Server {
     sni: Mutex<util::Sni>,
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
+    disable_ipv6_only: bool
 }
 
 impl Server {
@@ -32,6 +33,7 @@ impl Server {
         config: Arc<Config>,
         sni: util::Sni,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
+        disable_ipv6_only: bool
     ) -> Result<Server> {
         Ok(Server {
             config,
@@ -40,6 +42,7 @@ impl Server {
             sni: Mutex::new(sni),
             #[cfg(feature = "anyproxy-ebpf")]
             ebpf_tx,
+            disable_ipv6_only,
         })
     }
 }
@@ -61,6 +64,7 @@ impl server::Server for Server {
             sni,
             #[cfg(feature = "anyproxy-ebpf")]
             &self.ebpf_tx,
+            self.disable_ipv6_only,
         )
         .await
         .map_err(|e| anyhow!("err:quic_util::listen => e:{}", e))?;
