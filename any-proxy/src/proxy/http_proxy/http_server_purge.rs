@@ -8,10 +8,14 @@ use crate::proxy::ServerArg;
 use anyhow::Result;
 use bytes::Bytes;
 use http::{Response, StatusCode};
-use hyper::Body;
+use hyper::header::CONNECTION;
+use hyper::http::HeaderValue;
+use hyper::{Body, Version};
 use radix_trie::TrieCommon;
-use std::collections::VecDeque;
+use rivetx_core::rivetx_string::RivetxString;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 pub async fn server_handle(r: Arc<HttpStreamRequest>) -> Result<crate::Error> {
     let scc = r.http_arg.stream_info.get().scc.clone();
@@ -64,7 +68,11 @@ impl HttpStream {
         let stream_info = r.http_arg.stream_info.clone();
         stream_info.get_mut().add_work_time1("http_server_purge");
 
-        let response = if self.is_purge(&r).await? {
+        let (is_ok, body) = self.is_purge(&r).await?;
+        let body = serde_json::to_string(&body).unwrap_or("serde_json error".to_string());
+        let len = body.len();
+        let body = body.to_string().into();
+        let mut response = if is_ok {
             Response::builder()
                 .status(StatusCode::OK)
                 .body(Body::default())?
@@ -74,13 +82,61 @@ impl HttpStream {
                 .body(Body::default())?
         };
 
+        response.headers_mut().insert(
+            "Server",
+            HeaderValue::from_bytes("any-proxy/v1.0.0".as_bytes())?,
+        );
+        response.headers_mut().insert(
+            "Content-Type",
+            HeaderValue::from_bytes("text/plain".as_bytes())?,
+        );
+        {
+            let modified = SystemTime::now();
+            let last_modified = httpdate::HttpDate::from(modified);
+            let last_modified = last_modified.to_string();
+            response.headers_mut().insert(
+                "Last-Modified",
+                HeaderValue::from_bytes(last_modified.as_bytes())?,
+            );
+        }
+
+        response.headers_mut().insert(
+            "Connection",
+            HeaderValue::from_bytes("keep-alive".as_bytes())?,
+        );
+        // response
+        //     .headers_mut()
+        //     .insert("ETag", HeaderValue::from_bytes(b"default")?);
+        // response.headers_mut().insert(
+        //     "Accept-Ranges",
+        //     HeaderValue::from_bytes("bytes".as_bytes())?,
+        // );
+        response
+            .headers_mut()
+            .insert(http::header::CONTENT_LENGTH, HeaderValue::from(len));
+
+        let version = r.ctx.get().r_in.version;
+
+        if version == Version::HTTP_2 {
+            response.headers_mut().remove(CONNECTION);
+        }
+
+        if version == Version::HTTP_10 {
+            response.headers_mut().insert(
+                "Connection",
+                HeaderValue::from_bytes("keep-alive".as_bytes())?,
+            );
+        }
+
+        *response.version_mut() = version;
+
         if !self.header_response.is_send() {
             use super::http_server_proxy;
             http_server_proxy::HttpStream::stream_response(
                 &r,
                 HttpResponse {
                     response,
-                    body: HttpResponseBody::Body(Body::empty()),
+                    body: HttpResponseBody::Body(body),
                 },
             )
             .await?;
@@ -88,24 +144,46 @@ impl HttpStream {
         return Ok(());
     }
 
-    async fn is_purge(&mut self, r: &Arc<HttpStreamRequest>) -> Result<bool> {
+    async fn is_purge(
+        &mut self,
+        r: &Arc<HttpStreamRequest>,
+    ) -> Result<(bool, HashMap<RivetxString, serde_json::Value>)> {
+        let mut body: HashMap<RivetxString, serde_json::Value> = HashMap::with_capacity(10);
         let scc = r.http_arg.stream_info.get().scc.clone();
         let net_curr_conf = scc.net_curr_conf();
         let net_core_proxy_conf = net_core_proxy::curr_conf(&net_curr_conf);
         if !net_core_proxy_conf.proxy_cache_purge {
-            return Ok(false);
+            body.insert(
+                RivetxString::from("error"),
+                serde_json::json!("please open purge"),
+            );
+            return Ok((false, body));
         }
         let is_purge_force = {
             let rctx = &*r.ctx.get();
             let purge_force = rctx.r_in.headers.get(http::header::HeaderName::from_bytes(
                 "purge_force".as_bytes(),
             )?);
-            if purge_force.is_none() {
-                false
-            } else {
-                true
+            let mut is_purge_force = if purge_force.is_none() { false } else { true };
+            if !is_purge_force {
+                let purge = rctx
+                    .r_in
+                    .headers
+                    .get(http::header::HeaderName::from_bytes("purge".as_bytes())?);
+                if purge.is_some() {
+                    let purge = purge.as_ref().unwrap();
+                    let value = purge.to_str().unwrap_or("").trim();
+                    if value == "purge_force" {
+                        is_purge_force = true;
+                    }
+                }
             }
+            is_purge_force
         };
+        body.insert(
+            RivetxString::from("is_purge_force"),
+            serde_json::json!(is_purge_force),
+        );
 
         let (is_dir, url) = {
             let purge_path = "/purge";
@@ -118,23 +196,39 @@ impl HttpStream {
 
             let purge = path_and_query.find(purge_path);
             if purge.is_none() || purge.unwrap() != 0 {
-                return Ok(false);
+                body.insert(
+                    RivetxString::from("error"),
+                    serde_json::json!("not find /purge"),
+                );
+                return Ok((false, body));
             }
             let path_and_query = &path_and_query[purge_path.len()..];
             if path_and_query.len() > 0 && &path_and_query[0..1] != "/" {
-                return Ok(false);
+                body.insert(
+                    RivetxString::from("error"),
+                    serde_json::json!("not find /purge/"),
+                );
+                return Ok((false, body));
             }
 
             let path_and_query_flag = if path_and_query.len() <= 0 { "/" } else { "" };
             let scheme = uri.scheme_str();
             if scheme.is_none() {
-                return Ok(false);
+                body.insert(
+                    RivetxString::from("error"),
+                    serde_json::json!("scheme is_none"),
+                );
+                return Ok((false, body));
             }
             let scheme = scheme.unwrap();
 
             let authority = uri.authority();
             if authority.is_none() {
-                return Ok(false);
+                body.insert(
+                    RivetxString::from("error"),
+                    serde_json::json!("authority is_none"),
+                );
+                return Ok((false, body));
             }
             let authority = authority.unwrap();
 
@@ -157,6 +251,9 @@ impl HttpStream {
             };
             (is_dir, url)
         };
+
+        body.insert(RivetxString::from("is_dir"), serde_json::json!(is_dir));
+        body.insert(RivetxString::from("url"), serde_json::json!(url));
 
         log::trace!(target: "purge",
                     "r.session_id:{}, purge is_dir:{}, url:{}",
@@ -227,24 +324,42 @@ impl HttpStream {
             }
         };
 
-        for url in urls {
+        for url in &urls {
             log::trace!(target: "purge", "r.session_id:{}, remove url:{}, ", r.session_id, url);
             //net_core_proxy.main.uri_trie.get_mut().remove(&url);
         }
+        body.insert(RivetxString::from("urls"), serde_json::json!(urls));
 
         if md5s.is_none() {
-            return Ok(false);
+            body.insert(
+                RivetxString::from("error"),
+                serde_json::json!("find md5s nil"),
+            );
+            return Ok((false, body));
         }
 
         let md5s = md5s.unwrap();
         if md5s.len() <= 0 {
-            return Ok(false);
+            body.insert(
+                RivetxString::from("error"),
+                serde_json::json!("find md5s len <= 0"),
+            );
+            return Ok((false, body));
         }
+
+        {
+            let md5s = md5s
+                .iter()
+                .map(|v| String::from_utf8(v.as_ref().to_vec()).unwrap_or("".to_string()))
+                .collect::<Vec<String>>();
+            body.insert(RivetxString::from("md5s"), serde_json::json!(md5s));
+        }
+
         if !is_purge_force {
             for md5 in &md5s {
                 set_expires_cache_file(&net_core_proxy.main, md5).await?;
             }
-            return Ok(true);
+            return Ok((true, body));
         }
         log::trace!(target: "purge", "del_md5");
         for md5 in &md5s {
@@ -253,6 +368,6 @@ impl HttpStream {
             }
         }
 
-        return Ok(true);
+        return Ok((true, body));
     }
 }

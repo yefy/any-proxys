@@ -8,8 +8,8 @@ use any_base::{executor_local_spawn, DropMsExecutor};
 use anyhow::anyhow;
 use anyhow::Result;
 use awaitgroup::WaitGroup;
-use tokio::sync::broadcast;
 use rivetx_core::task_group::TaskGroup;
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct AnyproxyWorkDataNew {
@@ -221,7 +221,7 @@ impl AnyproxyWork {
             let data = ArcUnsafeAny::new(Box::new(data.clone()));
             self.executor.clone()._start(
                 #[cfg(feature = "anyspawn-count")]
-                    Some(format!("{}:{}", file!(), line!())),
+                Some(format!("{}:{}", file!(), line!())),
                 move |executors| async move {
                     let _wgg = wgg;
                     if let Err(e) = server.stop(data).await {

@@ -531,9 +531,7 @@ impl StreamStream {
             stream_info.ssc_upload.set(ssc_upload.clone());
         }
 
-        stream_info
-            .get_mut()
-            .add_work_time1("do_single_stream_to_stream");
+        stream_info.get_mut().add_work_time1("stream_to_stream");
         let ret: Result<()> = async {
             tokio::select! {
                 ret = StreamStream::do_single_stream_to_stream(
@@ -620,9 +618,7 @@ impl StreamStream {
             }
         }
 
-        stream_info
-            .get_mut()
-            .add_work_time1("do_single_stream_to_stream");
+        stream_info.get_mut().add_work_time1("stream_single");
 
         StreamStream::do_single_stream_to_stream(
             ssc_download,

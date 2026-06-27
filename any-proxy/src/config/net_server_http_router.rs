@@ -1,23 +1,27 @@
 use crate::config as conf;
+use crate::proxy::http_proxy::http_router::AnyHttpRouter;
+use crate::proxy::http_proxy::http_server_router_api::register_router_handles;
 use any_base::module::module;
 use any_base::typ;
-use any_base::typ::ArcUnsafeAny;
+use any_base::typ::{ArcRwLockTokio, ArcUnsafeAny};
 use anyhow::anyhow;
 use anyhow::Result;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
-use crate::proxy::http_proxy::http_router::HttpRouter;
-use crate::proxy::http_proxy::http_server_router_api::router_handle;
 
 pub struct Conf {
-    pub router: Arc<HttpRouter>,
+    pub router: Arc<AnyHttpRouter>,
     pub is_open_router: bool,
 }
 
 impl Conf {
     pub fn new() -> Self {
         Conf {
-            router: Arc::new(HttpRouter::new()),
+            router: Arc::new(AnyHttpRouter::with_any_state(())),
             is_open_router: false,
         }
     }
@@ -128,7 +132,6 @@ async fn merge_conf(
         if !child_conf.is_open_router {
             child_conf.is_open_router = parent_conf.is_open_router;
         }
-
     }
     return Ok(());
 }
@@ -168,11 +171,11 @@ async fn net_server_http_router(
     conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
     let conf = conf.get_mut::<Conf>();
-    // let str = conf_arg.value.get::<String>();
+    let name = conf_arg.value.get::<String>().trim();
     // let router_conf: HttpServerRouterConfig =
     //     toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
     //log::trace!(target: "main", "net_server_http_router router_conf:{:?}", router_conf);
-    log::trace!(target: "main", "net_server_http_router router_conf");
+    log::trace!(target: "main", "net_server_http_router router_conf:{}", name);
     // conf.conf = router_conf;
 
     use crate::config::net_server_http;
@@ -181,9 +184,46 @@ async fn net_server_http_router(
         return Err(anyhow!("err:net_server_http nil"));
     }
 
-    let mut router = HttpRouter::new();
-    router_handle(&mut router).await?;
-    conf.router = Arc::new(router);
+    register_router_handles().await?;
+
+    let router = call_router_handle(name).await?;
+    if router.is_none() {
+        return Err(anyhow::anyhow!("router is_none:{}", name));
+    }
+    conf.router = Arc::new(router.unwrap());
     conf.is_open_router = true;
     return Ok(());
+}
+
+pub type RouterHandle =
+    Arc<dyn Send + Sync + Fn(String) -> BoxFuture<'static, anyhow::Result<Option<AnyHttpRouter>>>>;
+
+lazy_static! {
+    pub static ref ROUTER_HANDLE_MAP: ArcRwLockTokio<HashMap<String, RouterHandle>> =
+        ArcRwLockTokio::new(HashMap::new());
+}
+
+pub async fn add_router_handle<F, Fut>(name: impl Into<String>, handle: F) -> anyhow::Result<()>
+where
+    F: Fn(String) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = anyhow::Result<Option<AnyHttpRouter>>> + Send + 'static,
+{
+    let name = name.into();
+    let handle: RouterHandle = Arc::new(move |name| handle(name).boxed());
+    let routers = &mut *ROUTER_HANDLE_MAP.get_mut().await;
+    if routers.contains_key(&name) {
+        return Ok(());
+    }
+    routers.insert(name, handle);
+    Ok(())
+}
+
+pub async fn call_router_handle(name: &str) -> anyhow::Result<Option<AnyHttpRouter>> {
+    let handle = { ROUTER_HANDLE_MAP.get().await.get(name).cloned() };
+
+    let Some(handle) = handle else {
+        return Ok(None);
+    };
+
+    handle(name.to_string()).await
 }

@@ -156,11 +156,20 @@ async fn proxy_pass_ssl(
     do_proxy_pass_ssl(&ms, &conf_arg, &cmd, proxy_pass_conf).await
 }
 
+pub async fn do_proxy_pass_ssl_var(proxy_pass_conf: ProxyPassSsl) -> Result<Arc<UpstreamVarAddr>> {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+
+    let ups_tcp = Box::new(UpstreamSsl::new(Some(address_vars), proxy_pass_conf));
+    let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+    let upstream_var_addr = Arc::new(UpstreamVarAddr::new(get_connect));
+    return Ok(upstream_var_addr);
+}
+
 pub async fn do_proxy_pass_ssl(
     ms: &module::Modules,
     conf_arg: &module::ConfArg,
     _cmd: &module::Cmd,
-    mut proxy_pass_conf: ProxyPassSsl
+    mut proxy_pass_conf: ProxyPassSsl,
 ) -> Result<()> {
     let str = conf_arg.value.get::<String>();
     if proxy_pass_conf.balancer.is_empty() {

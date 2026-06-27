@@ -9,6 +9,7 @@ use hyper::http::header::HeaderValue;
 use hyper::http::{Response, Version};
 use hyper::Body;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 pub async fn server_handle(r: Arc<HttpStreamRequest>) -> Result<crate::Error> {
     let scc = r.http_arg.stream_info.get().scc.clone();
@@ -54,21 +55,26 @@ impl HttpStream {
             "Content-Type",
             HeaderValue::from_bytes("text/plain".as_bytes())?,
         );
-        response.headers_mut().insert(
-            "Last-Modified",
-            HeaderValue::from_bytes("Thu, 08 Jul 2021 09:30:53 GMT".as_bytes())?,
-        );
+        {
+            let modified = SystemTime::now();
+            let last_modified = httpdate::HttpDate::from(modified);
+            let last_modified = last_modified.to_string();
+            response.headers_mut().insert(
+                "Last-Modified",
+                HeaderValue::from_bytes(last_modified.as_bytes())?,
+            );
+        }
         response.headers_mut().insert(
             "Connection",
             HeaderValue::from_bytes("keep-alive".as_bytes())?,
         );
-        response
-            .headers_mut()
-            .insert("ETag", HeaderValue::from_bytes("60e6c5cd-e".as_bytes())?);
-        response.headers_mut().insert(
-            "Accept-Ranges",
-            HeaderValue::from_bytes("bytes".as_bytes())?,
-        );
+        // response
+        //     .headers_mut()
+        //     .insert("ETag", HeaderValue::from_bytes(b"default")?);
+        // response.headers_mut().insert(
+        //     "Accept-Ranges",
+        //     HeaderValue::from_bytes("bytes".as_bytes())?,
+        // );
         response
             .headers_mut()
             .insert(http::header::CONTENT_LENGTH, HeaderValue::from(len));

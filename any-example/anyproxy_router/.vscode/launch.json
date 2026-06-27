@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug anyproxy_router (Rustls)",
+            "cargo": {
+                "args": [
+                    "+1.96.0",
+                    "build",
+                    "--profile",
+                    "bench-dev",
+                    "-p",
+                    "anyproxy_router"
+                ],
+                "filter": {
+                    "name": "anyproxy_router",
+                    "kind": "bin"
+                }
+            },
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "-c",
+                "conf/anyproxy_simple_http_router.conf"
+            ]
+        }
+    ]
+}

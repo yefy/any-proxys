@@ -23,7 +23,7 @@ pub struct Server {
     sni: Mutex<util::Sni>,
     #[cfg(feature = "anyproxy-ebpf")]
     ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
-    disable_ipv6_only: bool
+    disable_ipv6_only: bool,
 }
 
 impl Server {
@@ -33,7 +33,7 @@ impl Server {
         config: Arc<Config>,
         sni: util::Sni,
         #[cfg(feature = "anyproxy-ebpf")] ebpf_tx: Option<any_ebpf::AnyEbpfTx>,
-        disable_ipv6_only: bool
+        disable_ipv6_only: bool,
     ) -> Result<Server> {
         Ok(Server {
             config,

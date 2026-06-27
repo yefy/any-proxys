@@ -97,7 +97,7 @@ pub async fn do_http_filter_header_parse(r: &HttpStreamRequest) -> Result<()> {
         rctx.r_out.transfer_encoding = transfer_encoding.into();
         rctx.r_out.is_cache_err = false;
 
-
+        rctx.r_out.range = content_range.clone();
 
         if rctx.is_out_status_ok() {
             let expires = {

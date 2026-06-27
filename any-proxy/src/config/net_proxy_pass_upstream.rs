@@ -1,19 +1,30 @@
 use crate::config as conf;
+use crate::config::config_toml::{
+    default_quic_config_name, default_tcp_config_name, ProxyPassQuic, ProxyPassQuicTunnel,
+    ProxyPassQuicTunnel2, ProxyPassSsl, ProxyPassSslTunnel, ProxyPassSslTunnel2, ProxyPassTcp,
+    ProxyPassTcpTunnel, ProxyPassTcpTunnel2, Tunnel,
+};
+use crate::config::net_proxy_pass_quic::{do_proxy_pass_quic, do_proxy_pass_quic_var};
+use crate::config::net_proxy_pass_ssl::{do_proxy_pass_ssl, do_proxy_pass_ssl_var};
+use crate::config::net_proxy_pass_tcp::{do_proxy_pass_tcp, do_proxy_pass_tcp_var};
+use crate::config::net_proxy_pass_tunnel::{
+    do_proxy_pass_tunnel_quic, do_proxy_pass_tunnel_quic_var, do_proxy_pass_tunnel_ssl,
+    do_proxy_pass_tunnel_ssl_var, do_proxy_pass_tunnel_tcp, do_proxy_pass_tunnel_tcp_var,
+};
+use crate::config::net_proxy_pass_tunnel2::{
+    do_proxy_pass_tunnel2_quic, do_proxy_pass_tunnel2_quic_var, do_proxy_pass_tunnel2_ssl,
+    do_proxy_pass_tunnel2_ssl_var, do_proxy_pass_tunnel2_tcp, do_proxy_pass_tunnel2_tcp_var,
+};
+use crate::upstream::UpstreamVarAddr;
+use crate::util::util::host_and_port;
 use any_base::module::module;
 use any_base::typ;
 use any_base::typ::ArcUnsafeAny;
-use anyhow::{anyhow, Context};
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use lazy_static::lazy_static;
-use std::sync::Arc;
 use std::collections::HashMap;
-use crate::config::config_toml::{ProxyPassTcp, default_tcp_config_name, ProxyPassSsl, ProxyPassQuic, default_quic_config_name, ProxyPassTcpTunnel2, ProxyPassSslTunnel2, ProxyPassQuicTunnel2, ProxyPassTcpTunnel, Tunnel, ProxyPassSslTunnel, ProxyPassQuicTunnel};
-use crate::config::net_proxy_pass_tcp::do_proxy_pass_tcp;
-use crate::util::util::host_and_port;
-use crate::config::net_proxy_pass_ssl::do_proxy_pass_ssl;
-use crate::config::net_proxy_pass_quic::do_proxy_pass_quic;
-use crate::config::net_proxy_pass_tunnel2::{do_proxy_pass_tunnel2_tcp, do_proxy_pass_tunnel2_ssl, do_proxy_pass_tunnel2_quic};
-use crate::config::net_proxy_pass_tunnel::{do_proxy_pass_tunnel_tcp, do_proxy_pass_tunnel_ssl, do_proxy_pass_tunnel_quic};
+use std::sync::Arc;
 
 pub struct Conf {}
 
@@ -152,27 +163,15 @@ async fn proxy_pass_upstream(
 ) -> Result<()> {
     let _conf = conf.get_mut::<Conf>();
 
-    let main_protocol = HashMap::from([
-        ("tcp", true),
-        ("ssl", true),
-        ("quic", true),
-    ]);
+    let main_protocol = HashMap::from([("tcp", true), ("ssl", true), ("quic", true)]);
 
-    let main_protocol_tunnel = HashMap::from([
-        ("tunnel", true),
-    ]);
+    let main_protocol_tunnel = HashMap::from([("tunnel", true)]);
 
-    let main_protocol_tunnel2 = HashMap::from([
-        ("tunnel2", true),
-    ]);
+    let main_protocol_tunnel2 = HashMap::from([("tunnel2", true)]);
 
-    let sub_protocol = HashMap::from([
-        ("tcp", true),
-        ("ssl", true),
-        ("quic", true),
-    ]);
+    let sub_protocol = HashMap::from([("tcp", true), ("ssl", true), ("quic", true)]);
 
-    let ret:anyhow::Result<()> = async {
+    let ret: anyhow::Result<()> = async {
         let str = conf_arg.value.get::<String>();
         log::trace!(target: "main", "proxy_pass_upstream simple str:{:?}", str);
         let str = str.trim();
@@ -212,21 +211,21 @@ async fn proxy_pass_upstream(
         if str0 == "tcp" {
             let address = strs[1].trim();
             let balancer = strs[2].trim();
-            let proxy_pass_conf =  ProxyPassTcp {
-                 balancer: balancer.to_string(),
-                 address: address.to_string(), //ip:port, domain:port
-                 tcp_config_name: default_tcp_config_name(),
-                 heartbeat: None,
-                 dynamic_domain: None,
-                 is_proxy_protocol_hello: None,
-                 weight: None,
+            let proxy_pass_conf = ProxyPassTcp {
+                balancer: balancer.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                tcp_config_name: default_tcp_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
             };
             do_proxy_pass_tcp(&ms, &conf_arg, &cmd, proxy_pass_conf).await?;
             return Err(anyhow::anyhow!("")).here_set_code(1);
         } else if str0 == "ssl" {
             let address = strs[1].trim();
             let address_split = address.split_once(",");
-            let  (address, ssl_domain) = if address_split.is_none() {
+            let (address, ssl_domain) = if address_split.is_none() {
                 let (domain, _) = host_and_port(address);
                 (address, domain)
             } else {
@@ -239,7 +238,7 @@ async fn proxy_pass_upstream(
                 }
             };
             let balancer = strs[2].trim();
-            let proxy_pass_conf =  ProxyPassSsl {
+            let proxy_pass_conf = ProxyPassSsl {
                 balancer: balancer.to_string(),
                 ssl_domain: ssl_domain.to_string(),
                 address: address.to_string(), //ip:port, domain:port
@@ -254,7 +253,7 @@ async fn proxy_pass_upstream(
         } else if str0 == "quic" {
             let address = strs[1].trim();
             let address_split = address.split_once(",");
-            let  (address, ssl_domain) = if address_split.is_none() {
+            let (address, ssl_domain) = if address_split.is_none() {
                 let (domain, _) = host_and_port(address);
                 (address, domain)
             } else {
@@ -267,7 +266,7 @@ async fn proxy_pass_upstream(
                 }
             };
             let balancer = strs[2].trim();
-            let proxy_pass_conf =  ProxyPassQuic{
+            let proxy_pass_conf = ProxyPassQuic {
                 balancer: balancer.to_string(),
                 ssl_domain: ssl_domain.to_string(),
                 address: address.to_string(), //ip:port, domain:port
@@ -279,7 +278,7 @@ async fn proxy_pass_upstream(
             };
             do_proxy_pass_quic(&ms, &conf_arg, &cmd, proxy_pass_conf).await?;
             return Err(anyhow::anyhow!("")).here_set_code(1);
-        }else if str0 == "tunnel" {
+        } else if str0 == "tunnel" {
             let tunnel = if strs.len() != 4 {
                 Tunnel::new()
             } else {
@@ -300,7 +299,7 @@ async fn proxy_pass_upstream(
             if str1 == "tcp" {
                 let address = strs[2].trim();
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassTcpTunnel {
+                let proxy_pass_conf = ProxyPassTcpTunnel {
                     balancer: balancer.to_string(),
                     tunnel,
                     address: address.to_string(), //ip:port, domain:port
@@ -315,7 +314,7 @@ async fn proxy_pass_upstream(
             } else if str1 == "ssl" {
                 let address = strs[2].trim();
                 let address_split = address.split_once(",");
-                let  (address, ssl_domain) = if address_split.is_none() {
+                let (address, ssl_domain) = if address_split.is_none() {
                     let (domain, _) = host_and_port(address);
                     (address, domain)
                 } else {
@@ -328,7 +327,7 @@ async fn proxy_pass_upstream(
                     }
                 };
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassSslTunnel {
+                let proxy_pass_conf = ProxyPassSslTunnel {
                     balancer: balancer.to_string(),
                     tunnel,
                     ssl_domain: ssl_domain.to_string(),
@@ -344,7 +343,7 @@ async fn proxy_pass_upstream(
             } else if str1 == "quic" {
                 let address = strs[2].trim();
                 let address_split = address.split_once(",");
-                let  (address, ssl_domain) = if address_split.is_none() {
+                let (address, ssl_domain) = if address_split.is_none() {
                     let (domain, _) = host_and_port(address);
                     (address, domain)
                 } else {
@@ -357,7 +356,7 @@ async fn proxy_pass_upstream(
                     }
                 };
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassQuicTunnel{
+                let proxy_pass_conf = ProxyPassQuicTunnel {
                     balancer: balancer.to_string(),
                     tunnel,
                     ssl_domain: ssl_domain.to_string(),
@@ -373,11 +372,11 @@ async fn proxy_pass_upstream(
             } else {
                 return Ok(());
             }
-        }else if str0 == "tunnel2" {
+        } else if str0 == "tunnel2" {
             if str1 == "tcp" {
                 let address = strs[2].trim();
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassTcpTunnel2 {
+                let proxy_pass_conf = ProxyPassTcpTunnel2 {
                     balancer: balancer.to_string(),
                     address: address.to_string(), //ip:port, domain:port
                     tcp_config_name: default_tcp_config_name(),
@@ -391,7 +390,7 @@ async fn proxy_pass_upstream(
             } else if str1 == "ssl" {
                 let address = strs[2].trim();
                 let address_split = address.split_once(",");
-                let  (address, ssl_domain) = if address_split.is_none() {
+                let (address, ssl_domain) = if address_split.is_none() {
                     let (domain, _) = host_and_port(address);
                     (address, domain)
                 } else {
@@ -404,7 +403,7 @@ async fn proxy_pass_upstream(
                     }
                 };
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassSslTunnel2 {
+                let proxy_pass_conf = ProxyPassSslTunnel2 {
                     balancer: balancer.to_string(),
                     ssl_domain: ssl_domain.to_string(),
                     address: address.to_string(), //ip:port, domain:port
@@ -419,7 +418,7 @@ async fn proxy_pass_upstream(
             } else if str1 == "quic" {
                 let address = strs[2].trim();
                 let address_split = address.split_once(",");
-                let  (address, ssl_domain) = if address_split.is_none() {
+                let (address, ssl_domain) = if address_split.is_none() {
                     let (domain, _) = host_and_port(address);
                     (address, domain)
                 } else {
@@ -432,7 +431,7 @@ async fn proxy_pass_upstream(
                     }
                 };
                 let balancer = strs[3].trim();
-                let proxy_pass_conf =  ProxyPassQuicTunnel2{
+                let proxy_pass_conf = ProxyPassQuicTunnel2 {
                     balancer: balancer.to_string(),
                     ssl_domain: ssl_domain.to_string(),
                     address: address.to_string(), //ip:port, domain:port
@@ -450,8 +449,8 @@ async fn proxy_pass_upstream(
         } else {
             return Ok(());
         }
-
-    }.await;
+    }
+    .await;
     if let Err(e) = ret {
         if e.code() > 0 {
             return Ok(());
@@ -478,4 +477,282 @@ async fn proxy_pass_upstream(
     net_server_core_conf.upstream_data = upstream_data.unwrap();
 
     return Ok(());
+}
+
+pub async fn proxy_pass_upstream_var(str: &str) -> Result<Arc<UpstreamVarAddr>> {
+    let main_protocol = HashMap::from([("tcp", true), ("ssl", true), ("quic", true)]);
+
+    let main_protocol_tunnel = HashMap::from([("tunnel", true)]);
+
+    let main_protocol_tunnel2 = HashMap::from([("tunnel2", true)]);
+
+    let sub_protocol = HashMap::from([("tcp", true), ("ssl", true), ("quic", true)]);
+
+    log::trace!(target: "main", "proxy_pass_upstream simple str:{:?}", str);
+    let str = str.trim();
+    if str.len() < 2 {
+        return Err(anyhow::anyhow!("str.len() < 2"));
+    }
+    if &str[0..2] != "//" {
+        return Err(anyhow::anyhow!("&str[0..2] != //"));
+    }
+    let str: &str = &str[2..];
+    let strs = str.split("//").collect::<Vec<&str>>();
+    if strs.len() < 2 {
+        return Err(anyhow::anyhow!("strs.len() < 2"));
+    }
+    let str0 = strs[0].trim();
+    let str1 = strs[1].trim();
+    if main_protocol.contains_key(str0) {
+        if strs.len() != 3 {
+            return Err(anyhow::anyhow!("strs.len() != 3"));
+        }
+    } else if main_protocol_tunnel.contains_key(str0) {
+        if strs.len() != 4 && strs.len() != 5 {
+            return Err(anyhow::anyhow!("strs.len() != 4 && strs.len() != 5"));
+        }
+        if !sub_protocol.contains_key(str1) {
+            return Err(anyhow::anyhow!("!sub_protocol.contains_key(str1)"));
+        }
+    } else if main_protocol_tunnel2.contains_key(str0) {
+        if strs.len() != 4 {
+            return Err(anyhow::anyhow!("strs.len() != 4"));
+        }
+        if !sub_protocol.contains_key(str1) {
+            return Err(anyhow::anyhow!("!sub_protocol.contains_key(str1)"));
+        }
+    }
+
+    if str0 == "tcp" {
+        let address = strs[1].trim();
+        let balancer = strs[2].trim();
+        let proxy_pass_conf = ProxyPassTcp {
+            balancer: balancer.to_string(),
+            address: address.to_string(), //ip:port, domain:port
+            tcp_config_name: default_tcp_config_name(),
+            heartbeat: None,
+            dynamic_domain: None,
+            is_proxy_protocol_hello: None,
+            weight: None,
+        };
+        do_proxy_pass_tcp_var(proxy_pass_conf).await
+    } else if str0 == "ssl" {
+        let address = strs[1].trim();
+        let address_split = address.split_once(",");
+        let (address, ssl_domain) = if address_split.is_none() {
+            let (domain, _) = host_and_port(address);
+            (address, domain)
+        } else {
+            let (address, ssl_domain) = address_split.unwrap();
+            if ssl_domain.len() <= 0 {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                (address, ssl_domain)
+            }
+        };
+        let balancer = strs[2].trim();
+        let proxy_pass_conf = ProxyPassSsl {
+            balancer: balancer.to_string(),
+            ssl_domain: ssl_domain.to_string(),
+            address: address.to_string(), //ip:port, domain:port
+            tcp_config_name: default_tcp_config_name(),
+            heartbeat: None,
+            dynamic_domain: None,
+            is_proxy_protocol_hello: None,
+            weight: None,
+        };
+        do_proxy_pass_ssl_var(proxy_pass_conf).await
+    } else if str0 == "quic" {
+        let address = strs[1].trim();
+        let address_split = address.split_once(",");
+        let (address, ssl_domain) = if address_split.is_none() {
+            let (domain, _) = host_and_port(address);
+            (address, domain)
+        } else {
+            let (address, ssl_domain) = address_split.unwrap();
+            if ssl_domain.len() <= 0 {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                (address, ssl_domain)
+            }
+        };
+        let balancer = strs[2].trim();
+        let proxy_pass_conf = ProxyPassQuic {
+            balancer: balancer.to_string(),
+            ssl_domain: ssl_domain.to_string(),
+            address: address.to_string(), //ip:port, domain:port
+            quic_config_name: default_quic_config_name(),
+            heartbeat: None,
+            dynamic_domain: None,
+            is_proxy_protocol_hello: None,
+            weight: None,
+        };
+        do_proxy_pass_quic_var(proxy_pass_conf).await
+    } else if str0 == "tunnel" {
+        let tunnel = if strs.len() != 4 {
+            Tunnel::new()
+        } else {
+            let tunnel = strs[4].trim();
+            let tunnels = tunnel.split(",").collect::<Vec<&str>>();
+            if tunnels.len() != 3 {
+                return Err(anyhow::anyhow!("tunnels.len() != 3"));
+            }
+            let max_stream_size: usize = tunnels[0].trim().parse().context("")?;
+            let min_stream_cache_size: usize = tunnels[1].trim().parse().context("")?;
+            let channel_size: usize = tunnels[2].trim().parse().context("")?;
+            Tunnel {
+                max_stream_size,
+                min_stream_cache_size,
+                channel_size,
+            }
+        };
+        if str1 == "tcp" {
+            let address = strs[2].trim();
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassTcpTunnel {
+                balancer: balancer.to_string(),
+                tunnel,
+                address: address.to_string(), //ip:port, domain:port
+                tcp_config_name: default_tcp_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel_tcp_var(proxy_pass_conf).await
+        } else if str1 == "ssl" {
+            let address = strs[2].trim();
+            let address_split = address.split_once(",");
+            let (address, ssl_domain) = if address_split.is_none() {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                let (address, ssl_domain) = address_split.unwrap();
+                if ssl_domain.len() <= 0 {
+                    let (domain, _) = host_and_port(address);
+                    (address, domain)
+                } else {
+                    (address, ssl_domain)
+                }
+            };
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassSslTunnel {
+                balancer: balancer.to_string(),
+                tunnel,
+                ssl_domain: ssl_domain.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                tcp_config_name: default_tcp_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel_ssl_var(proxy_pass_conf).await
+        } else if str1 == "quic" {
+            let address = strs[2].trim();
+            let address_split = address.split_once(",");
+            let (address, ssl_domain) = if address_split.is_none() {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                let (address, ssl_domain) = address_split.unwrap();
+                if ssl_domain.len() <= 0 {
+                    let (domain, _) = host_and_port(address);
+                    (address, domain)
+                } else {
+                    (address, ssl_domain)
+                }
+            };
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassQuicTunnel {
+                balancer: balancer.to_string(),
+                tunnel,
+                ssl_domain: ssl_domain.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                quic_config_name: default_quic_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel_quic_var(proxy_pass_conf).await
+        } else {
+            return Err(anyhow::anyhow!("parse smart upstream err"));
+        }
+    } else if str0 == "tunnel2" {
+        if str1 == "tcp" {
+            let address = strs[2].trim();
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassTcpTunnel2 {
+                balancer: balancer.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                tcp_config_name: default_tcp_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel2_tcp_var(proxy_pass_conf).await
+        } else if str1 == "ssl" {
+            let address = strs[2].trim();
+            let address_split = address.split_once(",");
+            let (address, ssl_domain) = if address_split.is_none() {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                let (address, ssl_domain) = address_split.unwrap();
+                if ssl_domain.len() <= 0 {
+                    let (domain, _) = host_and_port(address);
+                    (address, domain)
+                } else {
+                    (address, ssl_domain)
+                }
+            };
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassSslTunnel2 {
+                balancer: balancer.to_string(),
+                ssl_domain: ssl_domain.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                tcp_config_name: default_tcp_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel2_ssl_var(proxy_pass_conf).await
+        } else if str1 == "quic" {
+            let address = strs[2].trim();
+            let address_split = address.split_once(",");
+            let (address, ssl_domain) = if address_split.is_none() {
+                let (domain, _) = host_and_port(address);
+                (address, domain)
+            } else {
+                let (address, ssl_domain) = address_split.unwrap();
+                if ssl_domain.len() <= 0 {
+                    let (domain, _) = host_and_port(address);
+                    (address, domain)
+                } else {
+                    (address, ssl_domain)
+                }
+            };
+            let balancer = strs[3].trim();
+            let proxy_pass_conf = ProxyPassQuicTunnel2 {
+                balancer: balancer.to_string(),
+                ssl_domain: ssl_domain.to_string(),
+                address: address.to_string(), //ip:port, domain:port
+                quic_config_name: default_quic_config_name(),
+                heartbeat: None,
+                dynamic_domain: None,
+                is_proxy_protocol_hello: None,
+                weight: None,
+            };
+            do_proxy_pass_tunnel2_quic_var(proxy_pass_conf).await
+        } else {
+            return Err(anyhow::anyhow!("parse smart upstream err"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("parse smart upstream err"));
+    }
 }

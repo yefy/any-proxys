@@ -106,6 +106,17 @@ where
         }
     }
 
+    pub(crate) fn hyper_http_sent_byte_add(&mut self, size: i64) {
+        if self.resp_header_ext.is_none() {
+            return;
+        }
+        let resp_header_ext =  self.resp_header_ext.as_ref().unwrap();
+        resp_header_ext.hyper_http_sent_bytes.fetch_add(size, Ordering::Relaxed);
+        //let total = resp_header_ext.hyper_http_sent_bytes.fetch_add(size, Ordering::Relaxed) + size;
+        //log::info!("hyper_log hyper_http_sent_byte:{}", total);
+    }
+
+
     #[cfg(feature = "server")]
     pub(crate) fn set_flush_pipeline(&mut self, enabled: bool) {
         debug_assert!(!self.write_buf.has_remaining());
@@ -387,10 +398,8 @@ where
                                 Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size)
                             )?;
 
-                            if self.resp_header_ext.is_some() {
-                                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                                resp_header_ext.hyper_http_sent_bytes.fetch_add(size as i64, Ordering::Relaxed);
-                            }
+
+                            self.hyper_http_sent_byte_add(size as i64);
 
                             self.buf_file.advance(size);
                             self.write_buf.advance(size);
@@ -408,10 +417,7 @@ where
                         (n, len)
                     };
 
-                    if self.resp_header_ext.is_some() {
-                        let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                        resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
-                    }
+                    self.hyper_http_sent_byte_add(n as i64);
 
                     // TODO(eliza): we have to do this manually because
                     // `poll_write_buf` doesn't exist in Tokio 0.3 yet...when
@@ -463,10 +469,8 @@ where
                         let size =
                             ready!(Pin::new(&mut self.io).poll_sendfile(cx, file_ext.fix.file_fd, seek, size))?;
 
-                        if self.resp_header_ext.is_some() {
-                            let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                            resp_header_ext.hyper_http_sent_bytes.fetch_add(size as i64, Ordering::Relaxed);
-                        }
+
+                        self.hyper_http_sent_byte_add(size as i64);
 
                         self.buf_file.advance(size);
                         self.write_buf.advance(size);
@@ -486,10 +490,7 @@ where
                     ready!(Pin::new(&mut self.io).poll_write_vectored(cx, &iovs[..len]))?
                 };
 
-                if self.resp_header_ext.is_some() {
-                    let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                    resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
-                }
+                self.hyper_http_sent_byte_add(n as i64);
 
                 // TODO(eliza): we have to do this manually because
                 // `poll_write_buf` doesn't exist in Tokio 0.3 yet...when
@@ -517,10 +518,8 @@ where
     fn poll_flush_flattened(&mut self, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         loop {
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.headers.chunk()))?;
-            if self.resp_header_ext.is_some() {
-                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
-            }
+
+            self.hyper_http_sent_byte_add(n as i64);
 
             debug!("flushed {} bytes", n);
             self.write_buf.headers.advance(n);
@@ -553,10 +552,8 @@ where
                 break;
             }
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.headers.chunk()))?;
-            if self.resp_header_ext.is_some() {
-                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
-            }
+
+            self.hyper_http_sent_byte_add(n as i64);
 
             debug!("flushed {} bytes", n);
             self.write_buf.headers.advance(n);
@@ -581,10 +578,8 @@ where
                 break;
             }
             let n = ready!(Pin::new(&mut self.io).poll_write(cx, self.write_buf.cache.chunk()))?;
-            if self.resp_header_ext.is_some() {
-                let resp_header_ext = self.resp_header_ext.as_ref().unwrap();
-                resp_header_ext.hyper_http_sent_bytes.fetch_add(n as i64, Ordering::Relaxed);
-            }
+
+            self.hyper_http_sent_byte_add(n as i64);
 
             debug!("flushed {} bytes", n);
             self.write_buf.cache.advance(n);

@@ -649,7 +649,6 @@ pub struct ProxyPassTcpTunnel2 {
     pub weight: Option<i64>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyPassQuicTunnel2 {
@@ -716,15 +715,13 @@ pub struct Tunnel {
 
 impl Tunnel {
     pub fn new() -> Self {
-        Tunnel{
+        Tunnel {
             max_stream_size: default_max_stream_size(),
             min_stream_cache_size: default_min_stream_cache_size(),
             channel_size: default_channel_size(),
         }
     }
 }
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1097,7 +1094,6 @@ pub struct HttpServerEchoConfig {
 pub struct HttpServerStaticConfig {
     pub path: String,
 }
-
 
 pub fn default_proxy_pass() -> HttpServerProxyPassConfig {
     HttpServerProxyPassConfig::new()

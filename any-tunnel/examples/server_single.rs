@@ -4,7 +4,7 @@ use any_tunnel::server;
 use anyhow::anyhow;
 use anyhow::Result;
 use std::net::ToSocketAddrs;
-use std::sync::atomic::{AtomicU64, Ordering, AtomicI64};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -34,7 +34,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let accept_num2 = Arc::new(AtomicU64::new(0));
     let stream_close_num2 = Arc::new(AtomicU64::new(0));
     {
-
         let accept_num = accept_num.clone();
         let stream_close_num = stream_close_num.clone();
         let err_num = err_num.clone();
@@ -90,7 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if last_n != PACK_MAX_NUM {
                                                 return Err(anyhow::anyhow!(
                                                     "last_n:{} != PACK_MAX_NUM:{}",
-                                                    last_n, PACK_MAX_NUM
+                                                    last_n,
+                                                    PACK_MAX_NUM
                                                 ));
                                             }
                                             return Ok(());

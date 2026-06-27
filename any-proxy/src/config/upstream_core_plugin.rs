@@ -14,6 +14,8 @@ pub type PluginHandleBalancer = fn(
     ups_data: &mut UpstreamData,
 ) -> Option<(Option<bool>, bool, Arc<Box<dyn connect::Connect>>)>;
 
+pub const HTTP_HEADER_JUMPS_PROXY_PASS_KEY: &str = "anyproxy_jumps_proxy_pass";
+
 pub const WEIGHT: &str = "weight";
 pub const ROUND_ROBIN: &str = "round_robin";
 pub const RANDOM: &str = "random";

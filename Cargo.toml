@@ -1,6 +1,6 @@
 [workspace]
 resolver = "1"
-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2", "3rdparty/hyper-0.14.23"]
+members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2", "3rdparty/hyper-0.14.23", "any-example/anyproxy_router"]
 default-members = ["any-base", "any-proxy", "any-tunnel", "any-tunnel2", "3rdparty/hyper-0.14.23"]
 exclude = [
     ".git",
@@ -13,8 +13,10 @@ exclude = [
     "any-proxy/examples",
     "any-test",
     "any-example",
-    "any-example/example",
-    "any-ebpf",
+    "any-example/anyproxy_router",
+    "any-tools",
+    "any-tools/example-go",
+    "any-tools/example-rs",
 ]
 
 
@@ -62,5 +64,9 @@ overflow-checks = true
 debug-assertions = true
 rpath = false
 strip = "none"
+
+
+[patch.crates-io]
+anyhow = { git = "https://github.com/yefy/anyhow.git" }
 
 

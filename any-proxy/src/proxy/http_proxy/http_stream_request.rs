@@ -3,6 +3,7 @@ use crate::proxy::StreamConfigContext;
 use any_base::typ::{ArcMutex, ArcRwLock, OptionExt};
 //use hyper::body::HttpBody;
 use crate::config::net_core_proxy::CACHE_FILE_SLISE;
+use crate::config::upstream_core_plugin::HTTP_HEADER_JUMPS_PROXY_PASS_KEY;
 use crate::proxy::http_proxy::http_cache_file::HttpCacheFile;
 use crate::proxy::http_proxy::http_header_parse::{content_length, http_headers_size, HttpParts};
 use crate::proxy::http_proxy::http_hyper_connector::HttpHyperConnector;
@@ -12,12 +13,12 @@ use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::io::async_write_msg::{MsgReadBufFile, MsgWriteBufBytes};
 use any_base::stream_flow::StreamFlowErr;
 use any_base::util::{ArcString, HttpHeaderExt};
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use http::Extensions;
 use hyper::http::request::Parts;
-use hyper::http::Request;
+use hyper::http::{HeaderValue, Request};
 use hyper::{Body, Response};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -182,6 +183,8 @@ pub struct HttpIn {
     pub curr_upstream_method: Option<hyper::Method>,
     pub is_304: bool,
     pub upstream_connect_info: Arc<HttpUpstreamConnectInfo>,
+    pub curr_jumps_proxy_pass_value: String,
+    pub next_jumps_proxy_pass_value: String,
 }
 
 #[derive(Clone)]
@@ -217,9 +220,10 @@ pub struct HttpOut {
     pub left_content_length: i64,
     pub out_content_length: i64,
     pub transfer_encoding: OptionExt<String>,
+    pub range: HttpContentRange,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct HttpContentRange {
     pub is_range: bool,
     pub raw_content_length: u64,
@@ -228,7 +232,7 @@ pub struct HttpContentRange {
     pub range_end: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct HttpRange {
     pub is_range: bool,
     pub raw_content_length: u64,
@@ -335,6 +339,9 @@ pub struct HttpStreamRequestContext {
     pub is_client_sendfile: bool,
     pub is_upstream_sendfile: bool,
     pub is_request_cache: bool,
+    //这个是http是否发起upstream请求
+    pub is_http_upstream: bool,
+    //这个是开启缓存了, 是否发起upstream请求
     pub is_upstream: bool,
     pub is_upstream_add: bool,
     pub max_upstream_count: i64,
@@ -385,7 +392,6 @@ impl std::fmt::Display for HttpStreamRequest {
         Ok(())
     }
 }
-
 
 impl std::fmt::Debug for HttpStreamRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -481,7 +487,7 @@ impl HttpStreamRequest {
             method: upstream_method,
             uri: upstream_uri,
             version: upstream_version,
-            headers: upstream_headers,
+            headers: mut upstream_headers,
             extensions: upstream_extensions,
             ..
         } = parts;
@@ -494,8 +500,33 @@ impl HttpStreamRequest {
             http_headers_size(Some(&uri), None, &headers)
         };
 
-        let scc = http_arg.stream_info.get().scc.clone();
+        let mut curr_jumps_proxy_pass_value = "".to_string();
+        let mut next_jumps_proxy_pass_value = "".to_string();
+        let jumps_proxy_pass_value = upstream_headers.get(HTTP_HEADER_JUMPS_PROXY_PASS_KEY);
+        if jumps_proxy_pass_value.is_some() {
+            let jumps_proxy_pass_value = jumps_proxy_pass_value.unwrap();
+            let jumps_proxy_pass_value = jumps_proxy_pass_value.to_str().here()?;
+            if jumps_proxy_pass_value.len() > 0 {
+                let jumps_proxy_pass_values = jumps_proxy_pass_value.split_once("|||");
+                if jumps_proxy_pass_values.is_some() {
+                    let (curr_jumps_proxy_pass_value_, next_jumps_proxy_pass_value_) =
+                        jumps_proxy_pass_values.unwrap();
+                    curr_jumps_proxy_pass_value = curr_jumps_proxy_pass_value_.trim().to_string();
+                    next_jumps_proxy_pass_value = next_jumps_proxy_pass_value_.trim().to_string();
+                } else {
+                    curr_jumps_proxy_pass_value = jumps_proxy_pass_value.trim().to_string();
+                }
+            }
+        }
+        upstream_headers.remove(HTTP_HEADER_JUMPS_PROXY_PASS_KEY);
+        if next_jumps_proxy_pass_value.len() > 0 {
+            upstream_headers.insert(
+                HTTP_HEADER_JUMPS_PROXY_PASS_KEY,
+                HeaderValue::from_bytes(next_jumps_proxy_pass_value.as_bytes())?,
+            );
+        }
 
+        let scc = http_arg.stream_info.get().scc.clone();
         Ok(HttpStreamRequest {
             page_size,
             header_ext,
@@ -544,6 +575,8 @@ impl HttpStreamRequest {
                     curr_upstream_method: Some(upstream_method),
                     is_304: false,
                     upstream_connect_info,
+                    curr_jumps_proxy_pass_value,
+                    next_jumps_proxy_pass_value,
                 },
                 r_out: HttpOut {
                     status: http::StatusCode::OK,
@@ -563,6 +596,7 @@ impl HttpStreamRequest {
                     left_content_length: 0,
                     out_content_length: 0,
                     transfer_encoding: None.into(),
+                    range: HttpContentRange::default(),
                 },
                 r_out_main: None,
                 in_body_buf: None,
@@ -573,6 +607,7 @@ impl HttpStreamRequest {
                 is_client_sendfile: false,
                 is_upstream_sendfile: false,
                 is_request_cache: false,
+                is_http_upstream: false,
                 is_upstream: false,
                 is_upstream_add: false,
                 max_upstream_count: 0,

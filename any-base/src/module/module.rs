@@ -1,4 +1,5 @@
 use crate::executor_local_spawn::ExecutorLocalSpawn;
+use crate::parse_utils::ValueParser;
 use crate::typ::{ArcMutex, ArcRwLock, ArcUnsafeAny};
 use crate::DropMsExecutor;
 use anyhow::anyhow;
@@ -228,7 +229,6 @@ pub trait Server: Send + Sync {
     async fn stop(&self, any: ArcUnsafeAny) -> Result<()>;
 }
 
-
 #[derive(Clone)]
 pub struct ConfArg {
     pub is_sub_file: bool,
@@ -419,19 +419,19 @@ fn u16_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
 }
 
 fn u32_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
-    let v = value.parse::<u32>()?;
+    let v = ValueParser::parse(value)? as u32;
     conf_arg.value.set(Box::new(v));
     return Ok(());
 }
 
 fn usize_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
-    let v = value.parse::<usize>()?;
+    let v = ValueParser::parse(value)? as usize;
     conf_arg.value.set(Box::new(v));
     return Ok(());
 }
 
 fn u64_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
-    let v = value.parse::<u64>()?;
+    let v = ValueParser::parse(value)?;
     conf_arg.value.set(Box::new(v));
     return Ok(());
 }
@@ -588,7 +588,7 @@ fn u32s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         if v.len() <= 0 {
             continue;
         }
-        let v = v.parse::<u32>()?;
+        let v = ValueParser::parse(v)? as u32;
         vs.push(v);
     }
 
@@ -604,7 +604,7 @@ fn usizes_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         if v.len() <= 0 {
             continue;
         }
-        let v = v.parse::<usize>()?;
+        let v = ValueParser::parse(v)? as usize;
         vs.push(v);
     }
 
@@ -620,7 +620,7 @@ fn u64s_value(conf_arg: &mut ConfArg, value: &str) -> Result<()> {
         if v.len() <= 0 {
             continue;
         }
-        let v = v.parse::<u64>()?;
+        let v = ValueParser::parse(value)?;
         vs.push(v);
     }
 

@@ -8,6 +8,9 @@ pub mod http_header_parse;
 pub mod http_hyper_connector;
 pub mod http_hyper_stream;
 pub mod http_in;
+pub mod http_router;
+#[cfg(test)]
+mod http_router_test;
 pub mod http_server_echo;
 pub mod http_server_proxy;
 pub mod http_server_purge;
@@ -19,7 +22,6 @@ pub mod http_stream_request;
 pub mod stream;
 pub mod stream_write;
 pub mod util;
-pub mod http_router;
 
 use crate::protopack::anyproxy::AnyproxyHello;
 use crate::proxy::http_proxy::http_header_parse::parse_request_parts;

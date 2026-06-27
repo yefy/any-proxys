@@ -41,6 +41,7 @@ pub mod thread_spawn_wait_run;
 pub mod typ;
 //pub mod typ2;
 pub mod arc_string;
+pub mod parse_utils;
 pub mod util;
 
 pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;

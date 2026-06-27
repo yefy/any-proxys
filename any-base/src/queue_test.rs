@@ -566,7 +566,9 @@ mod tests {
         let sentinel = queue.sentinel();
         let mut cur = sentinel.next();
         loop {
-            if cur == sentinel { break; }
+            if cur == sentinel {
+                break;
+            }
             assert!(!cur.is_detached());
             cur = cur.next();
         }
@@ -675,11 +677,20 @@ mod tests {
         let mut queue = Queue::<MaybePanic>::new();
 
         // 节点 A（id=0）：无用户句柄，drop 时 panic
-        queue.insert_tail(&QueueNode::new(MaybePanic { id: 0, drop_count: dc.clone() }));
+        queue.insert_tail(&QueueNode::new(MaybePanic {
+            id: 0,
+            drop_count: dc.clone(),
+        }));
         // 节点 B（id=1）：无用户句柄，drop 正常
-        queue.insert_tail(&QueueNode::new(MaybePanic { id: 1, drop_count: dc.clone() }));
+        queue.insert_tail(&QueueNode::new(MaybePanic {
+            id: 1,
+            drop_count: dc.clone(),
+        }));
         // 节点 C（id=2）：有用户句柄，验证其是否被正确 detach
-        let n_c = QueueNode::new(MaybePanic { id: 2, drop_count: dc.clone() });
+        let n_c = QueueNode::new(MaybePanic {
+            id: 2,
+            drop_count: dc.clone(),
+        });
         queue.insert_tail(&n_c);
         assert_eq!(queue.len(), 3);
 
@@ -706,7 +717,9 @@ mod tests {
         // （double-panic = abort；有 catch_unwind 后 Queue::drop 中的 clear() 不 panic）
         struct PanicOnDrop;
         impl Drop for PanicOnDrop {
-            fn drop(&mut self) { panic!("drop panic"); }
+            fn drop(&mut self) {
+                panic!("drop panic");
+            }
         }
 
         let mut queue = Queue::<PanicOnDrop>::new();
@@ -749,7 +762,9 @@ mod tests {
     fn test_clear_empties_queue() {
         let mut queue = Queue::<i32>::new();
         let nodes: Vec<QueueNode<i32>> = (0..10).map(|i| QueueNode::new(i)).collect();
-        for n in &nodes { queue.insert_tail(n); }
+        for n in &nodes {
+            queue.insert_tail(n);
+        }
         assert_eq!(queue.len(), 10);
 
         queue.clear();
@@ -757,7 +772,9 @@ mod tests {
         assert!(queue.empty());
         assert_eq!(queue.len(), 0);
         // clear 后所有节点均变为 detached
-        for n in &nodes { assert!(n.is_detached()); }
+        for n in &nodes {
+            assert!(n.is_detached());
+        }
         // clear 后哨兵自环完好，可继续使用
         queue.insert_tail(&QueueNode::new(99));
         assert_eq!(queue.len(), 1);
@@ -986,12 +1003,7 @@ mod tests {
                             count += 1;
 
                             if count % 1000 == 0 {
-                                println!(
-                                    "thread={} pop count={} value={}",
-                                    t,
-                                    count,
-                                    v
-                                );
+                                println!("thread={} pop count={} value={}", t, count, v);
                             }
                         }
                         None => {
@@ -1208,11 +1220,7 @@ mod tests {
                     }
 
                     if (i - begin) % 1000 == 0 {
-                        println!(
-                            "remove thread={} progress={}",
-                            t,
-                            i - begin
-                        );
+                        println!("remove thread={} progress={}", t, i - begin);
                     }
                 }
 
@@ -1270,7 +1278,9 @@ mod tests {
         assert_eq!(*r1, 42);
 
         // 通过 data_mut 修改（持有外部锁语义：单线程下 mut queue 隐含独占）
-        unsafe { *node.data_mut() = 100; }
+        unsafe {
+            *node.data_mut() = 100;
+        }
 
         // 再次读取：必须看到最新值（UnsafeCell 保证编译器不缓存旧值）
         assert_eq!(*node.data(), 100);
@@ -1282,7 +1292,9 @@ mod tests {
     fn test_data_mut_accumulate() {
         let node = QueueNode::new(0i64);
         for _ in 0..10_000 {
-            unsafe { *node.data_mut() += 1; }
+            unsafe {
+                *node.data_mut() += 1;
+            }
         }
         assert_eq!(*node.data(), 10_000);
     }
@@ -1596,10 +1608,18 @@ mod tests {
         node.remove();
 
         // remove() 返回后 TrackDrop 还未 drop（ref_cnt = 1，node 持有）
-        assert_eq!(drop_count.load(AO::SeqCst), 0, "remove() 后 node 句柄仍存活，T 不应 drop");
+        assert_eq!(
+            drop_count.load(AO::SeqCst),
+            0,
+            "remove() 后 node 句柄仍存活，T 不应 drop"
+        );
 
         // 最终 drop node 句柄：ref_cnt 1→0 → free → TrackDrop::drop
         drop(node);
-        assert_eq!(drop_count.load(AO::SeqCst), 1, "node 句柄 drop 后 T 应恰好析构 1 次");
+        assert_eq!(
+            drop_count.load(AO::SeqCst),
+            1,
+            "node 句柄 drop 后 T 应恰好析构 1 次"
+        );
     }
 }

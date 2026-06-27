@@ -277,7 +277,8 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
                 //     .write_all(buf.chunk(w_size))
                 //     .map_err(|e| anyhow!("err:fw.write_all => e:{}, w_size:{}", e, w_size));
 
-                let ret = write_fw.write_all_at(buf.chunk(w_size), fw_seek)
+                let ret = write_fw
+                    .write_all_at(buf.chunk(w_size), fw_seek)
                     .map_err(|e| anyhow!("err:fw.write_all => e:{}, w_size:{}", e, w_size));
 
                 match ret {
@@ -308,7 +309,8 @@ pub async fn write_buffer(sss: &StreamStreamShare, plugin: ArcUnsafeAny) -> Resu
             //     .write_all(buf.chunk(size))
             //     .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
 
-            let ret = fw.write_all_at(buf.chunk(size), seek)
+            let ret = fw
+                .write_all_at(buf.chunk(size), seek)
                 .map_err(|e| anyhow!("err:fw.write_all => e:{}, size:{}", e, size));
             match ret {
                 Ok(_) => {

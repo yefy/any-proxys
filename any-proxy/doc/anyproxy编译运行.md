@@ -57,16 +57,19 @@ vim /etc/hosts
 ```
 
 #开启源站
+cd any-example/anyproxy_o
 ./anyproxy -c conf/anyproxy_origin.conf或是使用nginx做源站见下面链接  
-[nginx 源站 支持 http https](https://github.com/yefy/any-proxys/blob/main/any-proxy/doc/nginx%E6%BA%90%E7%AB%99%E6%94%AF%E6%8C%81http%E5%92%8Chttps.md)  
+[nginx 源站 支持 http https](./nginx源站支持http和https.md)  
 
-#中转代理  
+#中转代理
+cd any-example/anyproxy_p
 ./anyproxy -c conf/anyproxy_proxy_to_origin.conf  
-#边缘代理  
+#边缘代理
+cd any-example/anyproxy
 ./anyproxy -c conf/anyproxy_edge_to_proxy.conf  
 
 #测试  
-anyproxy_edge_to_proxy.conf 文件有对应的curl测试  
+[anyproxy_edge_to_proxy.conf](../../any-example/anyproxy/conf/anyproxy_edge_to_proxy.conf) 文件有对应的curl测试  
 
 
 # 目录使用

@@ -11,7 +11,7 @@ use any_tunnel::server as tunnel_server;
 use any_tunnel2::server as tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{WaitGroupWorker, WaitGroupInner};
+use awaitgroup::{WaitGroupInner, WaitGroupWorker};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;

@@ -329,7 +329,10 @@ pub async fn read_pack<R: AsyncRead + std::marker::Unpin>(
             tunnel_data.header =
                 toml::from_slice(body_slice).map_err(|e| anyhow!("err:TunnelData=> e:{}", e))?;
             if tunnel_data.header.pack_size as usize > MAX_PACK_SIZE {
-                return Err(anyhow!("err:TunnelData pack_size > MAX_PACK_SIZE => pack_size:{}", tunnel_data.header.pack_size ));
+                return Err(anyhow!(
+                    "err:TunnelData pack_size > MAX_PACK_SIZE => pack_size:{}",
+                    tunnel_data.header.pack_size
+                ));
             }
             log::trace!(target: "main", "read_pack body:{:?}", tunnel_data.header);
 

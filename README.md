@@ -1,223 +1,639 @@
-# anyproxy介绍
+# anyproxy
+
+**用 Rust 编写的高性能、可扩展网络代理与边缘加速平台。**
+
+anyproxy 将 **四层反向代理**、**七层 HTTP/HTTPS 代理**、**HTTP 缓存存储**、**静态文件服务** 与 **WebAssembly 热更新脚本** 集成在同一套配置体系中。语法与 nginx 相近，运维习惯可平滑迁移；在协议互转、缓存能力、脚本扩展与配置热加载等方面针对现代边缘/CDN 场景做了深度优化。
+
+> 适用场景：CDN 边缘节点、多协议网关、高延迟链路加速、带缓存的反向代理、可编程 WAF/防盗链、内网穿透与隧道加速等。
+
+---
+
+## 目录
+
+- [核心能力](#核心能力)
+- [为什么选择 anyproxy](#为什么选择-anyproxy)
+- [架构概览](#架构概览)
+- [快速开始（5 分钟验证）](#快速开始5-分钟验证)
+- [进阶：三节点联调](#进阶三节点联调)
+- [配置说明](#配置说明)
+- [常用场景配置](#常用场景配置)
+- [运维与生产部署](#运维与生产部署)
+- [WebAssembly 扩展](#webassembly-扩展)
+- [any-tunnel 加速协议](#any-tunnel-加速协议)
+- [编译选项](#编译选项)
+- [项目结构](#项目结构)
+- [文档索引](#文档索引)
+- [常见问题](#常见问题)
+
+---
+
+## 核心能力
+
+| 类别 | 能力 |
+|------|------|
+| **四层代理** | TCP / SSL / QUIC / any-tunnel 互转；port 端口模式与 domain 多域名复用（SNI/Host） |
+| **七层代理** | HTTP / HTTPS / HTTP2 / WebSocket over TCP、QUIC、SSL、any-tunnel |
+| **HTTP 缓存** | 切片回源、Range、并发合并回源、purge、304 校验、多盘存储与热点迁移 |
+| **静态服务** | sendfile / directio、条件请求（304/412）、rewrite |
+| **回源** | upstream 多节点、6 种负载均衡、心跳检查、动态 DNS |
+| **扩展** | WASM 多阶段插件（类 OpenResty lua 阶段），reload 热更新 |
+| **运维** | 配置热加载、二进制热升级、全链路 request_id、详细 access_log |
+| **Linux 增强** | eBPF 内核态加速、SO_REUSEPORT、零拷贝 sendfile |
+
+**支持平台**：Linux（推荐生产环境）、Windows、macOS。
+
+---
+
+## 为什么选择 anyproxy
+
+### 与 nginx / OpenResty 的定位差异
+
+| 维度 | anyproxy | nginx / OpenResty |
+|------|----------|-------------------|
+| 实现语言 | Rust（内存安全） | C / LuaJIT |
+| 四层 + 七层 + 缓存 | 统一配置体系 | 需 stream + http + cache 模块组合 |
+| 协议互转 | TCP/QUIC/SSL/tunnel 原生互转 | 需额外模块或外部组件 |
+| 脚本扩展 | WASM 多阶段，热 reload | Lua（OpenResty） |
+| HTTP 缓存 | 内置高级缓存（切片、合并回源、purge, range不额外存储节省磁盘 等） | proxy_cache，能力相对基础 |
+| 高延迟加速 | any-tunnel 隧道协议 | 无内置等价方案 |
+| 链路追踪 | proxy_protocol_hello + request_id | 需 PROXY protocol 等额外配置 |
+| 配置热加载 | reload 长连接可复用 | reload 长连接失效 |
+
+### 核心优势（一句话版）
+
+1. **性能**：异步 Rust + 多线程无锁协程，release 模式下性能对标 nginx；Linux 上可选 eBPF 与 sendfile 零拷贝。
+2. **协议丰富**：同一套配置完成四层端口代理、SNI 多域名、七层反代、QUIC、隧道加速。
+3. **缓存更强**：面向 CDN 的 HTTP 存储（切片、合并回源、延迟 purge、文件记忆、range不额外存储节省磁盘、reload 长连接可复用等），减少回源带宽。
+4. **可编程**：WASM 插件按阶段嵌入（access / filter / serverless / access_log），无需重启即可 reload。
+5. **可观测**：access_log 内置大量预制变量，跨节点 request_id 贯穿全链路。
+6. **跨平台**：Windows 可用 rustls 内嵌 TLS，无需安装 OpenSSL。
+
+---
+
+## 架构概览
+
 ```
-采用异步rust语言编写高性能、内存安全、高度模块化、插件化、配置化、脚本化、跨平台多线程无锁并发协程框架，
-支持四层反向代理服务：包括TCP、QUIC、SSL、any-tunnel协议互转加速，内核态ebpf加速，
-支持七层反向代理服务：包括协议（HTTP、HTTP2、WebSocket）over（TCP、QUIC、SSL、any-tunnel），
-支持http文件存储、负载均衡和故障转移策略，优雅的热加载配置文件，
-无锁异步webassembly热更新脚本框架，支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-适用于构建高效、脚本热更新框架和灵活的网络代理加速服务。
+                    ┌─────────────────────────────────────────┐
+                    │              anyproxy 进程                 │
+                    │  ┌─────────┐  ┌──────────┐  ┌─────────┐ │
+  Client ──────────►│  │ listen  │─►│  proxy   │─►│ upstream│─┼──► Origin
+  (TCP/QUIC/SSL/    │  │ net/    │  │ L4 / L7  │  │ LB/DNS  │ │
+   HTTP/WS)         │  │ server  │  │ + cache  │  │         │ │
+                    │  └─────────┘  └────┬─────┘  └─────────┘ │
+                    │                    │ WASM 插件（可选）      │
+                    │                    ▼                      │
+                    │              access_log / metrics         │
+                    └─────────────────────────────────────────┘
 ```
-# 特点
+
+**配置三级结构**：`net`（全局/监听） → `server`（域名/端口绑定） → `local`（具体业务：反代、静态、缓存、WASM）。
+
+**模块加载流程**：解析配置 → 各模块预解析/合并/继承 → 创建工作线程 → 开始监听。
+
+---
+
+## 快速开始（5 分钟验证）
+
+以下步骤在 **Linux / macOS / Windows** 均可完成。目标：启动一个 HTTP 静态文件服务并用 curl 验证。
+
+### 1. 环境准备
+
+**Rust 工具链（固定 1.96.0）**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # 未安装时
+rustup install 1.96.0
+rustup default 1.96.0
 ```
-内存安全的跨平台（Linux、Window、MacOS等）多线程无锁并发协程框架，性能媲美开源nginx
-无锁异步webassembly热更新脚本框架，媲美开源OpenResty  
-比开源Nginx和Squid更出色的http存储    
-优雅的配置文件reload热加载，无损耗、不阻塞、异步线程中执行，并能长连接复用    
-Linux平台支持reuseport多线程无锁并发     
-快速添加新模块支持新的传输协议（包括tcp、quic、ssl、srt、kcp、gRPC、http、websocket等） 
-支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、合并、继承、数据共享 
-可以快速基于tcp、quic、ssl、http、websocket添加插件和脚本开发业务  
-支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能  
-linux reuseport环境支持程序热升级    
-支持any-tunnel在高延迟网络加速，socket流缓存    
-支持非常详细的access_log、err_log、跨服务器链路日志  
-四层代理支持多域名端口复用  
-支持负载均衡和故障转移策略、心跳检查、动态域名解析   
-支持linux零拷贝技术sendfile和文件directio高速缓存控制  
-支持预制变量，可以配置复杂需求  
+
+| 平台 | 额外依赖 |
+|------|----------|
+| **Linux** | `gcc g++ make pkg-config openssl libssl-dev` |
+| **Windows** | 推荐 `--features anyproxy-rustls`，免装 OpenSSL |
+| **WASM 开发**（可选） | `cargo install cargo-component` |
+
+> **重要**：生产与压测必须使用 `--release` 编译，debug 与 release 性能可差数十倍。
+
+### 2. 编译
+
+```bash
+git clone https://github.com/yefy/any-proxys.git
+cd any-proxys
+
+# Linux / macOS（OpenSSL）
+cargo build --release --bin anyproxy
+
+# Windows 或不想装 OpenSSL（内嵌 rustls，推荐）
+cargo +1.96.0 build --release --bin anyproxy \
+  --no-default-features --features "anyproxy-rustls"
 ```
-# 功能模块
-## 四层反向代理服务
+
+产物：`target/release/anyproxy`（Windows 为 `anyproxy.exe`）
+
+### 3. 创建最小运行目录
+
+```bash
+mkdir -p demo/conf demo/html demo/logs demo/cert
+echo "<h1>anyproxy works!</h1>" > demo/html/index.html
+cp target/release/anyproxy demo/    # Windows: copy target\release\anyproxy.exe demo\
 ```
-支持多种协议（包括TCP、QUIC、SSL、any-tunnel）互转加速  
-支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能  
-支持proxy_protocol_hello协议头，可以携带更多信息给上游服务  
-支持临时文件缓存、流量限制  
-支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
-支持port端口代理模式  
-支持domain域名代理模式（多域名端口复用） 
-支持配置webassembly阶段     
-支持优雅的配置文件reload热加载，并能长连接复用  
-支持access_log
-支持客户端ip限制访问ip_allow ip_deny
+
+### 4. 写入配置文件
+
+创建 `demo/conf/anyproxy.conf`：
+
+```conf
+common {
+    shutdown_timeout u64 = 10;
+}
+
+net {
+    server {
+        domain str = "www.example.cn";
+
+        net_server_http raw = r```
+        ```r;
+
+        domain_listen_tcp raw = r```
+            address = "127.0.0.1:19090"
+        ```r;
+
+        local {
+            net_server_http_static raw = r```
+                path = "./html"
+            ```r;
+        }
+    }
+}
 ```
-## 七层反向代理服务
+
+### 5. 配置 hosts
+
 ```
-支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
-支持（websocket、websockets) over （TCP、QUIC、SSL、any-tunnel）
-支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
-支持临时文件缓存、流量限制
-支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
-支持配置webassembly阶段  
-支持优雅的配置文件reload热加载，并能长连接复用  
-支持access_log
-支持客户端ip限制访问ip_allow ip_deny
+127.0.0.1  www.example.cn
 ```
-## http文件存储（还在完善）
+
+- Linux / macOS：`/etc/hosts`
+- Windows：`C:\Windows\System32\drivers\etc\hosts`（需管理员权限）
+
+### 6. 启动并验证
+
+```bash
+cd demo
+./anyproxy -c conf/anyproxy.conf          # Windows: anyproxy.exe -c conf\anyproxy.conf
 ```
-支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
-支持proxy_protocol_hello协议头，可以携带更多信息给上游服务
-支持流量限制
-支持非缓存情况下开启临时文件缓存
-支持配置多主机回源并支持负载均衡、心跳检查、动态域名解析  
-支持文件缓存、过期文件校验、过期淘汰、缓存文件磁盘大小统计并启用过载淘汰、启动阶段预加载缓存文件
-支持热点文件存储迁移,负载存储,防止单磁盘io瓶颈, 高效异步内存迁移
-支持range请求，包括"Range: bytes=0-50, 100-150"
-支持配置切片大小回源加快响应速度
-支持配置多个存储路径
-支持灵活缓存key值
-支持linux零拷贝技术sendfile和文件directio高速缓存控制
-支持异步文件io
-支持文件句柄缓存
-支持rewrite 301|302
-支持if-unmodified-since if-match 412状态码
-支持if-modified-since if-none-match 304状态码
-支持if-range
-支持method类型缓存（GET POST等）
-支持错误码缓存
-支持purge马上强制删除缓存：包括文件删除、目录删除
-支持purge延迟删除缓存：包括文件删除、目录删除，文件正在使用回源校验文件是否变化在删除，可以大大减少回源带宽
-支持已经存储的文件记忆功能，即使删除存储磁盘，已经存储文件不会在回源，可以大大减少回源带宽
-支持过期文件304校验，可以大大减少回源带宽
-支持并发请求合并回源，可以大大减少回源带宽
-支持get请求强制使用get range回源，可以大大减少回源带宽
-get请求和get range请求是共享存储，大大降低文件磁盘存储
-支持配置webassembly阶段  
-支持优雅的配置文件reload热加载，并能长连接复用  
-支持access_log
-支持客户端ip限制访问ip_allow ip_deny
+
+另开终端：
+
+```bash
+# 检查配置（不启动服务）
+./anyproxy -t -c conf/anyproxy.conf
+
+# 功能验证
+curl http://www.example.cn:19090/         # 期望返回 HTML
+curl http://www.example.cn:19090/index.html -v
 ```
-## 无锁异步webassembly热更新脚本框架
+
+看到 `anyproxy works!` 即表示 **编译、配置、监听、静态服务** 全链路正常。
+
+---
+
+## 进阶：三节点联调
+
+仓库内置 **源站 → 中转 → 边缘** 完整示例，用于验证四层/七层代理、隧道、缓存等组合能力。
+
+### 拓扑
+
 ```
-支持rust、c/c++、JavaScript、Python、Java、Go做为脚本语言进行开发
-支持优雅的配置文件reload热加载，并能长连接复用  
-支持wasm_http异步http over（tcp quic ssl）网络库
-支持wasm_log打印日志
-支持wasm_store进程内全局共享存储
-支持wasm_socket异步tcp，quic，ssl网络库
-支持wasm_std库与主服务交互，包括预制的变量读取、http数据修改
-支持wasm_websocket异步websocket over （tcp quic ssl）网络库
-支持WebAssembly脚本之间进行异步channel通讯
-支持spawn创建新WebAssembly脚本
-支持uniq_spawn创建全局唯一的WebAssembly脚本
-支持异步定时器
-主程序支持多阶段嵌入webassembly脚本开发：
-    四层协议TCP、QUIC、SSL、any-tunnel有三个阶段：
-        wasm_access
-        wasm_serverless
-        wasm_access_log
-    http协议有七个阶段：
-        wasm_access
-        wasm_http_access
-        wasm_serverless
-        wasm_http_in_headers
-        wasm_http_filter_headers_pre
-        wasm_http_filter_headers
-        wasm_access_log
-    websocket协议有五个阶段：
-        wasm_access
-        wasm_http_access
-        wasm_serverless
-        wasm_http_in_headers
-        wasm_access_log
-        
-wasm_access阶段可以开发ip限制
-wasm_http_access阶段可以开发防盗链校验、ip限制、防攻击开发，WAF
-wasm_serverless阶段可以做为独立后端，解析协议做复杂业务开发
-wasm_http_in_headers阶段可以修改请求的原始http数据
-wasm_http_filter_headers_pre阶段可以修改响应的原始http数据
-wasm_http_filter_headers阶段可以修改响应给客户端http数据
-wasm_access_log阶段可以获取全部预备变量，可以做任何数据统计（流量采集等）
+  curl ──► 边缘 (any-example/anyproxy)
+              │
+              ▼
+         中转 (any-example/anyproxy_p)
+              │
+              ▼
+         源站 (any-example/anyproxy_o)  ← 也可换 nginx 作源站
 ```
-## http静态文件服务（目前处于测试和完善阶段）
+
+### 步骤
+
+**① 编译并分发二进制**
+
+```bash
+cargo build --release --bin anyproxy
+cp target/release/anyproxy any-example/anyproxy_o/
+cp target/release/anyproxy any-example/anyproxy_p/
+cp target/release/anyproxy any-example/anyproxy/
 ```
-支持（http、https、http2、https2) over （TCP、QUIC、SSL、any-tunnel）
-支持异步文件io
-支持linux零拷贝技术sendfile和文件directio高速缓存控制
-支持range请求，包括"Range: bytes=0-50, 100-150"
-支持流量限制
-支持rewrite 301|302
-支持if-unmodified-since if-match 412状态码
-支持if-modified-since if-none-match 304状态码
-支持if-range
-支持配置webassembly阶段  
-支持优雅的配置文件reload热加载
-支持access_log
-支持客户端ip限制访问ip_allow ip_deny
+
+**② 配置 hosts**
+
 ```
-## 负载均衡算法
+127.0.0.1  www.example.cn
+127.0.0.1  www.upstream.cn
 ```
-支持加权轮询、轮询、随机、固定哈希、动态哈希、Fair 等算法
+
+**③ 修改静态文件路径（必做）**
+
+示例配置中 `net_server_http_static` 的 `path` 指向作者本机目录，需改为你本地的静态资源路径，例如 nginx 的 html 目录或自建 `./html`：
+
+```conf
+net_server_http_static raw = r```
+    path = "./html"
+```r;
 ```
-## any-tunnel协议
+
+涉及文件：
+
+- `any-example/anyproxy_o/conf/anyproxy_origin.conf`
+- `any-example/all_conf/anyproxy_simple_*.conf`（若使用最小示例）
+
+**④ 按顺序启动三个节点**
+
+```bash
+# 终端 1 — 源站（HTTP :19090，HTTPS :19091）
+cd any-example/anyproxy_o
+./anyproxy -c conf/anyproxy_origin.conf
+
+# 终端 2 — 中转
+cd any-example/anyproxy_p
+./anyproxy -c conf/anyproxy_proxy_to_origin.conf
+
+# 终端 3 — 边缘
+cd any-example/anyproxy
+./anyproxy -c conf/anyproxy_edge_to_proxy.conf
 ```
-支持高延迟网络加速，socket流缓存的协议    
-支持any-tunnel over （TCP、QUIC、SSL）
+
+**⑤ 验证命令**
+
+```bash
+# 直连源站
+curl http://www.example.cn:19090 -v
+curl https://www.example.cn:19091 -k -v
+
+# 经边缘代理（具体端口见各 conf 文件末尾 curl 注释）
+curl http://www.example.cn:10001 -v          # 四层 port 代理
+curl http://www.example.cn:33100/1.txt -v    # 七层 HTTP 反代（http_simple）
 ```
-# anyproxy doc
-[文档](https://github.com/yefy/any-proxys/tree/main/any-proxy/doc)
-# any-tunnel doc
-[文档](https://github.com/yefy/any-proxys/blob/main/any-tunnel/README.md)
-# 详细技术实现
+
+**运行目录约定**（每个节点相同）：
+
+| 目录 | 用途 |
+|------|------|
+| `cert/` | TLS 证书（示例已自带 `www.example.cn` 自签证书） |
+| `conf/` | 配置文件 |
+| `logs/` | `access.log`、`anyproxy.log`、`anyproxy.pid` |
+| `tmp/` | 临时文件 / 上传缓存 |
+| `html/` | 静态资源（自行创建） |
+
+> 也可用 nginx 作源站，见 [nginx 源站配置说明](any-proxy/doc/nginx源站支持http和https.md)。
+
+---
+
+## 配置说明
+
+### 顶层结构
+
+语法类似 nginx：块结构、`include`、行注释 `#`、块注释 `r### ... ###r`、跨平台字段。
+
+```conf
+common { }              # 全局：shutdown_timeout、reuseport 等
+socket { }              # TCP/QUIC 默认参数
+upstream { server { } } # 回源池 + 负载均衡
+
+net {
+    server {            # 监听 + 域名
+        local { }       # 业务：反代 / 静态 / 缓存 / WASM
+    }
+}
 ```
-支持ipv4和ipv6
-支持socket 高性能writev函数
-domain代理支持http_v1协议解析获取域名  
-http文件存储  
-无锁异步webassembly热更新脚本框架  
-支持预制变量和函数数据，可以由配置文件和webassembly脚本使用
-用户态的stream delay，可以减少内存复制和系统调用    
-hyper库支持linux零拷贝技术sendfile文件发送  
-any-tunnel server over (tcp、ssl、 quic)  
-any-tunnel client over (tcp、ssl、 quic)  
-anyproxy server over (tcp、ssl、 quic、any-tunnel)   
-anyproxy client over (tcp、ssl、 quic、any-tunnel)   
-anyproxy http server over (tcp、ssl、 quic、any-tunnel)    
-anyproxy http client over (tcp、ssl、 quic、any-tunnel)  
-anyproxy websocket server over (tcp、ssl、 quic、any-tunnel)   
-anyproxy websocket client over (tcp、ssl、 quic、any-tunnel)  
-纯端口代理模式   
-域名代理模式   
-代理协议有tcp、ssl、quic、any-tunnel、http、https、http2.0、https2.0、websocket、websockets
-支持tcp、quic、ssl、any-tunnel四层代理协议相互转换加速  
-支持ebpf内核态四层代理，即能做到用户态的便利性解析，又能有内核态高性能   
-proxy_protocol_hello协议头    
-支持非常详细的access_log、err_log、跨服务器链路日志、详细统计信息   
-reload配置文件热加载、超时断流   
-reinit重新创建线程、配置文件热加载、超时断流    
-流量统计  
-支持泛域名  
-支持配置范围端口监听   
-quic支持绑定端口  
-上传下载临时文件缓存、限流  
-proxy_pass和upstream 配置多主机回源并支持负载均衡  
-负载均衡算法--加权轮询,轮询,随机,固定hash, 动态hash,fair   
-支持心跳检查  
-支持动态域名解析  
-linux零拷贝技术sendfile和文件directio高速缓存控制
-多线程cpu绑定  
-linux reuseport绑定端口  
-配置文件支持include、跨平台标识、块注释等    
-命令:anyproxy -s quit 正常关闭，可设置超时时间  
-命令:anyproxy -s stop 快速关闭  
-命令:anyproxy -s reload 配置文件热加载  
-命令:anyproxy -s reinit 重新创建线程、配置文件热加载、超时断流    
-命令:anyproxy -t 配置文件正确性检查  
-命令:anyproxy -c xxx.conf 指定配置文件路径  
-命令:anyproxy --hot xxx.pid 指定pid文件路径, 并进行热升级、正常关闭旧进程  
-sni域名解析  
-异步文件io  
-内存管理  
-用户态stream delay 合并发送
-支持文件io page_size对齐  
-支持openssl ssl和rustls ssl  
-支持any-tunnel包括socket多链接加速，socket流缓存，解决tcp三次握手， ssl多次握手等问题  
-支持net、server、local三级配置，启动阶段配置文件由各自模块独立解析包括预解析、初始化、合并、继承、数据共享 
-支持tcp、quic协议配置设置  
-支持配置主线程、线程池个数  
+
+### 监听模式
+
+| 模式 | 配置项 | 路由方式 | 典型用途 |
+|------|--------|----------|----------|
+| **port** | `port_listen_tcp/ssl/quic` | 按端口 | 一端口一服务，四层转发 |
+| **domain** | `domain_listen_tcp/ssl/quic` | SNI / HTTP Host / 内部 hello 头 | 同端口多域名 |
+
+domain 模式支持泛域名，例如 `"$$(,*).example.cn"`。
+
+### 配置类型速查
+
+```conf
+# 标量
+timeout u32 = 30s;
+limit u32 = 10m;
+
+# 跨平台（仅对应平台解析）
+path linux_raw  = r``` /var/www/html ```r;
+path window_raw = r``` C:/www/html ```r;
+
+# 原始块（TOML/JSON 等，交给子模块）
+proxy_pass_tcp raw = r```
+    address = "127.0.0.1:8080"
+```r;
 ```
-# 未来支持
+
+完整语法：[配置文件结构](any-proxy/doc/配置文件结构.md)
+
+---
+
+## 常用场景配置
+
+最小可运行示例均在 `any-example/all_conf/`，可直接 `-c` 加载（记得改静态路径和 hosts）。
+
+### 四层 port 代理
+
+`anyproxy_simple_port.conf` — 监听 `:30001`，TCP 转发到源站：
+
+```conf
+net {
+    server {
+        domain str = "www.example.cn";
+        port_listen_tcp raw = r```
+            address = "0.0.0.0:30001"
+        ```r;
+        local {
+            proxy_pass_upstream str = "//tcp//www.upstream.cn:19090//round_robin";
+        }
+    }
+}
 ```
-srt、kcp协议  
-支持多跳回源  
+
+```bash
+curl http://www.example.cn:30001 -v
 ```
+
+### 四层 domain 代理（HTTPS + SNI）
+
+`anyproxy_simple_domain.conf` — 同端口按 SNI 分发：
+
+```bash
+curl https://www.example.cn:30101 -k -v
+```
+
+### 七层 HTTP 反向代理
+
+`anyproxy_simple_http_proxy.conf`：
+
+```bash
+curl http://www.example.cn:20201 -v
+```
+
+### HTTP 静态服务
+
+`anyproxy_simple_http_static.conf`：
+
+```bash
+curl http://www.example.cn:19090 -v
+```
+
+### 多节点回源 + 负载均衡
+
+```conf
+upstream {
+    server {
+        name str = upstream_server_0;
+        balancer str = round_robin;   # weight / random / ip_hash / ip_hash_active / fair
+        proxy_pass_tcp raw = r```
+            address = "10.0.0.1:8080"
+        ```r;
+        proxy_pass_tcp raw = r```
+            address = "10.0.0.2:8080"
+        ```r;
+    }
+}
+
+net {
+    server {
+        local {
+            proxy_pass_upstream str = "upstream_server_0";  # 引用 upstream 块
+        }
+    }
+}
+```
+
+简写（单条等价配置）：
+
+```conf
+proxy_pass_upstream str = "//tcp//www.upstream.cn:8080//round_robin";
+```
+
+详见 [upstream 和 proxy_pass](any-proxy/doc/upstream和proxy_pass.md)、[负载均衡](any-proxy/doc/负载均衡.md)。
+
+### Linux eBPF 四层加速
+
+```bash
+cargo build --release --features "anyproxy-openssl,anyproxy-ebpf" --no-default-features
+```
+
+配置参考 `any-example/all_conf/anyproxy_simple_ebpf.conf`。需根据流量调整 TCP 缓冲区，**读缓冲消耗速率须大于写缓冲**。
+
+---
+
+## 运维与生产部署
+
+### 命令行
+
+| 命令 | 说明 |
+|------|------|
+| `anyproxy -c <path>` | 指定配置文件（默认 `./conf/anyproxy.conf`） |
+| `anyproxy -t [-c <path>]` | 检查配置语法，不启动服务 |
+| `anyproxy -s reload` | 热加载配置（不重建线程，推荐日常使用） |
+| `anyproxy -s reinit` | 重建线程 + 热加载（影响 UDP/QUIC/tunnel） |
+| `anyproxy -s quit` | 优雅退出（默认等待 30s，`common.shutdown_timeout` 可调） |
+| `anyproxy -s stop` | 立即停止，强制断流 |
+| `anyproxy --hot <pidfile>` | 二进制热升级：启动新进程并关闭旧进程 |
+
+### 信号（Linux）
+
+| 信号 | 等价命令 |
+|------|----------|
+| `HUP` | reload |
+| `USR1` | reinit |
+| `USR2` | 检查配置 |
+| `QUIT` / `INT` | 优雅停止 |
+| `TERM` | 快速停止 |
+
+### 日志
+
+- **错误日志**：`logs/anyproxy.log`（log4rs 配置见各示例目录 `conf/log4rs.yaml`）
+- **访问日志**：在配置中声明 `access raw = r``` ... ```r`，支持 `${request_id}`、`${client_addr}`、`${upstream_addr}`、`${http_cache_status}` 等 [预制变量](any-proxy/doc/预制变量.md)
+- **日志切割**：[日志切割说明](any-proxy/doc/日志切割.md)
+
+### systemd 参考
+
+```ini
+[Service]
+PIDFile=/usr/local/anyproxy/logs/anyproxy.pid
+ExecStartPre=/usr/local/anyproxy/anyproxy -t
+ExecStart=/usr/local/anyproxy/anyproxy -c /usr/local/anyproxy/conf/anyproxy.conf
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s QUIT $MAINPID
+```
+
+rpm 包自带 service 文件：`any-proxy/rpm/anyproxy.service`
+
+### 生产建议
+
+1. 始终 `--release` 编译；Linux 生产环境优先部署在裸机或容器内，开启 `reuseport`。
+2. 变更配置前先 `anyproxy -t`；日常发配置用 `reload`，变更监听/线程模型时用 `reinit`。
+3. 发版使用 `--hot` 热升级，避免大量长连接同时断开。
+4. TLS 生产环境替换 `cert/` 下自签证书；OpenSSL 与 rustls 通过编译 feature 切换。
+5. 跨 anyproxy 节点转发时启用 `proxy_protocol_hello` 传递真实客户端 IP 与 `request_id`（**仅限节点间**，外部服务不可识别）。
+
+---
+
+## WebAssembly 扩展
+
+anyproxy 内置无锁异步 WASM 运行时，通过配置挂载脚本，**reload 即可热更新**，无需重启进程。
+
+### 适用场景
+
+- IP 黑白名单、防盗链、简易 WAF（`wasm_access` / `wasm_http_access`）
+- 无独立后端的边缘计算（`wasm_serverless`）
+- 请求/响应头改写（`wasm_http_in_headers` / `wasm_http_filter_headers*`）
+- 自定义 access 日志与流量统计（`wasm_access_log`）
+
+### 配置示例
+
+```conf
+wasm_access raw = r```
+    [[wasm]]
+    wasm_path = "./plugins/my_filter.wasm"
+    wasm_main_config = ''' name = "ip_allowlist" '''
+    is_open = true
+```r;
+```
+
+### 开发
+
+- 示例项目：`wasm/http-demo`、`wasm/http-filter-headers`、`wasm/http-serverless`
+- 接口定义：`wasm/wit/`（`wasm_std`、`wasm_http`、`wasm_socket`、`wasm_websocket`、`wasm_log`、`wasm_store`）
+- 详细文档：[webassembly.md](any-proxy/doc/webassembly.md)
+
+---
+
+## any-tunnel 加速协议
+
+**any-tunnel** 构建在 TCP / SSL / QUIC 之上，用多条连接组成隧道，解决：
+
+- 高延迟链路下单连接带宽受限
+- 短连接频繁握手（TCP 三次握手 / TLS 多次握手）
+
+可选连接池进一步复用隧道，降低握手开销。在配置中通过 `tunnel { }` 全局块和 `proxy_pass_tunnel` 使用。
+
+独立示例：
+
+```bash
+cargo run --release --example any_tunnel_server
+cargo run --release --example any_tunnel_client
+```
+
+> **any-tunnel2** 为实验性内网穿透方案（M:N 长连接），稳定性与性能仍在验证，生产环境请优先使用 any-tunnel。
+
+文档：[any-tunnel/README.md](any-tunnel/README.md) · [any-tunnel2/README.md](any-tunnel2/README.md)
+
+---
+
+## 编译选项
+
+| Cargo Feature | 说明 |
+|---------------|------|
+| `anyproxy-openssl`（默认） | 使用系统 OpenSSL |
+| `anyproxy-rustls` | 内嵌 rustls，免系统 OpenSSL（Windows 友好） |
+| `anyproxy-ebpf` | Linux eBPF 内核态四层加速 |
+| `anyproxy-reuseport` | SO_REUSEPORT 多进程/线程绑定 |
+| `anyproxy-check` | 开发调试（死锁检测等，勿用于生产） |
+
+```bash
+# 典型 Linux 生产构建
+cargo build --release --bin anyproxy
+
+# 典型 Windows 构建
+cargo +1.96.0 build --release --bin anyproxy --no-default-features --features "anyproxy-rustls"
+
+# Linux + eBPF
+cargo build --release --bin anyproxy --no-default-features --features "anyproxy-openssl,anyproxy-ebpf"
+```
+
+---
+
+## 项目结构
+
+```
+any-proxys/
+├── any-proxy/              # 核心：anyproxy 主程序与 doc/ 文档
+├── any-base/               # 基础库：模块系统、配置解析、异步执行器
+├── any-tunnel/             # 隧道协议（链路加速）
+├── any-tunnel2/            # 实验性内网穿透
+├── 3rdparty/hyper-0.14.23/ # 二次开发 hyper（含 Linux sendfile）
+├── wasm/                   # WASM 插件示例
+├── any-example/            # 可运行示例（all_conf/ 最小配置 + 三节点联调）
+├── any-test/               # 压力测试
+└── any-tools/              # 辅助工具
+```
+
+---
+
+## 文档索引
+
+| 主题 | 文档 |
+|------|------|
+| 编译与运行 | [anyproxy编译运行.md](any-proxy/doc/anyproxy编译运行.md) |
+| 配置结构 | [配置文件结构.md](any-proxy/doc/配置文件结构.md) |
+| 全量配置参考 | [全部配置文件详细说明.md](any-proxy/doc/全部配置文件详细说明.md) + `any-example/all_conf/anyproxy_demo.conf` |
+| 四层 port/domain | [四层代理port与domain模式配置.md](any-proxy/doc/四层代理port与domain模式配置.md) |
+| 监听配置 | [listen配置.md](any-proxy/doc/listen配置.md) |
+| 回源与负载均衡 | [upstream和proxy_pass.md](any-proxy/doc/upstream和proxy_pass.md) · [负载均衡.md](any-proxy/doc/负载均衡.md) |
+| 预制变量 | [预制变量.md](any-proxy/doc/预制变量.md) |
+| access_log | [access_log支持.md](any-proxy/doc/access_log支持.md) |
+| 信号与热加载 | [信号处理.md](any-proxy/doc/信号处理.md) |
+| WebAssembly | [webassembly.md](any-proxy/doc/webassembly.md) |
+| 内部协议头 | [proxy_protocol_hello.md](any-proxy/doc/proxy_protocol_hello.md) |
+| 项目地图 | [project-map.md](project-map.md) |
+
+---
+
+## 常见问题
+
+**Q: curl 连接被拒绝？**
+
+- 确认 `anyproxy` 进程已启动且监听地址/端口与 curl 一致。
+- 检查 hosts 是否配置、`防火墙` 是否放行。
+- Windows 注意以管理员身份修改 hosts。
+
+**Q: 配置检查失败？**
+
+```bash
+./anyproxy -t -c conf/anyproxy.conf
+```
+
+根据报错行号修正；常见原因是 `raw` 块内 TOML 语法错误或路径不存在。
+
+**Q: 示例静态文件 404？**
+
+示例 conf 中 `path` 多为作者本机绝对路径，必须改为你本地的 `./html` 或实际目录。
+
+**Q: HTTPS 证书错误？**
+
+示例使用自签证书，curl 需加 `-k`。生产环境替换 `cert/` 下 pem 文件并在 `domain_listen_ssl` 中引用。
+
+**Q: Windows 编译 OpenSSL 报错？**
+
+使用 rustls 构建：`--no-default-features --features "anyproxy-rustls"`。
+
+
+**Q: 性能远低于预期？**
+
+确认使用 `--release` 构建；Linux 上检查是否开启 sendfile；压测工具见 `any-test/`。
+
+---
+
+## 版本与许可
+
+- 当前 crate 版本：`any-proxy` 3.0.0（见 `any-proxy/Cargo.toml`）
+- 许可证：见仓库根目录 [LICENSE](LICENSE)
+
+---
+
+**下一步建议**：完成 [快速开始](#快速开始5-分钟验证) 后，按需阅读 `any-example/all_conf/` 中与你的场景最接近的配置，再对照 [全部配置文件详细说明](any-proxy/doc/全部配置文件详细说明.md) 做生产裁剪。

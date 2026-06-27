@@ -8,6 +8,7 @@ use crate::proxy::stream_info::StreamInfo;
 use crate::quic::connect as quic_connect;
 use crate::stream::connect;
 use crate::upstream::UpstreamHeartbeatData;
+use crate::util::util::host_and_port;
 use crate::util::var::{Var, VarParse};
 use any_base::module::module;
 use any_base::typ;
@@ -21,7 +22,6 @@ use module::Modules;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use crate::util::util::host_and_port;
 
 pub struct Conf {}
 

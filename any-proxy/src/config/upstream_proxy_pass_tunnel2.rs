@@ -263,8 +263,8 @@ impl HeartbeatTcp {
 }
 
 use crate::config::upstream_proxy_pass_tcp::http_heartbeat;
-use async_trait::async_trait;
 use crate::util::util::host_and_port;
+use async_trait::async_trait;
 
 #[async_trait]
 impl upstream_core::HeartbeatI for HeartbeatTcp {

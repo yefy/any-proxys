@@ -1,4 +1,4 @@
-use crate::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionExt, OptionArcx};
+use crate::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionArcx, OptionExt};
 use crate::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;

@@ -11,9 +11,9 @@ use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use hashbrown::HashMap;
+use rivetx_core::linked_hash_mapx::LinkedHashMapx;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use rivetx_core::linked_hash_mapx::LinkedHashMapx;
 
 const PEER_CLIENT_SESSION_MAX_SIZE: usize = 1000000;
 

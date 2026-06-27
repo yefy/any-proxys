@@ -23,12 +23,17 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr, reuseport: bool, config: Arc<Config>, disable_ipv6_only: bool) -> Result<Server> {
+    pub fn new(
+        addr: SocketAddr,
+        reuseport: bool,
+        config: Arc<Config>,
+        disable_ipv6_only: bool,
+    ) -> Result<Server> {
         Ok(Server {
             addr,
             reuseport,
             config,
-            disable_ipv6_only
+            disable_ipv6_only,
         })
     }
 }

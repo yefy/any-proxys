@@ -13,8 +13,8 @@ use any_base::io::async_write_msg::AsyncWriteMsgExt;
 use any_base::io::async_write_msg::{MsgWriteBuf, MsgWriteBufBytes};
 use any_base::typ;
 use any_base::typ::{ArcMutex, OptionArcx};
-use anyhow::{anyhow, Context};
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use http::Response;
 use hyper::body::HttpBody;
 use hyper::Body;
@@ -117,7 +117,7 @@ pub async fn write_cache_file(
     tokio::task::spawn_blocking(move || {
         let size = file_cache_bytes.remaining();
         #[cfg(feature = "anyio-file")]
-            let start_time = Instant::now();
+        let start_time = Instant::now();
 
         // let file = &mut *file.get_mut();
         // use std::io::Seek;
@@ -237,7 +237,8 @@ pub async fn bitmap_to_cache_file(
         // file.seek(std::io::SeekFrom::Start(bitmap_start as u64))?;
         // file.write_all(bitmap.as_slice())?;
 
-        file.write_all_at(bitmap.as_slice(), bitmap_start as u64).here()?;
+        file.write_all_at(bitmap.as_slice(), bitmap_start as u64)
+            .here()?;
 
         #[cfg(feature = "anyio-file")]
         if start_time.elapsed().as_millis() > 100 {
@@ -377,8 +378,6 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
         r.session_id,
     )
     .await?;
-    let cache_file_node = Arc::new(cache_file_node);
-    let cache_file_node_data = Arc::new(ProxyCacheFileNodeData::new(cache_file_node.clone()));
 
     let (_, cache_file_node_manage) = HttpCacheFile::read_cache_file_node_manage(
         http_cache_file.proxy_cache.as_ref().unwrap(),
@@ -387,6 +386,12 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
     );
     let cache_file_node_manage_ = cache_file_node_manage.clone();
     let cache_file_node_manage = &mut *cache_file_node_manage.get_mut().await;
+
+    let cache_file_node = Arc::new(cache_file_node);
+    let cache_file_node_data = Arc::new(ProxyCacheFileNodeData::new(
+        cache_file_node_manage.cache_file_node_queue_lru.clone(),
+        cache_file_node.clone(),
+    ));
 
     let is_ok = http_cache_file
         .set_cache_file_node(&r, cache_file_node.clone(), cache_file_node_manage)
@@ -403,14 +408,14 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
 
         let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
         proxy_cache_ctx.curr_size += add_cache_file_size;
-        proxy_cache_ctx
-            .cache_file_node_expires
-            .push_back(ProxyCacheFileNodeExpires::new(
-                md5.clone(),
-                version_expires,
-                cache_file_node_version,
-                cache_file_node_head.clone(),
-            ));
+        let cache_file_node_expires_tmp =
+            &mut *proxy_cache_ctx.cache_file_node_expires_tmp.get_mut();
+        cache_file_node_expires_tmp.push_back(ProxyCacheFileNodeExpires::new(
+            md5.clone(),
+            version_expires,
+            cache_file_node_version,
+            cache_file_node_head.clone(),
+        ));
         net_core_proxy.main.proxy_cache_index.get_mut().insert(
             trie_url,
             md5,
@@ -422,8 +427,12 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
             ctx_thread.cache_file_node = Some(cache_file_node);
             if ctx_thread.cache_file_node_data.is_some() {
                 let cache_file_node_data = ctx_thread.cache_file_node_data.take().unwrap();
-                cache_file_node_data.is_run.store(false, Ordering::Relaxed);
-                unsafe { cache_file_node_data.node.take() };
+                cache_file_node_data.node.set_nil();
+                tokio::task::spawn_blocking(move || {
+                    let _cache_file_node_queue_lru =
+                        &mut *cache_file_node_data.cache_file_node_queue_lru.get_mut();
+                    cache_file_node_data.queue_node.remove();
+                });
             }
             ctx_thread.cache_file_node_data = Some(cache_file_node_data.clone());
             ctx_thread.cache_file_node_manage = cache_file_node_manage_;
@@ -432,6 +441,9 @@ pub async fn create_cache_file(r: &Arc<HttpStreamRequest>, raw_content_length: u
         cache_file_node_manage
             .cache_file_node_queue_lru
             .get_mut()
+            .push_back(&cache_file_node_data.queue_node.clone());
+        cache_file_node_manage
+            .cache_file_node_queue
             .push_back(cache_file_node_data);
         return Ok(());
     }
@@ -1023,9 +1035,11 @@ use chrono::Local;
 use std::path::Path;
 
 pub async fn del_expires_cache_file(proxy_cache: &Arc<ProxyCache>, main: &ConfMain) -> Result<()> {
+    let cache_file_node_expires_total = proxy_cache.ctx.get().cache_file_node_expires_total.clone();
+
     let mut cache_file_node_expires = {
-        let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        let cache_file_node_expires = proxy_cache_ctx.cache_file_node_expires.pop_front();
+        let cache_file_node_expires_total = &mut *cache_file_node_expires_total.get_mut();
+        let cache_file_node_expires = cache_file_node_expires_total.pop_front();
         if cache_file_node_expires.is_none() {
             return Ok(());
         }
@@ -1050,28 +1064,23 @@ pub async fn del_expires_cache_file(proxy_cache: &Arc<ProxyCache>, main: &ConfMa
 
     if cache_file_node_expires.version_expires != manage.version_expires {
         cache_file_node_expires.version_expires = manage.version_expires;
-        let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-        proxy_cache_ctx
-            .cache_file_node_expires
-            .push_back(cache_file_node_expires);
+        let cache_file_node_expires_total = &mut *cache_file_node_expires_total.get_mut();
+        cache_file_node_expires_total.push_back(cache_file_node_expires);
         return Ok(());
     }
 
     if !manage.cache_file_node_head.is_expires() {
         if proxy_cache.cache_conf.max_size <= 0 {
-            let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-            proxy_cache_ctx
-                .cache_file_node_expires
-                .push_front(cache_file_node_expires);
+            let cache_file_node_expires_total = &mut *cache_file_node_expires_total.get_mut();
+            cache_file_node_expires_total.push_front(cache_file_node_expires);
             return Ok(());
         }
 
         {
             let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
             if proxy_cache_ctx.curr_size < proxy_cache.cache_conf.max_size {
-                proxy_cache_ctx
-                    .cache_file_node_expires
-                    .push_front(cache_file_node_expires);
+                let cache_file_node_expires_total = &mut *cache_file_node_expires_total.get_mut();
+                cache_file_node_expires_total.push_front(cache_file_node_expires);
                 return Ok(());
             }
         }
@@ -1221,50 +1230,40 @@ pub async fn do_del_cache_file(
 pub async fn del_max_open_cache_file(main: &ConfMain) {
     let len = main.cache_file_node_queue.get().len();
     log::info!(target: "purge", "del_max_open_cache_file len:{}", len);
-    if main.proxy_max_open_file > 0 {
-        main.cache_file_node_queue
-            .get_mut()
-            .make_contiguous()
-            .sort_by(|a, b| {
-                let a_is_node = a.node.is_some();
-                let b_is_node = b.node.is_some();
-                a_is_node
-                    .cmp(&b_is_node)
-                    .then_with(|| {
-                        let a_is_run = a.is_run.load(Ordering::Relaxed);
-                        let b_is_run = b.is_run.load(Ordering::Relaxed);
-                        a_is_run.cmp(&b_is_run)
-                    })
-                    .then_with(|| {
-                        a.time
-                            .load(Ordering::Relaxed)
-                            .cmp(&b.time.load(Ordering::Relaxed))
-                    })
-            })
-    }
 
     if log::log_enabled!(target: "purge", log::Level::Trace) {
-        for (index, data) in main.cache_file_node_queue.get().iter().enumerate() {
-            log::trace!(target: "purge", "del_max_open_cache_file index:{}, node:{}, is_run:{}, time:{}", 
-                        index, data.node.is_some(),data.is_run.load(Ordering::Relaxed), data.time.load(Ordering::Relaxed));
-            if data.node.is_some() {
-                let node = &*data.node.get();
-                log::trace!(target: "purge", "del_max_open_cache_file proxy_cache_name:{}, trie_url{}, proxy_cache_path{}",
-                            node.proxy_cache_name, node.cache_file_info.trie_url, node.cache_file_info.proxy_cache_path);
+        let datas = main.cache_file_node_queue.get().collect();
+        for (index, data) in datas.iter().enumerate() {
+            let node = {
+                let data = data.data();
+                let node = data.get();
+                if node.is_none() {
+                    None
+                } else {
+                    Some(node.clone())
+                }
+            };
+            if node.is_none() {
+                log::trace!(target: "purge", "del_max_open_cache_file index:{}, node.is_some:{}",
+                            index, node.is_some());
+                continue;
             }
+            let node = node.unwrap();
+            log::trace!(target: "purge", "del_max_open_cache_file index:{}, is_runing:{}, request_time:{}, proxy_cache_name:{}, trie_url{}, proxy_cache_path{}",
+                        index, node.is_runing(), node.request_time.load(Ordering::Relaxed), node.proxy_cache_name, node.cache_file_info.trie_url, node.cache_file_info.proxy_cache_path);
         }
     }
 
     for _ in 0..len {
-        let data = main.cache_file_node_queue.get_mut().pop_front();
+        let cache_file_node_queue = &mut *main.cache_file_node_queue.get_mut();
+        let data = cache_file_node_queue.front();
         if data.is_none() {
             break;
         }
         let data = data.unwrap();
-        if data.node.is_none() {
-            continue;
+        if data.data().is_none() {
+            cache_file_node_queue.pop_front();
         } else {
-            main.cache_file_node_queue.get_mut().push_front(data);
             break;
         }
     }
@@ -1273,52 +1272,67 @@ pub async fn del_max_open_cache_file(main: &ConfMain) {
     let min_len = std::cmp::min(len, main.proxy_expires_file_timer as usize);
     for _ in 0..min_len {
         let ret = do_del_max_open_cache_file(&main, len).await;
-        if let Err(e) = ret {
+        if let Err(e) = &ret {
             log::error!("err:del_max_open_cache_file => e:{}", e);
+            break;
+        }
+        if ret.unwrap() {
             break;
         }
     }
 }
 
-pub async fn do_del_max_open_cache_file(main: &ConfMain, len: usize) -> Result<()> {
-    let data = main.cache_file_node_queue.get_mut().pop_front();
+pub async fn do_del_max_open_cache_file(main: &ConfMain, len: usize) -> Result<bool> {
+    let cache_file_node_queue = &mut *main.cache_file_node_queue.get_mut();
+    let data = cache_file_node_queue.front();
     if data.is_none() {
-        return Ok(());
-    }
-    let data = data.unwrap();
-    if data.node.is_none() {
-        return Ok(());
+        return Ok(true);
     }
 
-    if data.is_run.load(Ordering::Relaxed) {
-        main.cache_file_node_queue.get_mut().push_back(data);
-        return Ok(());
+    let data = data.unwrap();
+    if data.data().is_none() {
+        cache_file_node_queue.pop_front();
+        return Ok(false);
+    }
+
+    let node = {
+        let node = data.data().get();
+        if node.is_none() {
+            None
+        } else {
+            Some(node.clone())
+        }
+    };
+
+    if node.is_none() {
+        cache_file_node_queue.pop_front();
+        return Ok(false);
+    }
+    let node = node.unwrap();
+
+    if node.is_runing() {
+        return Ok(true);
     }
 
     if main.proxy_max_open_file <= 0 {
         let time = Local::now().timestamp();
-        if time - data.time.load(Ordering::Relaxed) < 60 {
-            main.cache_file_node_queue.get_mut().push_back(data);
-            return Ok(());
+        if time - node.request_time.load(Ordering::Relaxed) < 60 {
+            return Ok(true);
         }
     } else {
         if len <= main.proxy_max_open_file {
-            main.cache_file_node_queue.get_mut().push_back(data);
-            return Ok(());
+            return Ok(true);
         }
     }
 
     if log::log_enabled!(target: "purge", log::Level::Trace) {
-        if data.node.is_some() {
-            let node = &*data.node.get();
-            log::trace!(target: "purge", "do_del_max_open_cache_file proxy_cache_name:{}, trie_url{}, proxy_cache_path{}",
-                            node.proxy_cache_name, node.cache_file_info.trie_url, node.cache_file_info.proxy_cache_path);
-        }
+        log::trace!(target: "purge", "do_del_max_open_cache_file proxy_cache_name:{}, trie_url{}, proxy_cache_path{}",
+                    node.proxy_cache_name, node.cache_file_info.trie_url, node.cache_file_info.proxy_cache_path);
     }
 
-    data.node.set_nil();
-
-    return Ok(());
+    data.data().set_nil();
+    cache_file_node_queue.pop_front();
+    return Ok(false);
 }
 
 pub async fn timer_check_proxy_cache(ms: Modules) -> Result<()> {
@@ -1347,10 +1361,24 @@ pub async fn timer_check_proxy_cache(ms: Modules) -> Result<()> {
                 continue;
             }
             let proxy_cache = proxy_cache.unwrap();
-            {
-                let proxy_cache_ctx = &mut *proxy_cache.ctx.get_mut();
-                proxy_cache_ctx
-                    .cache_file_node_expires
+            let (cache_file_node_expires_total, cache_file_node_expires_tmp) = {
+                let proxy_cache_ctx = &*proxy_cache.ctx.get();
+                (
+                    proxy_cache_ctx.cache_file_node_expires_total.clone(),
+                    proxy_cache_ctx.cache_file_node_expires_tmp.clone(),
+                )
+            };
+            let values = {
+                let cache_file_node_expires_tmp = &mut *cache_file_node_expires_tmp.get_mut();
+                let mut values = VecDeque::with_capacity(1000);
+                swap(cache_file_node_expires_tmp, &mut values);
+                values
+            };
+
+            let len = {
+                let cache_file_node_expires_total = &mut *cache_file_node_expires_total.get_mut();
+                cache_file_node_expires_total.extend(values);
+                cache_file_node_expires_total
                     .make_contiguous()
                     .sort_by(|a, b| {
                         let a_is_delay_del =
@@ -1363,11 +1391,9 @@ pub async fn timer_check_proxy_cache(ms: Modules) -> Result<()> {
                                 .cmp(&b.cache_file_node_head.expires_time())
                         })
                     });
-            }
-            let len = {
-                let proxy_cache_ctx = &*proxy_cache.ctx.get();
-                proxy_cache_ctx.cache_file_node_expires.len()
+                cache_file_node_expires_total.len()
             };
+
             let min_len = std::cmp::min(len, main.proxy_expires_file_timer as usize);
             log::info!(target: "purge", "del_expires_cache_file name:{}, len:{}", proxy_cache.name,len);
             for _ in 0..min_len {

@@ -4,6 +4,7 @@ use crate::proxy::http_proxy::http_stream_request::{
 };
 use crate::proxy::http_proxy::HttpHeaderResponse;
 use crate::proxy::ServerArg;
+use any_base::file_ext::FileExt;
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::util::ArcString;
 use anyhow::anyhow;
@@ -81,11 +82,25 @@ impl HttpStream {
         };
 
         let socket_fd = self.http_arg.stream_info.get().server_stream_info.raw_fd;
-        let (is_open_sendfile, directio, file_name) = {
+        let (
+            is_open_sendfile,
+            directio,
+            file_name,
+            expires,
+            http_static_file,
+            static_max_open_file,
+            static_cache_after_requests,
+            http_static_file_request_num,
+        ) = {
             let net_core_conf = scc.net_core_conf();
 
             let is_open_sendfile = net_core_conf.is_open_sendfile;
             let directio = net_core_conf.directio;
+            let expires = net_core_conf.expires;
+            let http_static_file = net_core_conf.http_static_file.clone();
+            let static_max_open_file = net_core_conf.static_max_open_file;
+            let static_cache_after_requests = net_core_conf.static_cache_after_requests;
+            let http_static_file_request_num = net_core_conf.http_static_file_request_num.clone();
 
             use crate::config::net_server_http_static;
             let http_server_static_conf = net_server_http_static::curr_conf(scc.net_curr_conf());
@@ -100,10 +115,106 @@ impl HttpStream {
             }
 
             let file_name = format!("{}{}{}", http_server_static_conf.conf.path, seq, name);
-            (is_open_sendfile, directio, file_name)
+            (
+                is_open_sendfile,
+                directio,
+                file_name,
+                expires,
+                http_static_file,
+                static_max_open_file,
+                static_cache_after_requests,
+                http_static_file_request_num,
+            )
         };
         let file_name = ArcString::new(file_name);
-        let file_ext = ProxyCacheFileNode::open_file(file_name.clone(), directio).await;
+
+        let is_cache_file_ext = {
+            if static_max_open_file <= 0 {
+                false
+            } else {
+                if static_cache_after_requests <= 1 {
+                    true
+                } else {
+                    let http_static_file_request_num =
+                        &mut *http_static_file_request_num.get_mut().await;
+                    let value = {
+                        let value = http_static_file_request_num
+                            .entry(file_name.clone())
+                            .or_insert(0);
+                        *value += 1;
+                        *value
+                    };
+                    if http_static_file_request_num.len() > static_max_open_file * 2 {
+                        http_static_file_request_num.pop_front();
+                    }
+
+                    if value >= static_cache_after_requests as i64 {
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        };
+
+        let file_ext: anyhow::Result<Arc<FileExt>> = async {
+            loop {
+                if static_max_open_file <= 0 {
+                    let file_ext =
+                        ProxyCacheFileNode::open_file(file_name.clone(), directio).await?;
+                    let file_ext = Arc::new(file_ext);
+                    return Ok(file_ext);
+                } else {
+                    let value = http_static_file.get().await.get(&file_name).cloned();
+                    if value.is_none() {
+                        let file_ext =
+                            ProxyCacheFileNode::open_file(file_name.clone(), directio).await?;
+                        let file_ext = Arc::new(file_ext);
+
+                        if expires <= 0 || !is_cache_file_ext {
+                            return Ok(file_ext);
+                        }
+
+                        let curr_timestamp = chrono::Utc::now().timestamp();
+                        let http_static_file = &mut *http_static_file.get_mut().await;
+                        let value = http_static_file.get(&file_name).cloned();
+                        if value.is_some() {
+                            continue;
+                        }
+                        http_static_file.insert(
+                            file_name.clone(),
+                            (curr_timestamp + expires as i64, file_ext.clone()),
+                        );
+                        if http_static_file.len() > static_max_open_file {
+                            http_static_file.pop_front();
+                        }
+                        return Ok(file_ext);
+                    } else {
+                        let curr_timestamp = chrono::Utc::now().timestamp();
+                        let (file_expire_timestamp, file_ext) = value.unwrap();
+                        if file_expire_timestamp > curr_timestamp {
+                            r.http_arg.stream_info.get_mut().is_clone_cache_file_node = true;
+                            return Ok(file_ext);
+                        }
+
+                        let http_static_file = &mut *http_static_file.get_mut().await;
+                        let value = http_static_file.get(&file_name).cloned();
+                        if value.is_none() {
+                            continue;
+                        }
+                        let (file_expire_timestamp, file_ext) = value.unwrap();
+                        if file_expire_timestamp > curr_timestamp {
+                            r.http_arg.stream_info.get_mut().is_clone_cache_file_node = true;
+                            return Ok(file_ext);
+                        }
+
+                        http_static_file.remove(&file_name);
+                    }
+                }
+            }
+        }
+        .await;
+
         let (upstream_body, mut response) = if let Err(_e) = file_ext {
             let rctx = &mut *r.ctx.get_mut();
             let response = if Path::new(file_name.as_str()).is_dir() {
@@ -209,8 +320,7 @@ impl HttpStream {
                 false
             };
             r.ctx.get_mut().is_client_sendfile = is_sendfile;
-            let file = Arc::new(file_ext);
-            let buf_file = MsgReadBufFile::new(file.clone(), 0, file_len);
+            let buf_file = MsgReadBufFile::new(file_ext.clone(), 0, file_len);
             let upstream_body = HttpResponseBody::File(Some(buf_file));
             (upstream_body, response)
         };

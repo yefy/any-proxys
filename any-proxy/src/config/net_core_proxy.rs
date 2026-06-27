@@ -1,6 +1,7 @@
 use crate::config as conf;
 use crate::config::common_core::{get_session, get_tmp_file};
 use crate::proxy::http_proxy::http_cache_file::{ProxyCache, ProxyCacheFileNodeData};
+use crate::proxy::http_proxy::http_cache_file_node::ProxyCacheFileNode;
 use crate::proxy::http_proxy::http_stream_request::HttpStreamRequest;
 use crate::proxy::http_proxy::util::timer_check_proxy_cache;
 use crate::proxy::stream_info::StreamInfo;
@@ -8,6 +9,7 @@ use crate::util::var::{Var, VarParse};
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use any_base::parking_lot::typ::ArcMutex;
+use any_base::queue::Queue;
 use any_base::typ;
 use any_base::typ::{ArcRwLock, ArcUnsafeAny, Share};
 use anyhow::anyhow;
@@ -300,9 +302,11 @@ pub struct ConfMain {
     pub proxy_cache_confs: ArcRwLock<Vec<ProxyCacheConf>>,
     pub proxy_expires_file_timer: u64,
     pub proxy_max_open_file: usize,
+    pub proxy_cache_after_requests: usize,
+    pub proxy_cache_file_after_requests: usize,
     pub proxy_cache_map: ArcRwLock<HashMap<String, Arc<ProxyCache>>>,
     pub is_init_master_thread: Arc<AtomicBool>,
-    pub cache_file_node_queue: ArcMutex<VecDeque<Arc<ProxyCacheFileNodeData>>>,
+    pub cache_file_node_queue: ArcMutex<Queue<ArcMutex<Arc<ProxyCacheFileNode>>>>,
     pub hot_io_percent_map: ArcRwLock<HashMap<String, u64>>,
     pub proxy_cache_index: ArcRwLock<ProxyCacheIndex>,
     pub session_id: Arc<AtomicU64>,
@@ -354,8 +358,10 @@ impl Conf {
                 proxy_cache_index: ArcRwLock::new(ProxyCacheIndex::new()),
                 proxy_expires_file_timer: DEFAULT_PROXY_EXPIRES_FILE_TIMER,
                 hot_io_percent_map: ArcRwLock::new(HashMap::new()),
-                cache_file_node_queue: ArcMutex::new(VecDeque::new()),
+                cache_file_node_queue: ArcMutex::new(Queue::new()),
                 proxy_max_open_file: 0,
+                proxy_cache_after_requests: 0,
+                proxy_cache_file_after_requests: 0,
                 is_init_master_thread: Arc::new(AtomicBool::new(false)),
                 session_id,
                 tmp_file_id,
@@ -452,6 +458,22 @@ lazy_static! {
         module::Cmd {
             name: "proxy_max_open_file".to_string(),
             set: |ms, conf_arg, cmd, conf| Box::pin(proxy_max_open_file(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
+        },
+        module::Cmd {
+            name: "proxy_cache_after_requests".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_after_requests(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
+        },
+        module::Cmd {
+            name: "proxy_cache_file_after_requests".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(proxy_cache_file_after_requests(
+                ms, conf_arg, cmd, conf
+            )),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN,
         },
@@ -612,6 +634,16 @@ async fn merge_conf(
 
         if child_conf.main.proxy_max_open_file == 0 {
             child_conf.main.proxy_max_open_file = parent_conf.main.proxy_max_open_file.clone();
+        }
+
+        if child_conf.main.proxy_cache_after_requests == 0 {
+            child_conf.main.proxy_cache_after_requests =
+                parent_conf.main.proxy_cache_after_requests.clone();
+        }
+
+        if child_conf.main.proxy_cache_file_after_requests == 0 {
+            child_conf.main.proxy_cache_file_after_requests =
+                parent_conf.main.proxy_cache_file_after_requests.clone();
         }
 
         if child_conf.proxy_get_to_get_range == false {
@@ -1086,7 +1118,9 @@ async fn proxy_hot_file(
     let proxy_hot_file: ProxyHotFile =
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?;
     if proxy_hot_file.is_open && proxy_hot_file.hot_proxy_cache_name.is_empty() {
-        return Err(anyhow!("proxy_hot_file.is_open && proxy_hot_file.hot_proxy_cache_names.is_empty()"));
+        return Err(anyhow!(
+            "proxy_hot_file.is_open && proxy_hot_file.hot_proxy_cache_names.is_empty()"
+        ));
     }
     c.proxy_hot_file = proxy_hot_file;
     log::trace!(target: "main", "c.proxy_hot_file:{:?}", c.proxy_hot_file);
@@ -1102,6 +1136,30 @@ async fn proxy_max_open_file(
     let c = conf.get_mut::<Conf>();
     c.main.proxy_max_open_file = conf_arg.value.get::<usize>().clone();
     log::trace!(target: "main", "c.main.proxy_max_open_file:{:?}", c.main.proxy_max_open_file);
+    return Ok(());
+}
+
+async fn proxy_cache_after_requests(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.main.proxy_cache_after_requests = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.main.proxy_cache_after_requests:{:?}", c.main.proxy_cache_after_requests);
+    return Ok(());
+}
+
+async fn proxy_cache_file_after_requests(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.main.proxy_cache_file_after_requests = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.main.proxy_cache_file_after_requests:{:?}", c.main.proxy_cache_file_after_requests);
     return Ok(());
 }
 

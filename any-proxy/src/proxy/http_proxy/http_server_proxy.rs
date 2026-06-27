@@ -14,6 +14,7 @@ use anyhow::Result;
 use super::http_cache_file::FILE_CACHE_NODE_MANAGE_ID;
 use crate::config::net_core_plugin::PluginHttpFilter;
 use crate::config::net_core_proxy;
+use crate::config::net_proxy_pass_upstream::proxy_pass_upstream_var;
 use crate::proxy::http_proxy::bitmap::align_bitset_start_index;
 use crate::proxy::http_proxy::http_cache_file::{
     HttpCacheFile, HttpCacheFileContext, ProxyCacheFileInfo,
@@ -27,7 +28,7 @@ use crate::proxy::http_proxy::http_header_parse::{
 };
 use crate::proxy::http_proxy::http_stream_request::{
     CacheFileStatus, HttpBodyBuf, HttpCacheStatus, HttpRequest, HttpResponse, HttpResponseBody,
-    HttpStreamRequest, UpstreamCountDrop, LOCAL_CACHE_REQ_KEY,
+    HttpStreamRequest, HttpUpstreamConnectInfo, UpstreamCountDrop, LOCAL_CACHE_REQ_KEY,
 };
 use crate::proxy::http_proxy::util::{
     bitmap_to_cache_file, response_body_read, slice_update_bitset, update_or_create_cache_file,
@@ -410,7 +411,8 @@ impl HttpStream {
 
             let proxy_cache = if r.local_cache_req_count <= 0
                 && is_host
-                && (net_core_proxy_conf.hot_proxy_caches.len() > 0 || net_core_proxy_conf.proxy_caches.len() > 1)
+                && (net_core_proxy_conf.hot_proxy_caches.len() > 0
+                    || net_core_proxy_conf.proxy_caches.len() > 1)
             {
                 if net_core_proxy_conf.hot_proxy_caches.len() > 0 {
                     let index = crc32 % net_core_proxy_conf.hot_proxy_caches.len();
@@ -561,14 +563,36 @@ impl HttpStream {
         let stream_info = self.http_arg.stream_info.clone();
         let scc = stream_info.get().scc.clone();
 
-        let upstream_connect_info = r.ctx.get().r_in.upstream_connect_info.clone();
-        let upstream_connect_info = if upstream_connect_info.connect_func.is_none() {
-            Arc::new(proxy_util::upstream_connect_info(&stream_info, &scc).await?)
+        let curr_jumps_proxy_pass_value = r.ctx.get().r_in.curr_jumps_proxy_pass_value.clone();
+
+        let upstream_connect_info = if curr_jumps_proxy_pass_value.len() > 0 {
+            let upstream_var_addr = proxy_pass_upstream_var(&curr_jumps_proxy_pass_value).await?;
+            let ms = scc.ms();
+            let (is_proxy_protocol_hello, connect_func) =
+                upstream_var_addr.get_connect(ms, &stream_info).await?;
+
+            Arc::new(HttpUpstreamConnectInfo::new(
+                is_proxy_protocol_hello,
+                false,
+                Some(connect_func).into(),
+                None,
+            ))
         } else {
-            stream_info.get_mut().err_status = ErrStatus::SERVICE_UNAVAILABLE;
-            stream_info.get_mut().ups_balancer = upstream_connect_info.ups_balancer.clone();
+            let upstream_connect_info = r.ctx.get().r_in.upstream_connect_info.clone();
+            let upstream_connect_info = if upstream_connect_info.connect_func.is_none() {
+                Arc::new(proxy_util::upstream_connect_info(&stream_info, &scc).await?)
+            } else {
+                stream_info.get_mut().err_status = ErrStatus::SERVICE_UNAVAILABLE;
+                stream_info.get_mut().ups_balancer = upstream_connect_info.ups_balancer.clone();
+                upstream_connect_info
+            };
             upstream_connect_info
         };
+
+        stream_info
+            .get_mut()
+            .add_work_time1("upstream_connect_info");
+
         let connect_func = &upstream_connect_info.connect_func;
 
         stream_info.get_mut().err_status = ErrStatus::SERVICE_UNAVAILABLE;
@@ -781,7 +805,9 @@ impl HttpStream {
         let is_slice = false;
         let http_cache_status = HttpCacheStatus::Bypass;
         let request_server = {
-            let r_in = &mut r.ctx.get_mut().r_in;
+            let ctx = &mut *r.ctx.get_mut();
+            ctx.is_http_upstream = true;
+            let r_in = &mut ctx.r_in;
             let mut request_server = Request::new(r_in.body.take().unwrap());
 
             *request_server.method_mut() = r_in.upstream_method.clone();
@@ -819,12 +845,21 @@ impl HttpStream {
             upstream_count,
             upstream_count_drop,
         ) = http_cache_file.get_cache_file_node(r).await?;
+
         if cache_file_node_data.is_some() {
-            cache_file_node_data
-                .as_ref()
-                .unwrap()
-                .is_run
-                .store(true, Ordering::Relaxed);
+            let cache_file_node_data = cache_file_node_data.as_ref().unwrap();
+            if cache_file_node.is_some() {
+                let cache_file_node = cache_file_node.as_ref().unwrap();
+                cache_file_node.add_request_num();
+                cache_file_node.update_request_time();
+            }
+
+            {
+                let cache_file_node_queue_lru =
+                    &mut *cache_file_node_data.cache_file_node_queue_lru.get_mut();
+                cache_file_node_data.queue_node.remove();
+                cache_file_node_queue_lru.push_back(&cache_file_node_data.queue_node.clone());
+            }
         }
 
         {
@@ -859,6 +894,7 @@ impl HttpStream {
             if rctx.r_in.is_range {
                 return Ok(false);
             }
+            rctx.is_http_upstream = false;
             rctx.is_upstream = false;
             rctx.is_upstream_add = false;
 
@@ -981,6 +1017,7 @@ impl HttpStream {
 
             let mut ups_request = {
                 let rctx = &mut *r.ctx.get_mut();
+                rctx.is_http_upstream = true;
                 rctx.is_upstream = true;
                 rctx.is_upstream_add = true;
                 if upstream_count > rctx.max_upstream_count {
@@ -1011,14 +1048,23 @@ impl HttpStream {
     async fn is_last_upstream_cache(r: &Arc<HttpStreamRequest>) -> Result<bool> {
         let scc = r.http_arg.stream_info.get().scc.clone();
         let http_cache_file = r.ctx.get().http_cache_file.clone();
-        let net_core_proxy_main_conf = net_core_proxy::main_conf(scc.ms()).await;
+        let net_core_proxy_main_conf = net_core_proxy::curr_conf(scc.net_curr_conf());
         let (_, cache_file_node_manage) = HttpCacheFile::read_cache_file_node_manage(
             http_cache_file.proxy_cache.as_ref().unwrap(),
             &http_cache_file.cache_file_info.md5,
             net_core_proxy_main_conf.main.cache_file_node_queue.clone(),
         );
-        let is_last_upstream_cache = cache_file_node_manage.get().await.is_last_upstream_cache;
-        Ok(is_last_upstream_cache)
+        let cache_file_node_manage = &*cache_file_node_manage.get().await;
+        if !cache_file_node_manage.is_last_upstream_cache
+            || cache_file_node_manage.request_num
+                < net_core_proxy_main_conf
+                    .main
+                    .proxy_cache_file_after_requests
+        {
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 
     pub async fn set_is_last_upstream_cache(
@@ -1043,6 +1089,7 @@ impl HttpStream {
     async fn get_or_update_cache_file_node(&mut self, r: &Arc<HttpStreamRequest>) -> Result<()> {
         let is_slice = true;
         let mut http_cache_status = HttpCacheStatus::Bypass;
+        r.ctx.get_mut().is_http_upstream = false;
         r.ctx.get_mut().is_upstream = false;
         r.ctx.get_mut().is_upstream_add = false;
         let http_cache_file = r.ctx.get().http_cache_file.clone();
@@ -1103,6 +1150,7 @@ impl HttpStream {
                 log::trace!(target: "ext", "r.session_id:{}-{}, get upstream head http_cache_status:{:?}",
                             r.session_id, r.local_cache_req_count, http_cache_status);
                 let rctx = &mut *r.ctx.get_mut();
+                rctx.is_http_upstream = true;
                 rctx.is_upstream = true;
                 rctx.is_upstream_add = true;
                 if upstream_count > rctx.max_upstream_count {
@@ -2038,7 +2086,7 @@ impl HttpStream {
             body: upstream_body,
         } = ups_response;
 
-        if let HttpResponseBody::Body(_) = &upstream_body {
+        let is_body_from_file = if let HttpResponseBody::Body(_) = &upstream_body {
             let is_request_cache = r.ctx.get().is_request_cache;
             let is_304 = r.ctx.get().r_in.is_304;
             log::trace!(target: "is_ups", "session_id:{}, check is_304 is_request_cache:{}, is_304:{}, ups_response.status():{}", r.session_id, is_request_cache, is_304, ups_response.status());
@@ -2053,9 +2101,12 @@ impl HttpStream {
                     return Err(anyhow!("err: 304  => session_id:{}", r.session_id));
                 }
             }
-        }
+            false
+        } else {
+            true
+        };
 
-        Self::response_to_out(&r, ups_response).await?;
+        Self::response_to_out(&r, ups_response, is_body_from_file).await?;
         let plugin_http_header_filter = plugin_http_header_filter.get().await;
         (plugin_http_header_filter)(r.clone()).await?;
 
@@ -2082,7 +2133,11 @@ impl HttpStream {
         return Ok(());
     }
 
-    async fn response_to_out(r: &Arc<HttpStreamRequest>, response: Response<Body>) -> Result<()> {
+    async fn response_to_out(
+        r: &Arc<HttpStreamRequest>,
+        response: Response<Body>,
+        is_body_from_file: bool,
+    ) -> Result<()> {
         let rctx = &mut *r.ctx.get_mut();
 
         let head = response.extensions().get::<hyper::AnyProxyRawHeaders>();
@@ -2092,7 +2147,10 @@ impl HttpStream {
         } else {
             http_respons_to_vec(&response).into()
         };
-        rctx.r_out.head_upstream_size += head.len();
+
+        if !is_body_from_file && rctx.is_http_upstream {
+            rctx.r_out.head_upstream_size += head.len();
+        }
 
         //if rctx.r_out_main.is_none() {
         if log::log_enabled!(target: "ext3", log::Level::Debug) {
@@ -2273,7 +2331,10 @@ impl HttpStream {
                     .upstream_stream_flow_info
                     .clone();
                 use bytes::Buf;
-                upstream_stream_flow_info.get_mut().read += buf.remaining() as i64;
+                let is_http_upstream = { r.ctx.get().is_http_upstream };
+                if is_http_upstream {
+                    upstream_stream_flow_info.get_mut().read += buf.remaining() as i64;
+                }
             }
 
             r.ctx.get_mut().in_body_buf = body_buf;

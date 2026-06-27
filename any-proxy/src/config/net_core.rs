@@ -10,6 +10,7 @@ use any_base::util::ArcString;
 use anyhow::anyhow;
 use anyhow::Result;
 use lazy_static::lazy_static;
+use linked_hash_map::LinkedHashMap;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -219,6 +220,10 @@ pub struct Conf {
     pub expires: usize,
     pub domain_from_http_v1: Arc<DomainFromHttpV1>,
     pub transfer_encoding_chunked: bool,
+    pub http_static_file: ArcRwLockTokio<LinkedHashMap<ArcString, (i64, Arc<FileExt>)>>,
+    pub static_max_open_file: usize,
+    pub static_cache_after_requests: usize,
+    pub http_static_file_request_num: ArcRwLockTokio<LinkedHashMap<ArcString, i64>>,
 }
 const STREAM_CACHE_SIZE_DEFAULT: usize = 131072;
 const STREAM_SO_SINGER_TIME_DEFAULT: usize = 0;
@@ -288,6 +293,10 @@ impl Conf {
             expires: 0,
             domain_from_http_v1: Arc::new(DomainFromHttpV1::new()),
             transfer_encoding_chunked: false,
+            http_static_file: ArcRwLockTokio::new(LinkedHashMap::with_capacity(100)),
+            http_static_file_request_num: ArcRwLockTokio::new(LinkedHashMap::with_capacity(100)),
+            static_max_open_file: 0,
+            static_cache_after_requests: 0,
         }
     }
 }
@@ -630,6 +639,22 @@ lazy_static! {
                 | conf::CMD_CONF_TYPE_SERVER
                 | conf::CMD_CONF_TYPE_LOCAL,
         },
+        module::Cmd {
+            name: "static_max_open_file".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(static_max_open_file(ms, conf_arg, cmd, conf)),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN,
+        },
+        module::Cmd {
+            name: "static_cache_after_requests".to_string(),
+            set: |ms, conf_arg, cmd, conf| Box::pin(static_cache_after_requests(
+                ms, conf_arg, cmd, conf
+            )),
+            typ: module::CMD_TYPE_DATA,
+            conf_typ: conf::CMD_CONF_TYPE_MAIN
+                | conf::CMD_CONF_TYPE_SERVER
+                | conf::CMD_CONF_TYPE_LOCAL,
+        },
     ]);
 }
 
@@ -856,6 +881,34 @@ async fn merge_conf(
             child_conf.transfer_encoding_chunked = parent_conf.transfer_encoding_chunked.clone();
         }
 
+        if child_conf.static_max_open_file == 0 {
+            child_conf.static_max_open_file = parent_conf.static_max_open_file.clone();
+        }
+
+        if child_conf.static_cache_after_requests == 0 {
+            child_conf.static_cache_after_requests =
+                parent_conf.static_cache_after_requests.clone();
+        }
+
+        {
+            let is_empty = { child_conf.http_static_file.get().await.is_empty() };
+            if is_empty {
+                child_conf.http_static_file = parent_conf.http_static_file.clone();
+            }
+
+            let is_empty = {
+                child_conf
+                    .http_static_file_request_num
+                    .get()
+                    .await
+                    .is_empty()
+            };
+            if is_empty {
+                child_conf.http_static_file_request_num =
+                    parent_conf.http_static_file_request_num.clone();
+            }
+        }
+
         child_conf.download = Arc::new(ConfStream::new(
             child_conf.download_tmp_file_size,
             child_conf.download_tmp_file_reopen_size,
@@ -919,11 +972,17 @@ async fn merge_conf(
 async fn merge_old_conf(
     _old_ms: Option<module::Modules>,
     _old_main_conf: Option<typ::ArcUnsafeAny>,
-    _old_conf: Option<typ::ArcUnsafeAny>,
+    mut old_conf: Option<typ::ArcUnsafeAny>,
     _ms: module::Modules,
     _main_conf: typ::ArcUnsafeAny,
-    _conf: typ::ArcUnsafeAny,
+    conf: typ::ArcUnsafeAny,
 ) -> Result<()> {
+    let conf = conf.get_mut::<Conf>();
+    if old_conf.is_some() {
+        let old_conf = old_conf.as_mut().unwrap().get_mut::<Conf>();
+        conf.http_static_file = old_conf.http_static_file.clone();
+        conf.http_static_file_request_num = old_conf.http_static_file_request_num.clone();
+    }
     return Ok(());
 }
 
@@ -1539,6 +1598,30 @@ async fn transfer_encoding_chunked(
     let transfer_encoding_chunked = conf_arg.value.get::<bool>().clone();
     c.transfer_encoding_chunked = transfer_encoding_chunked;
     log::trace!(target: "main", "c.transfer_encoding_chunked:{:?}", c.transfer_encoding_chunked);
+    return Ok(());
+}
+
+async fn static_max_open_file(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.static_max_open_file = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.static_max_open_file:{:?}", c.static_max_open_file);
+    return Ok(());
+}
+
+async fn static_cache_after_requests(
+    _ms: module::Modules,
+    conf_arg: module::ConfArg,
+    _cmd: module::Cmd,
+    conf: typ::ArcUnsafeAny,
+) -> Result<()> {
+    let c = conf.get_mut::<Conf>();
+    c.static_cache_after_requests = conf_arg.value.get::<usize>().clone();
+    log::trace!(target: "main", "c.static_cache_after_requests:{:?}", c.static_cache_after_requests);
     return Ok(());
 }
 

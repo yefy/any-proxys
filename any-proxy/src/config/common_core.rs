@@ -124,9 +124,7 @@ lazy_static! {
         },
         module::Cmd {
             name: "disable_ipv6_only".to_string(),
-            set: |ms, conf_arg, cmd, conf| Box::pin(disable_ipv6_only(
-                ms, conf_arg, cmd, conf
-            )),
+            set: |ms, conf_arg, cmd, conf| Box::pin(disable_ipv6_only(ms, conf_arg, cmd, conf)),
             typ: module::CMD_TYPE_DATA,
             conf_typ: conf::CMD_CONF_TYPE_MAIN,
         },

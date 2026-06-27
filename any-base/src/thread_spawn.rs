@@ -2,7 +2,7 @@ use crate::thread_spawn_wait_run::ThreadSpawnWaitRun;
 use crate::typ::ArcMutex;
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{WaitGroup, WaitGroupWorker, WaitGroupInner};
+use awaitgroup::{WaitGroup, WaitGroupInner, WaitGroupWorker};
 use std::thread;
 use tokio::sync::broadcast;
 
@@ -143,8 +143,6 @@ impl ThreadSpawn {
                 );
                 core_affinity::set_for_current(core_id);
             }
-
-
 
             let err_run_wait_group_worker_inner = run_wait_group_worker_inner.clone();
             scopeguard::defer! {

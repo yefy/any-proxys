@@ -112,6 +112,7 @@ lazy_static! {
         map.insert("http_cache_file_md5", http_cache_file_md5);
         map.insert("http_cache_file_path", http_cache_file_path);
         map.insert("local_name", local_name);
+        map.insert("is_clone_cache_file_node", is_clone_cache_file_node);
         map
     };
     pub static ref HTTP_REQUEST_FLAG: &'static str = "http_request_";
@@ -429,18 +430,42 @@ pub fn upstream_connect_time(stream_info: &StreamInfo) -> Option<VarAnyData> {
 
 pub fn stream_work_times(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let mut datas = String::with_capacity(100);
+    let mut last_time = 0 as f32;
     for (name, stream_work_time) in stream_info.stream_work_times.iter() {
-        let v = format!("{}:{:.3},", name, stream_work_time);
+        let v = format!(
+            "{}:{:.3}:{:.3},",
+            name,
+            stream_work_time,
+            *stream_work_time - last_time
+        );
+        last_time = *stream_work_time;
         datas.push_str(&v);
     }
     let mut c_datas = String::with_capacity(100);
     let mut s_datas = String::with_capacity(100);
+    let mut c_last_time = 0 as f32;
+    let mut s_last_time = 0 as f32;
     for (is_client, name, stream_work_time) in stream_info.stream_work_times2.iter() {
-        let flag = if *is_client { "c" } else { "s" };
-        let v = format!("{}_{}:{:.3},", flag, name, stream_work_time);
+        let flag = if *is_client { "client" } else { "server" };
         if *is_client {
+            let v = format!(
+                "{}@{}:{:.3}:{:.3},",
+                flag,
+                name,
+                stream_work_time,
+                *stream_work_time - c_last_time
+            );
+            c_last_time = *stream_work_time;
             c_datas.push_str(&v);
         } else {
+            let v = format!(
+                "{}@{}:{:.3}:{:.3},",
+                flag,
+                name,
+                stream_work_time,
+                *stream_work_time - s_last_time
+            );
+            s_last_time = *stream_work_time;
             s_datas.push_str(&v);
         }
     }
@@ -485,19 +510,21 @@ pub fn upstream_bytes_received(stream_info: &StreamInfo) -> Option<VarAnyData> {
     Some(VarAnyData::I64(n))
 }
 
+///这个变量只有是sendfile才准确,  其它不准确,  文件才会等待hyper发送完, 其它发送给hyper队列就认为成功了
 pub fn http_hyper_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.http_r.is_none() {
         return None;
     }
-    Some(VarAnyData::I64(
-        stream_info
-            .http_r
-            .ctx
-            .get()
-            .hyper_http_sent_bytes
-            .load(Ordering::Relaxed)
-            - 40, //hyper添加数据，时间等
-    ))
+    let mut hyper_http_sent_bytes = stream_info
+        .http_r
+        .ctx
+        .get()
+        .hyper_http_sent_bytes
+        .load(Ordering::Relaxed);
+    // if hyper_http_sent_bytes > 40 {
+    //     hyper_http_sent_bytes -= 40; //hyper添加数据，时间等
+    // }
+    Some(VarAnyData::I64(hyper_http_sent_bytes))
 }
 
 pub fn http_header_client_bytes_sent(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -573,9 +600,8 @@ pub fn http_body_upstream_bytes(stream_info: &StreamInfo) -> Option<VarAnyData> 
     if stream_info.http_r.is_none() {
         return None;
     }
-    Some(VarAnyData::U64(
-        stream_info.http_r.ctx.get().r_in.range.content_length,
-    ))
+    let ctx = &*stream_info.http_r.ctx.get();
+    Some(VarAnyData::U64(ctx.r_out.range.content_length))
 }
 
 pub fn is_open_ebpf(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -601,7 +627,6 @@ pub fn upstream_balancer(stream_info: &StreamInfo) -> Option<VarAnyData> {
     return None;
 }
 
-
 pub fn upstream_name(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.scc.is_none() {
         return None;
@@ -611,8 +636,7 @@ pub fn upstream_name(stream_info: &StreamInfo) -> Option<VarAnyData> {
     let net_server_core_conf = net_server_core::curr_conf(stream_info.scc.net_curr_conf());
 
     return Some(VarAnyData::ArcString(
-        net_server_core_conf.upstream_name
-            .clone().into(),
+        net_server_core_conf.upstream_name.clone().into(),
     ));
 }
 
@@ -790,7 +814,7 @@ pub fn http_is_upstream(stream_info: &StreamInfo) -> Option<VarAnyData> {
         return None;
     }
     let http_r_ctx = &*stream_info.http_r.ctx.get();
-    return Some(VarAnyData::Bool(http_r_ctx.is_upstream));
+    return Some(VarAnyData::Bool(http_r_ctx.is_http_upstream));
 }
 
 pub fn http_is_cache(stream_info: &StreamInfo) -> Option<VarAnyData> {
@@ -1001,20 +1025,15 @@ pub fn http_cache_file_path(stream_info: &StreamInfo) -> Option<VarAnyData> {
     ));
 }
 
-
 pub fn local_name(stream_info: &StreamInfo) -> Option<VarAnyData> {
     if stream_info.scc.is_none() {
         return None;
     }
 
     use crate::config::net_local_core;
-    let net_local_core_conf =
-        net_local_core::curr_conf_mut(stream_info.scc.net_curr_conf());
+    let net_local_core_conf = net_local_core::curr_conf_mut(stream_info.scc.net_curr_conf());
 
-    return Some(VarAnyData::ArcString(
-        net_local_core_conf.name
-            .clone(),
-    ));
+    return Some(VarAnyData::ArcString(net_local_core_conf.name.clone()));
 }
 
 pub fn caps(stream_info: &StreamInfo, index: usize) -> Option<VarAnyData> {
@@ -1025,4 +1044,8 @@ pub fn caps(stream_info: &StreamInfo, index: usize) -> Option<VarAnyData> {
         return None;
     }
     return Some(VarAnyData::Str(stream_info.caps[index].as_str()));
+}
+
+pub fn is_clone_cache_file_node(stream_info: &StreamInfo) -> Option<VarAnyData> {
+    return Some(VarAnyData::Bool(stream_info.is_clone_cache_file_node));
 }

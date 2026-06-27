@@ -3,12 +3,12 @@ use crate::macros::Runtime;
 use crate::spawn;
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{WaitGroup, WaitGroupInner};
 use awaitgroup::WaitGroupWorker;
+use awaitgroup::{WaitGroup, WaitGroupInner};
 use std::future::Future;
+use std::sync::Arc;
 use std::thread;
 use tokio::sync::broadcast;
-use std::sync::Arc;
 
 #[cfg(feature = "anyspawn-count")]
 use lazy_static::lazy_static;
@@ -23,8 +23,7 @@ lazy_static! {
 }
 #[cfg(feature = "anyspawn-count")]
 lazy_static! {
-    pub static ref LOCAL_SPAWN_COUNT_LOCK: AtomicBool =
-        AtomicBool::new(false);
+    pub static ref LOCAL_SPAWN_COUNT_LOCK: AtomicBool = AtomicBool::new(false);
 }
 
 /*
@@ -142,12 +141,15 @@ impl ExecutorsLocal {
 pub struct AsyncLocalContext {
     executors: ExecutorsLocal,
     run_wait_group_worker_inner: Option<WaitGroupInner>,
-    err_wait_group_worker_inner: Option<WaitGroupInner>
+    err_wait_group_worker_inner: Option<WaitGroupInner>,
 }
 
 impl AsyncLocalContext {
-    pub fn new(executors: ExecutorsLocal, run_wait_group_worker_inner: Option<WaitGroupInner>,
-               err_wait_group_worker_inner: Option<WaitGroupInner>) -> AsyncLocalContext {
+    pub fn new(
+        executors: ExecutorsLocal,
+        run_wait_group_worker_inner: Option<WaitGroupInner>,
+        err_wait_group_worker_inner: Option<WaitGroupInner>,
+    ) -> AsyncLocalContext {
         return AsyncLocalContext {
             executors,
             run_wait_group_worker_inner,
@@ -162,7 +164,10 @@ impl AsyncLocalContext {
 
     pub fn done_error(&self, err: anyhow::Error) {
         if self.err_wait_group_worker_inner.is_some() {
-            self.err_wait_group_worker_inner.as_ref().unwrap().done_error(err);
+            self.err_wait_group_worker_inner
+                .as_ref()
+                .unwrap()
+                .done_error(err);
         }
         //self.executors.set_error(err);
     }
@@ -296,12 +301,20 @@ impl ExecutorLocalSpawn {
         });
     }
 
-
-    pub async fn check_shutdown_tx(&self, flag: &str, is_fast_shutdown: bool, mut shutdown_timeout: u64) {
+    pub async fn check_shutdown_tx(
+        &self,
+        flag: &str,
+        is_fast_shutdown: bool,
+        mut shutdown_timeout: u64,
+    ) {
         let mut num = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout)).await;
-            let _ = self.executors.context.shutdown_thread_tx.send(is_fast_shutdown);
+            let _ = self
+                .executors
+                .context
+                .shutdown_thread_tx
+                .send(is_fast_shutdown);
             shutdown_timeout = 1;
             num += 1;
             if num > 10 {
@@ -425,7 +438,10 @@ pub fn _start<S, F: Future<Output = Result<()>> + Send>(
         {
             if name.is_some() {
                 let name = name.unwrap();
-                if LOCAL_SPAWN_COUNT_LOCK.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                if LOCAL_SPAWN_COUNT_LOCK
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
                     ExecutorLocalSpawn::print_group_count();
                 }
                 let mut count_map = LOCAL_SPAWN_COUNT_MAP.lock().unwrap();

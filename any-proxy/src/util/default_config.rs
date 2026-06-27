@@ -8,9 +8,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-
-pub const ANYPROXY_LOG_PORT: u16 = 58080;
-
 lazy_static! {
     pub static ref ANYPROXY_PID_FULL_PATH: ArcRwLock<String> =
         ArcRwLock::new("./logs/anyproxy.pid".to_string());

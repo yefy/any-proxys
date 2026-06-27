@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use anyhow::Result;
-use awaitgroup::{WaitGroupWorker, WaitGroupInner};
+use awaitgroup::{WaitGroupInner, WaitGroupWorker};
 use futures_core::future::BoxFuture;
 use std::{future::Future, time::Duration};
 

@@ -1,0 +1,32 @@
+[package]
+name = "anyproxy_router"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+any-proxy = {path = "../../any-proxy"}
+anyhow = { git = "https://github.com/yefy/anyhow.git" }
+tokio = { version = "1.38.0", features = ["full"], default-features = false}
+http = "0.2.9"
+log = "0.4"
+serde = "1.0.152"
+bytes = "1.5.0"
+
+#cargo build --profile bench-dev --no-default-features ...
+[profile.bench-dev]
+inherits = "release"
+opt-level = 1
+codegen-units = 256
+lto = "off"
+incremental = true
+debug = 1
+split-debuginfo = "packed"
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true
+rpath = false
+strip = "none"
+
+
+[patch.crates-io]
+anyhow = { git = "https://github.com/yefy/anyhow.git" }

@@ -5,7 +5,11 @@ use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use tokio::net::TcpStream;
 
-pub fn bind(addr: &SocketAddr, tcp_reuseport: bool, disable_ipv6_only: bool) -> Result<StdTcpListener> {
+pub fn bind(
+    addr: &SocketAddr,
+    tcp_reuseport: bool,
+    disable_ipv6_only: bool,
+) -> Result<StdTcpListener> {
     util::bind(addr, tcp_reuseport, disable_ipv6_only)
     /*
     let addr = addr

@@ -16,6 +16,10 @@ name = "single_threaded"
 path = "examples/single_threaded.rs"
 
 [[example]]
+name = "ipv6"
+path = "examples/ipv6.rs"
+
+[[example]]
 name = "any_tunnel_server"
 path = "../any-tunnel/examples/server.rs"
 
@@ -148,6 +152,7 @@ hyper-rustls = "0.23.2"
 bytes = "1.5.0"
 base64 = "0.21.0"
 linked_hash_set = "0.1"
+linked-hash-map = "0.5.6"
 once_cell = "1.0"
 url = "2.3.1"
 futures-core = "0.3.29"
@@ -162,7 +167,6 @@ futures = "0.3.30"
 futures-lite = "2.3.0"
 matchit = "0.8"
 system-interface = "0.27.3"
-axum = "0.8.4"
 
 clap = { version = "4.3.19", features = ["derive"] }
 #wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "2ade3ad", features = ["component-model"] }

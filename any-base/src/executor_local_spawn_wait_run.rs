@@ -82,7 +82,11 @@ impl ExecutorLocalSpawnWaitRun {
             log::debug!(target: "main", "start executor version:{} index:{}", version, index,);
 
             let ret: Result<()> = async {
-                let async_local_context = AsyncLocalContext::new(executors, run_wait_group_worker_inner, err_wait_group_worker_inner);
+                let async_local_context = AsyncLocalContext::new(
+                    executors,
+                    run_wait_group_worker_inner,
+                    err_wait_group_worker_inner,
+                );
                 service(async_local_context)
                     .await
                     .map_err(|e| anyhow!("err:service_run => e:{}", e))?;

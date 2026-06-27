@@ -13,11 +13,20 @@ pub mod tunnel2;
 pub mod upstream;
 pub mod util;
 pub mod wasm;
-pub mod logx;
 
+pub use crate::anyproxy::AsyncFunc;
+pub use crate::config::net_server_http_router::add_router_handle;
+pub use crate::proxy::http_proxy::http_router::AnyHttpRouter;
+pub use crate::proxy::http_proxy::http_router::Json as HttpRouterJson;
+pub use crate::proxy::http_proxy::http_router::Params as HttpRouterParams;
+pub use crate::proxy::http_proxy::http_router::Request as HttpRouterRequest;
+pub use any_base::executor_local_spawn::ExecutorsLocal;
 use any_tunnel2::Protocol4;
-use anyhow::anyhow;
+pub use anyhow::anyhow;
 use anyhow::Result;
+pub use anyproxy::run;
+pub use hyper::Body as HttpRouterBody;
+pub use hyper::Response as HttpRouterResponse;
 use serde::Deserialize;
 use serde::Serialize;
 

@@ -12,7 +12,7 @@ use any_tunnel2::server as any_tunnel2_server;
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
-use awaitgroup::{WaitGroupWorker, WaitGroupInner};
+use awaitgroup::{WaitGroupInner, WaitGroupWorker};
 use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;

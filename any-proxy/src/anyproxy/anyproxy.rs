@@ -2,13 +2,14 @@ use super::anyproxy_group;
 use crate::anyproxy::anyproxy_group::AnyproxyGroup;
 use crate::util::default_config;
 use crate::util::signal;
+use crate::AsyncFunc;
 use any_base::executor_local_spawn;
 use any_base::executor_local_spawn::ExecutorLocalSpawn;
 use any_base::module::module;
 use anyhow::anyhow;
 use anyhow::Result;
-use structopt::StructOpt;
 use rivetx_core::task_group::TaskGroup;
+use structopt::StructOpt;
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, StructOpt)]
 pub struct ArgsConfig {
@@ -22,8 +23,6 @@ pub struct ArgsConfig {
     pub config: Option<String>,
     #[structopt(long = "hot")]
     pub hot: Option<String>,
-    #[structopt(long = "log_port")]
-    pub log_port: Option<u16>,
 }
 /*
 命令:anyproxy -s quit 正常关闭，可设置超时时间
@@ -213,7 +212,10 @@ impl Anyproxy {
         self.group_version
     }
 
-    pub async fn start(&mut self, log_task_group: TaskGroup) -> Result<()> {
+    pub async fn start<S>(&mut self, async_func: Option<AsyncFunc<S>>) -> Result<()>
+    where
+        S: Clone + Send + 'static,
+    {
         scopeguard::defer! {
             Anyproxy::remove_signal_file();
             log::info!("anyproxy end");
@@ -224,6 +226,38 @@ impl Anyproxy {
         Anyproxy::remove_pid_file();
         Anyproxy::create_pid_file()
             .map_err(|e| anyhow!("err:Anyproxy::create_pid_file => e:{}", e))?;
+
+        let (
+            async_run,
+            async_sig_stop,
+            async_sig_quit,
+            async_sig_reload,
+            async_sig_check,
+            async_sig_reinit,
+            async_state,
+        ) = if let Some(async_func) = async_func {
+            let AsyncFunc {
+                init,
+                run,
+                sig_stop,
+                sig_quit,
+                sig_reload,
+                sig_check,
+                sig_reinit,
+            } = async_func;
+            let state = init(self.executor.executors()).await?;
+            (
+                Some(run),
+                Some(sig_stop),
+                Some(sig_quit),
+                Some(sig_reload),
+                Some(sig_check),
+                Some(sig_reinit),
+                Some(state),
+            )
+        } else {
+            (None, None, None, None, None, None, None)
+        };
 
         // #[cfg(feature = "anylock-time")]
         // self.executor._start_and_free(move |_| async move {
@@ -275,6 +309,18 @@ impl Anyproxy {
         #[cfg(unix)]
         Self::run_hot_pid()?;
 
+        if let (Some(async_run), Some(async_state)) = (async_run, async_state.as_ref()) {
+            let async_state = async_state.clone();
+            self.executor._start(
+                #[cfg(feature = "anyspawn-count")]
+                Some(format!("{}:{}", file!(), line!())),
+                move |executors| async move {
+                    async_run(executors, async_state).await?;
+                    Ok(())
+                },
+            );
+        }
+
         loop {
             let anyproxy_state = tokio::select! {
                 biased;
@@ -295,18 +341,33 @@ impl Anyproxy {
                     continue;
                 }
                 AnyproxyState::Quit => {
+                    if let (Some(async_sig_quit), Some(async_state)) =
+                        (async_sig_quit, async_state.as_ref())
+                    {
+                        async_sig_quit(self.executor.executors(), async_state.clone()).await?;
+                    }
                     self.async_anyproxy_group_stop(anyproxy_group.unwrap(), false)
                         .await;
                     log::info!("signal: quit");
                     break;
                 }
                 AnyproxyState::Stop => {
+                    if let (Some(async_sig_stop), Some(async_state)) =
+                        (async_sig_stop, async_state.as_ref())
+                    {
+                        async_sig_stop(self.executor.executors(), async_state.clone()).await?;
+                    }
                     self.async_anyproxy_group_stop(anyproxy_group.unwrap(), true)
                         .await;
                     log::info!("signal: stop");
                     break;
                 }
                 AnyproxyState::Reload => {
+                    if let (Some(async_sig_reload), Some(async_state)) =
+                        (async_sig_reload, async_state.as_ref())
+                    {
+                        async_sig_reload(self.executor.executors(), async_state.clone()).await?;
+                    }
                     anyproxy_group
                         .as_mut()
                         .unwrap()
@@ -315,6 +376,11 @@ impl Anyproxy {
                     continue;
                 }
                 AnyproxyState::Check => {
+                    if let (Some(async_sig_check), Some(async_state)) =
+                        (async_sig_check, async_state.as_ref())
+                    {
+                        async_sig_check(self.executor.executors(), async_state.clone()).await?;
+                    }
                     let _ = anyproxy_group::AnyproxyGroup::check(
                         self.group_version,
                         self.executor.clone(),
@@ -330,6 +396,12 @@ impl Anyproxy {
                     }
                     #[cfg(unix)]
                     {
+                        if let (Some(async_sig_reinit), Some(async_state)) =
+                            (async_sig_reinit, async_state.as_ref())
+                        {
+                            async_sig_reinit(self.executor.executors(), async_state.clone())
+                                .await?;
+                        }
                         let ms = anyproxy_group.as_ref().unwrap().ms();
 
                         let mut new_anyproxy_group = anyproxy_group::AnyproxyGroup::new(
@@ -362,7 +434,6 @@ impl Anyproxy {
             }
         }
 
-        log_task_group.quit(true, 1).await;
         //self.executor.send("anyproxy_group stop", true);
         self.wait_anyproxy_groups().await?;
         let _ = Self::ms_try_recv(&ms_rx).await;

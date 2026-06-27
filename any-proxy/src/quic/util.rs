@@ -230,7 +230,7 @@ pub async fn listen(
         reuseport,
         config.quic_recv_buffer_size,
         config.quic_send_buffer_size,
-        disable_ipv6_only
+        disable_ipv6_only,
     )
     .map_err(|e| anyhow!("err:bind => e:{}", e))?;
 

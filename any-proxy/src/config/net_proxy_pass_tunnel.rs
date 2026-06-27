@@ -160,7 +160,6 @@ async fn init_conf(
     return Ok(());
 }
 
-
 async fn proxy_pass_tunnel_tcp(
     ms: module::Modules,
     conf_arg: module::ConfArg,
@@ -173,6 +172,17 @@ async fn proxy_pass_tunnel_tcp(
         toml::from_str(str).map_err(|e| anyhow!("err:str {} => e:{}", str, e))?
     };
     do_proxy_pass_tunnel_tcp(&ms, &conf_arg, &cmd, proxy_pass_conf).await
+}
+
+pub async fn do_proxy_pass_tunnel_tcp_var(
+    proxy_pass_conf: ProxyPassTcpTunnel,
+) -> Result<Arc<UpstreamVarAddr>> {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+
+    let ups_tcp = Box::new(UpstreamTcp::new(Some(address_vars), proxy_pass_conf));
+    let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+    let upstream_var_addr = Arc::new(UpstreamVarAddr::new(get_connect));
+    return Ok(upstream_var_addr);
 }
 
 pub async fn do_proxy_pass_tunnel_tcp(
@@ -268,6 +278,17 @@ async fn proxy_pass_tunnel_ssl(
     do_proxy_pass_tunnel_ssl(&ms, &conf_arg, &cmd, proxy_pass_conf).await
 }
 
+pub async fn do_proxy_pass_tunnel_ssl_var(
+    proxy_pass_conf: ProxyPassSslTunnel,
+) -> Result<Arc<UpstreamVarAddr>> {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+
+    let ups_tcp = Box::new(UpstreamSsl::new(Some(address_vars), proxy_pass_conf));
+    let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+    let upstream_var_addr = Arc::new(UpstreamVarAddr::new(get_connect));
+    return Ok(upstream_var_addr);
+}
+
 pub async fn do_proxy_pass_tunnel_ssl(
     ms: &module::Modules,
     conf_arg: &module::ConfArg,
@@ -361,6 +382,16 @@ async fn proxy_pass_tunnel_quic(
     do_proxy_pass_tunnel_quic(&ms, &conf_arg, &cmd, proxy_pass_conf).await
 }
 
+pub async fn do_proxy_pass_tunnel_quic_var(
+    proxy_pass_conf: ProxyPassQuicTunnel,
+) -> Result<Arc<UpstreamVarAddr>> {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+
+    let ups_tcp = Box::new(UpstreamQuic::new(Some(address_vars), proxy_pass_conf));
+    let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+    let upstream_var_addr = Arc::new(UpstreamVarAddr::new(get_connect));
+    return Ok(upstream_var_addr);
+}
 pub async fn do_proxy_pass_tunnel_quic(
     ms: &module::Modules,
     conf_arg: &module::ConfArg,

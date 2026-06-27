@@ -11,13 +11,14 @@ use any_base::file_ext::{FileExt, FileExtFix, FileUniq};
 use any_base::io::async_write_msg::MsgReadBufFile;
 use any_base::typ::{ArcMutex, ArcMutexTokio, ArcRwLock, OptionArcx};
 use any_base::util::ArcString;
-use anyhow::{anyhow, Context};
 use anyhow::Result;
+use anyhow::{anyhow, Context};
+use chrono::Local;
 use http::{Response, Uri};
 use hyper::Body;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Seek, Write};
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 #[cfg(feature = "anyio-file")]
 use std::time::Instant;
@@ -59,6 +60,9 @@ pub struct ProxyCacheFileNode {
     pub response_info: Arc<HttpResponseInfo>,
     pub cache_file_node_head: Arc<ProxyCacheFileNodeHead>,
     pub proxy_cache_name: ArcString,
+    pub request_time: AtomicI64,
+    ///当前并发请求
+    pub curr_request_num: AtomicI64,
 }
 
 impl Drop for ProxyCacheFileNode {
@@ -68,6 +72,23 @@ impl Drop for ProxyCacheFileNode {
 }
 
 impl ProxyCacheFileNode {
+    pub fn is_runing(&self) -> bool {
+        self.curr_request_num.load(Ordering::Relaxed) > 0
+    }
+
+    pub fn add_request_num(&self) {
+        self.curr_request_num.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn done_request_num(&self) {
+        self.curr_request_num.fetch_add(-1, Ordering::Relaxed);
+    }
+
+    pub fn update_request_time(&self) {
+        self.request_time
+            .store(Local::now().timestamp(), Ordering::Relaxed);
+    }
+
     pub fn get_file_ext(&self) -> Arc<FileExt> {
         self.file_ext.clone()
     }
@@ -329,6 +350,8 @@ impl ProxyCacheFileNode {
             response_info,
             cache_file_node_head: Arc::new(cache_file_node_head),
             proxy_cache_name,
+            request_time: AtomicI64::new(Local::now().timestamp()),
+            curr_request_num: AtomicI64::new(0),
         });
     }
 
@@ -488,6 +511,8 @@ impl ProxyCacheFileNode {
             }),
             cache_file_node_head: Arc::new(cache_file_node_head),
             proxy_cache_name,
+            request_time: AtomicI64::new(Local::now().timestamp()),
+            curr_request_num: AtomicI64::new(0),
         }));
     }
 
@@ -511,6 +536,8 @@ impl ProxyCacheFileNode {
             response_info: other.response_info.clone(),
             cache_file_node_head: other.cache_file_node_head.clone(),
             proxy_cache_name: other.proxy_cache_name.clone(),
+            request_time: AtomicI64::new(Local::now().timestamp()),
+            curr_request_num: AtomicI64::new(0),
         });
     }
 

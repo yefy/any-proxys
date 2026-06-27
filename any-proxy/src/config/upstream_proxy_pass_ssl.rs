@@ -176,8 +176,8 @@ async fn proxy_pass_ssl(
 
 use crate::stream::connect;
 use crate::upstream::UpstreamHeartbeatData;
-use tokio::sync::broadcast;
 use crate::util::util::host_and_port;
+use tokio::sync::broadcast;
 
 pub struct Heartbeat {
     ssl: ProxyPassSsl,

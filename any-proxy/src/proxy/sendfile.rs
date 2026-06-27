@@ -167,9 +167,7 @@ pub async fn sendfile(
     let (ret, c_err) = tokio::task::spawn_blocking(move || {
         let wn = unsafe { libc::sendfile(socket_fd, file_fd, &mut offset, count) };
         let err = if wn == -1 {
-            std::io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(0)
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
         } else {
             0
         };

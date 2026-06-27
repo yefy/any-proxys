@@ -445,7 +445,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let err_num = Arc::new(AtomicU64::new(0));
     let stream_close_num = Arc::new(AtomicU64::new(0));
     {
-
         let connect_num = connect_num.clone();
         let stream_close_num = stream_close_num.clone();
         let err_num = err_num.clone();
@@ -456,7 +455,8 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     "tunnel server connect_num:{}, stream_close_num:{}, err_num:{}",
                     connect_num.load(Ordering::Relaxed),
                     stream_close_num.load(Ordering::Relaxed),
-                    err_num.load(Ordering::Relaxed));
+                    err_num.load(Ordering::Relaxed)
+                );
             }
         });
     }

@@ -158,6 +158,15 @@ async fn proxy_pass_tcp(
     do_proxy_pass_tcp(&ms, &conf_arg, &cmd, proxy_pass_conf).await
 }
 
+pub async fn do_proxy_pass_tcp_var(proxy_pass_conf: ProxyPassTcp) -> Result<Arc<UpstreamVarAddr>> {
+    let address_vars = VarParse::new(&proxy_pass_conf.address, "")?;
+
+    let ups_tcp = Box::new(UpstreamTcp::new(Some(address_vars), proxy_pass_conf));
+    let get_connect: Arc<Box<dyn GetConnectI>> = Arc::new(ups_tcp);
+    let upstream_var_addr = Arc::new(UpstreamVarAddr::new(get_connect));
+    return Ok(upstream_var_addr);
+}
+
 pub async fn do_proxy_pass_tcp(
     ms: &module::Modules,
     conf_arg: &module::ConfArg,

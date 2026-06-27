@@ -207,7 +207,10 @@ impl<T> QueueNode<T> {
         // 结构完整性检查：违反此约束会静默腐败两条链，使用 assert! 而非 debug_assert!
         // 确保 release 模式同样拦截
         assert!(!self.is_detached(), "insert_after: self is not in a queue");
-        assert!(node.is_detached(), "insert_after: node is already in a queue");
+        assert!(
+            node.is_detached(),
+            "insert_after: node is already in a queue"
+        );
 
         unsafe {
             // 预先 clone 所有可能 OOM-panic 的 Arc，放在任何状态变更之前。
@@ -284,6 +287,20 @@ impl<T> Queue<T> {
         Queue { sentinel, len }
     }
 
+    pub fn collect(&self) -> Vec<QueueNode<T>> {
+        let mut result = Vec::with_capacity(self.len());
+        let sentinel = self.sentinel();
+        let mut q = sentinel.next();
+        loop {
+            if q == sentinel {
+                break;
+            }
+            result.push(q.clone());
+            q = q.next();
+        }
+        result
+    }
+
     #[inline]
     pub fn empty(&self) -> bool {
         self.len.load(Ordering::Relaxed) == 0
@@ -320,6 +337,11 @@ impl<T> Queue<T> {
     /// }
     /// ```
     #[inline]
+    pub fn front(&self) -> Option<QueueNode<T>> {
+        self.head()
+    }
+
+    #[inline]
     pub fn head(&self) -> Option<QueueNode<T>> {
         if self.empty() {
             None
@@ -329,6 +351,10 @@ impl<T> Queue<T> {
     }
 
     /// 返回最后一个数据节点。队列为空时返回 `None`。
+    #[inline]
+    pub fn back(&self) -> Option<QueueNode<T>> {
+        self.last()
+    }
     #[inline]
     pub fn last(&self) -> Option<QueueNode<T>> {
         if self.empty() {
@@ -357,19 +383,34 @@ impl<T> Queue<T> {
     }
 
     /// 在头部插入（哨兵之后）
+    pub fn push_front(&mut self, node: &QueueNode<T>) {
+        self.insert_head(node)
+    }
+
     pub fn insert_head(&mut self, node: &QueueNode<T>) {
         self.sentinel.insert_after(node);
     }
 
     /// 在尾部插入（哨兵之前）
+    pub fn push_back(&mut self, node: &QueueNode<T>) {
+        self.insert_tail(node)
+    }
     pub fn insert_tail(&mut self, node: &QueueNode<T>) {
         self.tail_raw().insert_after(node);
+    }
+
+    pub fn pop_front(&mut self) -> Option<QueueNode<T>> {
+        self.pop_head()
     }
 
     pub fn pop_head(&mut self) -> Option<QueueNode<T>> {
         let node = self.head()?;
         node.remove();
         Some(node)
+    }
+
+    pub fn pop_back(&mut self) -> Option<QueueNode<T>> {
+        self.pop_tail()
     }
 
     pub fn pop_tail(&mut self) -> Option<QueueNode<T>> {

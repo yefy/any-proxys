@@ -246,6 +246,7 @@ pub struct StreamInfo {
     pub wasm_stream_info: Share<WasmStreamInfo>,
     pub wasm_spawn_sender: async_channel::Sender<(Option<i64>, Option<String>, WasmHost)>,
     pub wasm_spawn_receiver: async_channel::Receiver<(Option<i64>, Option<String>, WasmHost)>,
+    pub is_clone_cache_file_node: bool,
 }
 
 impl Drop for StreamInfo {
@@ -320,6 +321,7 @@ impl StreamInfo {
             wasm_stream_info: Share::default(),
             wasm_spawn_sender,
             wasm_spawn_receiver,
+            is_clone_cache_file_node: false,
         }
     }
 

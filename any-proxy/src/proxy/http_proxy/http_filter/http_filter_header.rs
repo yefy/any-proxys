@@ -69,11 +69,11 @@ pub async fn do_http_filter_header(r: &Arc<HttpStreamRequest>) -> Result<()> {
         }
 
         log::debug!(target: "ext", "r.session_id:{}-{}, http_cache_status:{:?}---{:?}, \
-    cache_file_status:{:?}, is_upstream:{}, last_slice_upstream_index:{}, max_upstream_count:{}",
+    cache_file_status:{:?}, is_http_upstream:{}, is_upstream:{}, last_slice_upstream_index:{}, max_upstream_count:{}",
                         r.session_id, r.local_cache_req_count,
                         rctx.r_in.main.http_cache_status, rctx.r_in.http_cache_status,
                         cache_file_status,
-                        rctx.is_upstream, rctx.last_slice_upstream_index, rctx.max_upstream_count);
+                    rctx.is_http_upstream, rctx.is_upstream, rctx.last_slice_upstream_index, rctx.max_upstream_count);
 
         if rctx.is_request_cache && rctx.r_out_main.is_some() {
             let response_info = rctx.r_out.response_info.as_ref().unwrap();
